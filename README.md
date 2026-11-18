@@ -46,3 +46,8 @@ out/
 `CrystalStd`基础库（水晶簇体系内标准基础库）。
 
 链接静态库时填加 `-Wl,--whole-archive ... -Wl,--no-whole-archive`：CrystalStd 的自动初始化/逆初始化不产生外部引用，不全量归档会被归档抽取规则丢弃（见`CrystalStd`文档）。
+
+## 详细资料
+
+[用户手册](docs/用户手册.md)
+[开发手册](docs/dev/开发手册.md)
