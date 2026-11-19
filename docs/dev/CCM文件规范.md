@@ -7,13 +7,13 @@
 > 注：CCM文件是纯数据的静态配置，未设计逻辑和对外动作能力。
 
 ```
-    .ccm               .cmk
- Build Context      Build Procedure
-   构建环境            构建流程
-      |                  |
-      +------- ccmake ----+
-           脚本解释执行器
-                |
+     .ccm             .cmk
+ Build Context   Build Procedure
+    构建环境         构建流程
+       |                |
+       +---- ccmake ----+
+          脚本解释执行器
+               |
             操作系统
 ```
 
