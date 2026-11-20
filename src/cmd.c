@@ -89,6 +89,27 @@ static CCBOOL _func_file_(void)
     return CCTRUE;
 }
 
+static CCBOOL _func_help_(void)
+{
+    ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
+    color_print(
+        "-c, --config=<文件>        指定 .ccm 配置文件（必填）\n"
+        "-f, --file=<文件>          指定 .cmk 构建脚本（必填）\n"
+        "-C, --directory=<目录>     切换工作目录\n"
+        "-j, --jobs=<N>             并行任务数（默认: CPU 核心数）\n"
+        "-D, --define=<键>=<值>     覆盖配置文件字段\n"
+        "-o, --output=<目录>        构建产物输出目录\n"
+        "-t, --target=<目标>        构建目标（如 debug, release）\n"
+        "-v, --verbose              详细输出\n"
+        "-n, --dry-run              仅显示操作，不执行\n"
+        "-B, --always-build         强制重新构建\n"
+        "-k, --keep-going           遇到错误继续构建\n"
+        "-h, --help                 显示此帮助信息\n"
+        "-V, --version              显示版本信息\n"
+    );
+    return CCTRUE;
+}
+
 static FUNC_TABLE func_table[] = {
     {"-c", _func_config_}, {"--config", _func_config_},
     {"-f", _func_file_}, {"--file", _func_file_},
@@ -101,7 +122,7 @@ static FUNC_TABLE func_table[] = {
     {"-n", _func_empty}, {"--dry-run", _func_empty},
     {"-B", _func_empty}, {"--always-build", _func_empty},
     {"-k", _func_empty}, {"--keep-going", _func_empty},
-    {"-h", _func_empty}, {"--help", _func_empty},
+    {"-h", _func_help_}, {"--help", _func_help_},
     {"-V", _func_empty}, {"--version", _func_empty}
 };
 #define FUNC_TABLE_SIZE (CCINT32)(sizeof(func_table) / sizeof(func_table[0]))
@@ -117,13 +138,21 @@ CCBOOL single_cmd()
             if (!strcmp(g_argv[g_index], func_table[i].name))
                 return func_table[i].func();
         }
-    }
-    else
-    {
-        color_print("不合规的参数：%s <---\n", g_argv[g_index]);
+        // 没有匹配到相关指令参数
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "未知的指令参数：%s\n",
+            g_argv[g_index]
+        );
+        _func_help_();
         return CCFALSE;
     }
-    return CCTRUE;
+    color_print(
+        CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+        "不合规的参数：%s <---\n",
+        g_argv[g_index]
+    );
+    return CCFALSE;
 }
 
 CCBOOL check_parse()
@@ -139,6 +168,9 @@ CCBOOL check_parse()
 
 CCBOOL parse_cmd(int argc, char **argv)
 {
+    // 没有参数的情况下默认触发 -h
+    if (argc <= 1) return _func_help_();
+    //
     g_index = 1;
     g_argc = argc;
     g_argv = argv;
@@ -146,6 +178,8 @@ CCBOOL parse_cmd(int argc, char **argv)
     ccmake_global_var.self_path = ccalloc(NULL, len + 1, CC_DBG_REL_TAG("可执行程序自指路径", NULL));
     strcpy(ccmake_global_var.self_path, argv[0]);
     CCBOOL valid_cmd = CCTRUE;
+    // 默认需要构建，可被 ACTION_DONE 覆盖
+    ccmake_global_var.stat = CC_CMD_FLAG_NEED_BUILD;
     while (g_index < g_argc)
     {
         if (!single_cmd())
@@ -153,6 +187,8 @@ CCBOOL parse_cmd(int argc, char **argv)
             valid_cmd = CCFALSE;
             break;
         }
+        if (ccmake_global_var.stat == CC_CMD_FLAG_ACTION_DONE)
+            return CCTRUE;
     }
     return check_parse() && valid_cmd;
 }

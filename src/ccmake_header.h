@@ -16,10 +16,24 @@
 
 #include <string.h>
 
+typedef enum {
+    CC_CMD_FLAG_ACTION_DONE,  // 已执行动作类参数
+    CC_CMD_FLAG_NEED_BUILD    // 需要执行构建
+} CC_CMD_PARSE_STAT;
+
 struct ccmake_global_var_struct{
     char *self_path;
     char *ccm_path;
     char *cmk_path;
+    char *work_dir;          // -C / --directory
+    char *output_dir;        // -o / --output
+    char *target;            // -t / --target 或位置参数
+    int   jobs;              // -j / --jobs (0 = 自动检测)
+    CC_CMD_PARSE_STAT stat;  // 状态枚举，决定后续流程走哪个分支
+    CCBOOL  verbose;         // -v / --verbose
+    CCBOOL  dry_run;         // -n / --dry-run
+    CCBOOL  always_build;    // -B / --always-build
+    CCBOOL  keep_going;      // -k / --keep-going
 };
 extern struct ccmake_global_var_struct ccmake_global_var;
 

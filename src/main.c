@@ -11,13 +11,6 @@
 
 struct ccmake_global_var_struct ccmake_global_var;
 
-void zerzo_global_var()
-{
-    ccmake_global_var.self_path = NULL;
-    ccmake_global_var.ccm_path = NULL;
-    ccmake_global_var.cmk_path = NULL;
-}
-
 void clear_global_var()
 {
     // 命令行参数是乱序排列的
@@ -29,19 +22,21 @@ void clear_global_var()
 
 int main(int argc, char **argv)
 {
-
+    // 一定要记得清空内存脏数据
+    memset(&ccmake_global_var, 0, sizeof(ccmake_global_var));
+    //
     if (!parse_cmd(argc, argv))
-    {
-        color_print(CC_TEXT_COLOR(CC_RED, CC_DEFAULT) "命令行参数解析失败\n");
         goto FailedtoParseCmd;
-    }
-    clear_global_var();
+    if (ccmake_global_var.stat == CC_CMD_FLAG_ACTION_DONE)
+        goto ActionDone;
     color_print(
-        "命令行初始化成功：\n%s\n%s\n%s\n",
+        "%s\n%s\n%s\n",
         ccmake_global_var.self_path,
         ccmake_global_var.ccm_path,
         ccmake_global_var.cmk_path
     );
+ActionDone:
+    clear_global_var();
     return 0;
 FailedtoParseCmd:
     clear_global_var();
