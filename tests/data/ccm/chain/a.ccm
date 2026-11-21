@@ -1,0 +1,2 @@
+@include "b.ccm";
+"a": 1;

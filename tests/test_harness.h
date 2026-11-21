@@ -38,6 +38,16 @@ CCINT32 cc_test_failures(void);
 CCINT32 cc_test_suite_failures(void);
 CCUINT32 cc_test_checks(void);
 
+/* stdout 捕获：用于校验解析阶段的提示文本 */
+typedef struct cc_test_capture {
+    int read_fd;
+    int saved;
+} cc_test_capture;
+
+CCBOOL cc_test_capture_begin(cc_test_capture *cap);
+void cc_test_capture_end(cc_test_capture *cap, char *out, size_t cap_size);
+void cc_test_strip_ansi(char *text);
+
 #define CC_CASE(id, name) \
     cc_test_case_begin((id), (name), __FILE__, __LINE__)
 

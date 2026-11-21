@@ -14,7 +14,8 @@ typedef struct test_suite {
 } test_suite;
 
 static const test_suite g_suites[] = {
-    { "CMD", "命令行解析", test_cmd }
+    { "CMD", "命令行解析", test_cmd },
+    { "CCM", "CCM 文件检查与定位", test_ccm_locate }
 };
 
 #define SUITE_COUNT ((CCUINT32)(sizeof(g_suites) / sizeof(g_suites[0])))

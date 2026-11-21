@@ -1,0 +1,4 @@
+@include "base.ccm";
+@include "./base.ccm";
+@include "sub/../base.ccm";
+"root": true;

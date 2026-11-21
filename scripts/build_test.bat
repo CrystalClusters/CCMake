@@ -33,7 +33,9 @@ if "!SRCS!"=="" (
     popd
     exit /b 1
 )
-set "SRCS=!SRCS! src\cmd.c"
+for /r src %%s in (*.c) do (
+    if /i not "%%~nxs"=="main.c" set "SRCS=!SRCS! %%s"
+)
 
 set "BIN_NAME=ccmake_test.exe"
 echo ±‡“Î≤‚ ‘≥Ã–Ú...

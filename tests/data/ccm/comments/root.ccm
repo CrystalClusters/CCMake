@@ -1,0 +1,7 @@
+// @include "missing-line.ccm";
+/* @include "missing-block.ccm"; */
+/* 多行块注释
+   @include "missing-block2.ccm";
+*/
+"text": "@include fake";
+@include "a.ccm";

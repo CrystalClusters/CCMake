@@ -7,6 +7,137 @@
 #include "test_harness.h"
 #include <color_print.h>
 
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifdef CC_WINDOWS
+#include <fcntl.h>
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+/* ============================================================================
+ * stdout 捕获
+ * ============================================================================ */
+
+void cc_test_strip_ansi(char *text)
+{
+    char *dst = text;
+    const char *src = text;
+
+    while (*src)
+    {
+        if ((unsigned char)src[0] == 0x1B && src[1] == '[')
+        {
+            src += 2;
+            while (*src && !((*src >= 'A' && *src <= 'Z') ||
+                             (*src >= 'a' && *src <= 'z')))
+                src++;
+            if (*src) src++;
+            continue;
+        }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+}
+
+CCBOOL cc_test_capture_begin(cc_test_capture *cap)
+{
+    int fds[2];
+
+    if (!cap)
+        return CCFALSE;
+
+    fflush(stdout);
+#ifdef CC_WINDOWS
+    if (_pipe(fds, 65536, _O_BINARY) != 0)
+    {
+        fprintf(stderr, "[HARNESS] _pipe 失败，errno=%d\n", errno);
+        return CCFALSE;
+    }
+    cap->saved = _dup(_fileno(stdout));
+    if (cap->saved < 0)
+    {
+        fprintf(stderr, "[HARNESS] _dup 失败，errno=%d\n", errno);
+        _close(fds[0]);
+        _close(fds[1]);
+        return CCFALSE;
+    }
+    if (_dup2(fds[1], _fileno(stdout)) != 0)
+    {
+        fprintf(stderr, "[HARNESS] _dup2 失败，errno=%d\n", errno);
+        _close(fds[0]);
+        _close(fds[1]);
+        _close(cap->saved);
+        return CCFALSE;
+    }
+    _close(fds[1]);
+#else
+    if (pipe(fds) != 0)
+    {
+        fprintf(stderr, "[HARNESS] pipe 失败，errno=%d\n", errno);
+        return CCFALSE;
+    }
+    cap->saved = dup(fileno(stdout));
+    if (cap->saved < 0)
+    {
+        fprintf(stderr, "[HARNESS] dup 失败，errno=%d\n", errno);
+        close(fds[0]);
+        close(fds[1]);
+        return CCFALSE;
+    }
+    if (dup2(fds[1], fileno(stdout)) < 0)
+    {
+        fprintf(stderr, "[HARNESS] dup2 失败，errno=%d\n", errno);
+        close(fds[0]);
+        close(fds[1]);
+        close(cap->saved);
+        return CCFALSE;
+    }
+    close(fds[1]);
+#endif
+    cap->read_fd = fds[0];
+    return CCTRUE;
+}
+
+void cc_test_capture_end(cc_test_capture *cap, char *out, size_t cap_size)
+{
+    size_t total = 0;
+
+    if (!cap || !out || cap_size == 0)
+        return;
+
+    fflush(stdout);
+#ifdef CC_WINDOWS
+    _dup2(cap->saved, _fileno(stdout));
+    _close(cap->saved);
+    while (total < cap_size - 1)
+    {
+        int got = _read(
+            cap->read_fd, out + total,
+            (unsigned int)(cap_size - 1 - total)
+        );
+        if (got <= 0) break;
+        total += (size_t)got;
+    }
+    _close(cap->read_fd);
+#else
+    dup2(cap->saved, fileno(stdout));
+    close(cap->saved);
+    while (total < cap_size - 1)
+    {
+        ssize_t got = read(cap->read_fd, out + total, cap_size - 1 - total);
+        if (got <= 0) break;
+        total += (size_t)got;
+    }
+    close(cap->read_fd);
+#endif
+    out[total] = '\0';
+    cc_test_strip_ansi(out);
+}
+
 #define CC_TEST_NAME_MAX 192
 #define CC_TEST_DETAIL_MAX 512
 

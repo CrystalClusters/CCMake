@@ -42,16 +42,21 @@ if [ -z "${DEP_LIB}" ]; then
     exit 1
 fi
 
-# 收集测试源码与解析器源码
+# 收集测试源码与应用源码（测试程序不链接 main.c）
 SRCS=$(find tests -name '*.c' | LC_ALL=C sort)
+APP_SRCS=$(find src -name '*.c' ! -name 'main.c' | LC_ALL=C sort)
 if [ -z "${SRCS}" ]; then
     echo "[错误] tests/ 下没有找到测试源文件。"
+    exit 1
+fi
+if [ -z "${APP_SRCS}" ]; then
+    echo "[错误] src/ 下没有找到应用源文件。"
     exit 1
 fi
 
 echo "编译测试程序..."
 # shellcheck disable=SC2086
-if ! gcc ${SRCS} src/cmd.c -o "${BIN_DIR}/${BIN_NAME}" \
+if ! gcc ${SRCS} ${APP_SRCS} -o "${BIN_DIR}/${BIN_NAME}" \
         -Itests -Iinclude -Isrc ${DEP_INC} ${CC_BUILD_CFLAGS} ${DEP_LIB} -pthread; then
     echo "[错误] 编译测试程序失败。"
     exit 1

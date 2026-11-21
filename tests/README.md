@@ -8,8 +8,10 @@ scripts/build_test.bat/.sh 编译测试程序（由 build.bat / build.sh 调用�
 tests/
   test.c                  测试入口：套件表、命令行参数、退出码
   test_header.h           测试程序内部头文件（套件声明）
-  test_harness.c/.h       用例、断言与统计
+  test_harness.c/.h       用例、断言、统计与 stdout 捕获
   cmd/test_cmd.c          命令行解析用例
+  ccm/test_ccm_locate.c   CCM 文件检查与定位用例
+  data/ccm/               CCM 用例 fixture
 ```
 
 产物：`out/<平台>_bin/ccmake_test(.exe)`。
@@ -30,11 +32,6 @@ bash test.sh CMD
 
 `test.bat` / `test.sh` 只检查产物是否存在并运行，不负责编译。
 
-## 与 CrystalStd 测试结构的关系
-
-- **一致**：构建脚本负责编译测试程序（`scripts/build_test.*` 由 `build.bat` / `build.sh` 调用），运行入口只运行；测试入口带套件表、套件参数、汇总与退出码；用例用 `CC_CASE` / `CC_CHECK` 组织。
-- **差异**：CCMake 当前没有静态库目标，测试程序直接编译 `src/cmd.c`，而不是链接 `.a`；当前只有一个非交互套件，因此没有交互菜单、人工确认项与 `--level` / `--seed`，无参数即运行全部套件；harness 暂未引入 skip / manual。
-
 ## 覆盖范围
 
 - 帮助、版本与动作类参数的优先级；
@@ -42,9 +39,10 @@ bash test.sh CMD
 - `-j`：指定值、`0` 自动检测、非数字、溢出；
 - `-c/-f/-C/-o/-t` 字段写入、长格式、重复参数覆盖；
 - `-D`：一个 `-D` 多个键值对、重复键以后者为准、值中含 `=`；
-- `--list-targets` / `--dump-config` 的动作请求字段。
+- `--list-targets` / `--dump-config` 的动作请求字段；
+- CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、扩展名、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理。
 
-测试直接调用 `parse_cmd`，不经过 `main` 与后续 `.ccm` 解析，因此这些用例不受下游实现影响。
+测试直接调用 `parse_cmd` / `ccm_locate`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
 
 ## 断言方式
 
