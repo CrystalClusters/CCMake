@@ -8,15 +8,15 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_scan_util.h"
 #include "ccvar.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define CCM_MAX_VALUE_DEPTH 128
 
 /* ============================================================================
  * 诊断
@@ -77,6 +77,7 @@ typedef struct cc_make_lexer {
     CCUINT64 pos;
     CCUINT32 line;
     CCUINT32 col;
+    CCUINT32 max_token_bytes;
     const char *file;
 } CCMLexer;
 
@@ -94,6 +95,28 @@ static void lex_newline(CCMLexer *lex)
 static CCBOOL lex_error(CCMLexer *lex, CCUINT32 line, const char *message)
 {
     return ccm_parse_failf(lex->file, line, "%s", message);
+}
+
+static CCBOOL lex_token_length(CCMLexer *lex, CCMToken *tok, CCUINT64 n)
+{
+    if (n > (CCUINT64)lex->max_token_bytes || n > (CCUINT64)0xFFFFFFFFu)
+        return lex_error(lex, tok->line, "token 超过长度限制");
+    tok->len = (CCUINT32)n;
+    return CCTRUE;
+}
+
+static void lex_advance(CCMLexer *lex, CCUINT64 end)
+{
+    while (lex->pos < end)
+    {
+        if (lex->data[lex->pos] == '\n' || lex->data[lex->pos] == '\r')
+            lex_newline(lex);
+        else
+        {
+            lex->pos++;
+            lex->col++;
+        }
+    }
 }
 
 /* 跳过空白与注释 */
@@ -188,26 +211,15 @@ static CCBOOL lex_next(CCMLexer *lex, CCMToken *tok)
 
     if (c == '"')
     {
-        lex->pos++;
-        lex->col++;
-        CCUINT64 begin = lex->pos;
-        while (lex->pos < lex->size && lex->data[lex->pos] != '"')
-        {
-            if (lex->data[lex->pos] == '\0')
-                return lex_error(lex, lex->line, "文件中包含 NUL 字节，疑似二进制文件");
-            if (lex->data[lex->pos] == '\n' || lex->data[lex->pos] == '\r')
-                lex_newline(lex);
-            else
-            {
-                lex->pos++;
-                lex->col++;
-            }
-        }
-        if (lex->pos >= lex->size)
+        CCUINT64 quote = lex->pos;
+        CCUINT64 end = 0;
+        if (!ccm_scan_string_end(lex->data, lex->size, quote, &end))
             return lex_error(lex, tok->line, "字符串未闭合");
         tok->type = CCM_TOK_STRING;
-        tok->text = lex->data + begin;
-        tok->len = (CCUINT32)(lex->pos - begin);
+        tok->text = lex->data + quote + 1;
+        if (!lex_token_length(lex, tok, end - (quote + 1)))
+            return CCFALSE;
+        lex_advance(lex, end);
         lex->pos++;
         lex->col++;
         return CCTRUE;
@@ -246,67 +258,19 @@ static CCBOOL lex_next(CCMLexer *lex, CCMToken *tok)
 
     if (c == '$' && lex->pos + 1 < lex->size && lex->data[lex->pos + 1] == '{')
     {
+        CCUINT64 open = lex->pos + 1;
+        CCUINT64 end = 0;
+        if (!ccm_scan_builtin_end(lex->data, lex->size, open, &end))
+            return lex_error(lex, tok->line, "内建函数缺少右花括号");
         CCUINT64 raw_begin = lex->pos + 2;
-        lex->pos += 2;
-        lex->col += 2;
-        CCUINT32 depth = 1;
-        while (lex->pos < lex->size)
-        {
-            char bc = lex->data[lex->pos];
-            if (bc == '\0')
-                return lex_error(lex, lex->line, "文件中包含 NUL 字节，疑似二进制文件");
-            if (bc == '"')
-            {
-                lex->pos++;
-                lex->col++;
-                while (lex->pos < lex->size && lex->data[lex->pos] != '"')
-                {
-                    if (lex->data[lex->pos] == '\n' || lex->data[lex->pos] == '\r')
-                        lex_newline(lex);
-                    else
-                    {
-                        lex->pos++;
-                        lex->col++;
-                    }
-                }
-                if (lex->pos >= lex->size)
-                    return lex_error(lex, tok->line, "内建函数参数中的字符串未闭合");
-                lex->pos++;
-                lex->col++;
-                continue;
-            }
-            if (bc == '{')
-            {
-                depth++;
-                lex->pos++;
-                lex->col++;
-                continue;
-            }
-            if (bc == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    tok->type = CCM_TOK_BUILTIN;
-                    tok->text = lex->data + raw_begin;
-                    tok->len = (CCUINT32)(lex->pos - raw_begin);
-                    lex->pos++;
-                    lex->col++;
-                    return CCTRUE;
-                }
-                lex->pos++;
-                lex->col++;
-                continue;
-            }
-            if (bc == '\n' || bc == '\r')
-            {
-                lex_newline(lex);
-                continue;
-            }
-            lex->pos++;
-            lex->col++;
-        }
-        return lex_error(lex, tok->line, "内建函数缺少右花括号");
+        tok->type = CCM_TOK_BUILTIN;
+        tok->text = lex->data + raw_begin;
+        if (!lex_token_length(lex, tok, end - raw_begin))
+            return CCFALSE;
+        lex_advance(lex, end);
+        lex->pos++;
+        lex->col++;
+        return CCTRUE;
     }
 
     if (c == '-' || (c >= '0' && c <= '9'))
@@ -369,7 +333,8 @@ static CCBOOL lex_next(CCMLexer *lex, CCMToken *tok)
         }
         tok->type = CCM_TOK_NUMBER;
         tok->text = lex->data + begin;
-        tok->len = (CCUINT32)(lex->pos - begin);
+        if (!lex_token_length(lex, tok, lex->pos - begin))
+            return CCFALSE;
         return CCTRUE;
     }
 
@@ -490,6 +455,111 @@ static CCBOOL parser_map_result(
     return ccm_parse_failf(p->lex.file, p->tok.line, "%s：%d", what, (int)result);
 }
 
+static CCBOOL parser_parse_float(const char *text, double *out)
+{
+    const char *p = text;
+    CCBOOL negative = CCFALSE;
+    if (*p == '-')
+    {
+        negative = CCTRUE;
+        p++;
+    }
+
+    long double value = 0.0L;
+    CCBOOL has_digits = CCFALSE;
+    while (*p >= '0' && *p <= '9')
+    {
+        value = value * 10.0L + (long double)(*p - '0');
+        if (!isfinite(value))
+            return CCFALSE;
+        has_digits = CCTRUE;
+        p++;
+    }
+
+    if (*p == '.')
+    {
+        p++;
+        long double scale = 0.1L;
+        while (*p >= '0' && *p <= '9')
+        {
+            value += (long double)(*p - '0') * scale;
+            if (!isfinite(value))
+                return CCFALSE;
+            if (scale > 0.0L)
+                scale *= 0.1L;
+            has_digits = CCTRUE;
+            p++;
+        }
+    }
+
+    if (!has_digits)
+        return CCFALSE;
+
+    CCBOOL exp_negative = CCFALSE;
+    CCUINT32 exponent = 0;
+    CCBOOL exp_overflow = CCFALSE;
+    if (*p == 'e' || *p == 'E')
+    {
+        p++;
+        if (*p == '+' || *p == '-')
+        {
+            exp_negative = (*p == '-') ? CCTRUE : CCFALSE;
+            p++;
+        }
+        if (*p < '0' || *p > '9')
+            return CCFALSE;
+        while (*p >= '0' && *p <= '9')
+        {
+            if (exponent < 1000000)
+                exponent = exponent * 10 + (CCUINT32)(*p - '0');
+            else
+                exp_overflow = CCTRUE;
+            p++;
+        }
+    }
+
+    if (*p != '\0')
+        return CCFALSE;
+
+    if (value == 0.0L)
+    {
+        *out = negative ? -0.0 : 0.0;
+        return CCTRUE;
+    }
+    if (exp_overflow || exponent > 10000)
+        return CCFALSE;
+
+    if (exponent > 0)
+    {
+        long double scale = 1.0L;
+        long double base = 10.0L;
+        CCUINT32 n = exponent;
+        while (n > 0)
+        {
+            if (n & 1)
+                scale *= base;
+            n >>= 1;
+            if (n > 0)
+                base *= base;
+            if (!isfinite(scale) || !isfinite(base))
+                return CCFALSE;
+        }
+        value = exp_negative ? value / scale : value * scale;
+        if (!isfinite(value))
+            return CCFALSE;
+    }
+
+    if (negative)
+        value = -value;
+    double result = (double)value;
+    if (!isfinite(result))
+        return CCFALSE;
+    if (result == 0.0)
+        return CCFALSE;
+    *out = result;
+    return CCTRUE;
+}
+
 static CCBOOL parser_number(
     CCMParser *p,
     CCBOOL *is_float,
@@ -511,12 +581,12 @@ static CCBOOL parser_number(
     errno = 0;
     if (isf)
     {
-        char *end = NULL;
-        double value = strtod(text, &end);
-        if (errno == ERANGE || !end || *end != '\0')
+        double value = 0;
+        if (!parser_parse_float(text, &value))
         {
             ccalloc(text, 0, NULL);
-            return ccm_parse_failf(p->lex.file, p->tok.line, "浮点数格式非法");
+            return ccm_parse_failf(p->lex.file, p->tok.line,
+                                   "浮点数格式非法或超出范围");
         }
         *is_float = CCTRUE;
         *floating = value;
@@ -602,7 +672,7 @@ static CCBOOL parser_parse_value(
     CCUINT32 depth
 )
 {
-    if (depth > CCM_MAX_VALUE_DEPTH)
+    if (depth > p->ctx->limits.max_value_depth)
         return ccm_parse_failf(p->lex.file, p->tok.line, "值嵌套过深");
 
     switch (p->tok.type)
@@ -695,10 +765,13 @@ static CCBOOL parser_parse_object_members(
     CCUINT32 depth
 )
 {
+    CCUINT32 members = 0;
     while (p->tok.type != CCM_TOK_RBRACE)
     {
         if (p->tok.type == CCM_TOK_EOF)
             return ccm_parse_failf(p->lex.file, p->tok.line, "对象未闭合");
+        if (members >= p->ctx->limits.max_object_members)
+            return ccm_parse_failf(p->lex.file, p->tok.line, "对象成员数量超过限制");
         if (p->tok.type != CCM_TOK_STRING)
             return ccm_parse_failf(p->lex.file, p->tok.line, "对象成员名必须是字符串");
         if (!ccvar_key_valid(p->tok.text, p->tok.len))
@@ -728,12 +801,15 @@ static CCBOOL parser_parse_object_members(
             return CCFALSE;
         if (!parser_advance(p))
             return CCFALSE;
+        members++;
     }
     return CCTRUE;
 }
 
 static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 depth)
 {
+    if (depth > p->ctx->limits.max_value_depth)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "值嵌套过深");
     switch (p->tok.type)
     {
     case CCM_TOK_STRING:
@@ -795,7 +871,7 @@ static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 dept
             ccalloc(child, 0, NULL);
             return CCFALSE;
         }
-        CCBOOL ok = parser_parse_object_members(p, child, depth);
+        CCBOOL ok = parser_parse_object_members(p, child, depth + 1);
         ccalloc(child, 0, NULL);
         if (!ok)
             return CCFALSE;
@@ -821,7 +897,7 @@ static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 dept
             ccalloc(child, 0, NULL);
             return CCFALSE;
         }
-        CCBOOL ok = parser_parse_array_members(p, child, depth);
+        CCBOOL ok = parser_parse_array_members(p, child, depth + 1);
         ccalloc(child, 0, NULL);
         if (!ok)
             return CCFALSE;
@@ -862,12 +938,16 @@ static CCBOOL parser_parse_array_members(
     CCUINT32 depth
 )
 {
+    CCUINT32 elements = 0;
     while (p->tok.type != CCM_TOK_RBRACKET)
     {
         if (p->tok.type == CCM_TOK_EOF)
             return ccm_parse_failf(p->lex.file, p->tok.line, "数组未闭合");
-        if (!parser_array_element(p, path, depth + 1))
+        if (elements >= p->ctx->limits.max_array_elements)
+            return ccm_parse_failf(p->lex.file, p->tok.line, "数组元素数量超过限制");
+        if (!parser_array_element(p, path, depth))
             return CCFALSE;
+        elements++;
         if (p->tok.type == CCM_TOK_COMMA)
         {
             if (!parser_advance(p))
@@ -893,6 +973,7 @@ static CCBOOL parser_parse_file(
     p.lex.size = file->size;
     p.lex.line = 1;
     p.lex.col = 1;
+    p.lex.max_token_bytes = ctx->limits.max_token_bytes;
     p.lex.file = file->real_path;
     p.tree = tree;
     p.ctx = ctx;

@@ -142,7 +142,8 @@ CCBOOL ccm_scan_includes(
     const char *content,
     CCUINT64 size,
     const char *display_path,
-    CCDyn *out_includes
+    CCDyn *out_includes,
+    CCUINT32 max_edges
 )
 {
     if (!content || !out_includes)
@@ -274,6 +275,8 @@ CCBOOL ccm_scan_includes(
 
                 if (depth != 0)
                     return scan_fail(display_path, at_line, "@include 只能出现在顶层");
+                if (out_includes->size / (CCUINT32)sizeof(CCMakeCCMInclude) >= max_edges)
+                    return scan_fail(display_path, at_line, "include 数量超过限制");
 
                 column += (CCUINT32)(ident_end - index);
                 index = ident_end;

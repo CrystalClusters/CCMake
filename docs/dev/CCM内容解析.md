@@ -8,6 +8,7 @@
 
 | 模块 | 职责 |
 |---|---|
+| `ccm_scan_util.c` | 共享字符串边界与 `${...}` 花括号配对扫描 |
 | `ccm_scan.c` | 第一阶段扫描 `@include`，提取路径字面量 |
 | `ccm_locate.c` | 文件注册表、include 闭包、环检测、后序 `order[]` |
 | `ccm_parse.c` | 第二阶段词法、语法解析、写全局变量树 |
@@ -143,7 +144,15 @@ typedef struct cc_make_parser {
 3. 可选 `.` 且后面至少一位数字；
 4. 可选 `e`/`E`，可选正负号，至少一位指数数字。
 
-扫描得到的文本在语法阶段复制后交给 `strtoll` 或 `strtod`，并做范围/格式检查。
+整数使用 `strtoll` 并检查 `end` 与 `ERANGE`。浮点使用自带的十进制转换：
+
+- 整数部分、小数部分、指数部分分别累积到 `long double`；
+- 指数使用平方求幂计算 10 的幂，不调用 `strtod`；
+- 结果转换为 `double` 后用 `isfinite` 检查有限性；
+- 溢出、下溢到 0、超出 `double` 范围都报错；
+- 转换不依赖进程 `LC_NUMERIC`，构建结果不受运行机器区域设置影响。
+
+该转换只接受词法阶段已经验证的十进制格式，不处理 `nan`、`inf` 或十六进制浮点。
 
 ### 4.4 指令与内建函数
 
@@ -174,6 +183,19 @@ typedef struct cc_make_parser {
 - 路径中的控制字符与空路径报错。
 
 键值语法、未知 `@` 指令、括号配对等留给第二阶段。
+
+### 4.6 共享扫描基元
+
+`ccm_scan_util.c` 提供两个不依赖业务状态的边界函数：
+
+| 函数 | 用途 |
+|---|---|
+| `ccm_scan_string_end` | 从起始双引号找到闭合双引号，检查 NUL |
+| `ccm_scan_builtin_end` | 从 `${` 后的 `{` 找到配对 `}`，引号内不计数花括号 |
+
+第二阶段 lexer 的字符串与 `${...}` 边界直接复用上述基元；`${find}` 参数展开与分词也复用基元，避免各自的引号规则漂移。
+
+第一阶段的 `ccm_scan_includes` 仍保留带行号/列号的状态机，因为它同时处理注释、括号深度与 include 字面量提取；其字符串与花括号语义与共享基元保持一致。
 
 ## 5. 语法与拆分
 
@@ -238,7 +260,7 @@ targets[2].sources[1]
 | `${...}` | 调用内建函数，结果按字符串写入 |
 | 其他 | `值格式非法` |
 
-嵌套对象/数组使用 C 调用栈递归解析，深度上限为 `CCM_MAX_VALUE_DEPTH`（128）。
+嵌套对象/数组使用 C 调用栈递归解析，深度上限为 `limits.max_value_depth`（默认 128）。
 
 ### 5.4 对象
 
@@ -349,12 +371,14 @@ ${find <目录...> -include <通配符...> [-exclude <通配符...>]}
 
 `ccm_expand_builtins` 扫描参数：
 
-- 遇到 `${` 时按花括号深度配对；
+- 遇到 `${` 时调用共享的 `ccm_scan_builtin_end` 配对花括号；
+- 该基元识别双引号边界，引号内的 `{`、`}` 不参与外层配对；
+- 双引号内的 `${...}` 同样会展开，引号本身保留；
 - 递归调用 `ccm_builtin_eval`；
 - 将结果拼入参数缓冲区；
 - 其他字节原样复制。
 
-因此 `${find ${ref src} ...}` 中 `${ref src}` 会先求值。
+因此 `${find ${ref src} ...}` 与 `${find ... -include "${ref pattern}"}` 都会先求值，后者展开后仍由 `find_tokenize` 按引号去掉外层引号。
 
 #### 2. 参数分词
 
@@ -362,6 +386,7 @@ ${find <目录...> -include <通配符...> [-exclude <通配符...>]}
 
 - 空白（空格、制表、CR、LF）分隔参数；
 - 双引号包裹的内容作为一个参数，引号本身不进入结果；
+- 引号边界由共享的 `ccm_scan_string_end` 定位；
 - `-include` / `-exclude` 切换后续参数类别；
 - 其余参数按模式归入目录、include、exclude 列表。
 
@@ -409,9 +434,62 @@ typedef struct cc_make_find_stack_item {
 - 值按字符串写入；
 - 优先级高于所有配置文件。
 
-## 9. 栈与遍历方案
+## 9. 资源预算
 
-### 9.1 第一阶段：文件 DFS 显式栈
+`CCMakeCCMContext.limits` 是统一的输入预算，所有上限在分配前检查：
+
+```c
+typedef struct ccmake_ccm_limits_struct {
+    CCUINT64 max_total_bytes;
+    CCUINT64 max_file_bytes;
+
+    CCUINT32 max_files;
+    CCUINT32 max_include_edges;
+    CCUINT32 max_include_depth;
+
+    CCUINT32 max_token_bytes;
+    CCUINT32 max_array_elements;
+    CCUINT32 max_object_members;
+    CCUINT32 max_value_depth;
+
+    CCUINT32 max_find_args;
+    CCUINT32 max_find_results;
+    CCUINT32 max_find_depth;
+} CCMakeCCMLimits;
+```
+
+默认值：
+
+| 字段 | 默认值 | 检查位置 |
+|---|---:|---|
+| `max_total_bytes` | 64 MiB | `ccm_load_file`，累加前检查 |
+| `max_file_bytes` | 16 MiB | `ccm_load_file`，分配内容前检查 |
+| `max_files` | 4096 | 根文件与 include 追加前 |
+| `max_include_edges` | 65536 | `ccm_scan_includes` 追加边前 |
+| `max_include_depth` | 128 | include 目标追加前 |
+| `max_token_bytes` | 1 MiB | `lex_next` 生成字符串/数字/内建 token 前 |
+| `max_array_elements` | 65536 | 数组元素追加前 |
+| `max_object_members` | 65536 | 对象成员解析前 |
+| `max_value_depth` | 128 | 值递归入口与数组元素入口 |
+| `max_find_args` | 1024 | `${find}` 参数 token 追加前 |
+| `max_find_results` | 65536 | 匹配文件加入结果前；达到上限时拒绝新结果 |
+| `max_find_depth` | 64 | `${find}` 子目录压栈前 |
+
+超过预算时返回可理解的诊断，例如：
+
+```text
+token 超过长度限制
+数组元素数量超过限制
+对象成员数量超过限制
+include 数量超过限制
+${find} 结果数量超过限制
+```
+
+这些检查位于内存分配之前，避免用“分配失败”代替明确的输入限制。
+
+## 10. 栈与遍历方案
+
+### 10.1 第一阶段：文件 DFS 显式栈
 
 第一阶段使用显式栈，不用递归：
 
@@ -448,7 +526,7 @@ while stack:
 
 `order[]` 在此过程中形成后序序列，根文件最后入队。
 
-### 9.2 第二阶段：文件循环 + 嵌套递归
+### 10.2 第二阶段：文件循环 + 嵌套递归
 
 第二阶段文件级没有栈：
 
@@ -459,11 +537,11 @@ for i in order[]:
 
 嵌套对象/数组使用 C 调用栈递归，深度上限 128；数组元素本身由循环处理。
 
-### 9.3 `${find}`：显式目录栈
+### 10.3 `${find}`：显式目录栈
 
 `find_scan_dir` 用 `CCDyn stack` 保存 `{vpath, rel}`，弹出目录、列目录、压入子目录。结果列表与栈分离，遍历完成后统一排序、连接。
 
-### 9.4 删除：路径列表 + 逆序叶子删除
+### 10.4 删除：路径列表 + 逆序叶子删除
 
 全局变量树删除子树时：
 
@@ -474,7 +552,7 @@ for i in order[]:
 
 具体节点搬移与红黑树修正见 [全局变量树](全局变量树.md)。
 
-## 10. 诊断与生命周期
+## 11. 诊断与生命周期
 
 统一前缀：
 
@@ -507,7 +585,7 @@ main
   └─ ccvar_global_deinit
 ```
 
-## 11. 复杂度
+## 12. 复杂度
 
 设文件数为 n、include 边数为 m、文件内容总字节数为 C、路径长度为 L、目录项数为 e：
 
@@ -516,17 +594,19 @@ main
 | 第一阶段文件 DFS | 显式栈 + 三状态 | O(n + m) 结构操作 |
 | 第二阶段文件遍历 | `order[]` 线性循环 | O(n) |
 | 词法扫描 | 单字节状态机 | O(C) |
-| 对象/数组递归 | C 调用栈 | O(节点数)，深度 ≤ 128 |
+| 对象/数组递归 | C 调用栈 | O(节点数)，深度 ≤ `max_value_depth` |
+| 资源预算检查 | 计数器 + 上限比较 | 每项 O(1) |
+| 浮点转换 | 十进制累积 + 平方求幂 | O(token 长度) |
 | `ccvar_set` 路径写入 | 路径解析 + 对象红黑树 | O(路径段 × log 同层键数) |
 | `${ref}` | 路径查询 + 序列化 | O(路径 + 输出长度) |
 | `${find}` | VFS DFS + 通配符匹配 | O(e × 模式数) |
 | 结果排序 | `qsort` | O(k log k)，k 为结果数 |
 | `-D` 覆盖 | 逐项路径写入 | O(d × 路径段 × log 同层键数) |
 
-## 12. 验证
+## 13. 验证
 
 | 套件 | 覆盖 |
 |---|---|
-| `PARSE` | 基本类型、嵌套对象、文件顺序、浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、错误、`${find}`、内嵌 `${ref}`、注释、`-D` |
+| `PARSE` | 基本类型、嵌套对象、文件顺序、浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、错误、`${find}`、内嵌 `${ref}`、注释、`-D`、128/129 层深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用 |
 | `VARS` | 路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用 |
 | `CCM` | 第一阶段文件定位、任意后缀、顺序与清理 |

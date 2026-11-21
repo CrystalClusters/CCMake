@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include <cc_wildcard.h>
+#include "ccm_scan_util.h"
 
 typedef struct ccm_find_token_list {
     CCDyn tokens; /* char* */
@@ -22,6 +23,7 @@ typedef struct ccm_find_token_list {
 typedef struct ccm_find_stack_item {
     char *vpath;
     char *rel;
+    CCUINT32 depth;
 } CCMFindStackItem;
 
 typedef struct ccm_find_entry {
@@ -53,6 +55,7 @@ static CCBOOL find_tokenize(
     const char *args,
     CCUINT32 len,
     CCMFindTokens *out,
+    CCUINT32 max_tokens,
     const char *file,
     CCUINT32 line
 )
@@ -67,20 +70,25 @@ static CCBOOL find_tokenize(
         if (i >= len)
             break;
 
+        if (out->tokens.size / (CCUINT32)sizeof(char *) >= max_tokens)
+        {
+            find_tokens_free(out);
+            return ccm_parse_failf(file, line, "${find} 参数数量超过限制");
+        }
+
         CCUINT32 begin = i;
         char *text = NULL;
         if (args[i] == '"')
         {
-            i++;
-            begin = i;
-            while (i < len && args[i] != '"')
-                i++;
-            if (i >= len)
+            CCUINT64 end64 = 0;
+            if (!ccm_scan_string_end(args, len, i, &end64))
             {
                 find_tokens_free(out);
                 return ccm_parse_failf(file, line, "${find} 参数中的字符串未闭合");
             }
-            CCUINT32 n = i - begin;
+            CCUINT32 end = (CCUINT32)end64;
+            begin = i + 1;
+            CCUINT32 n = end - begin;
             text = ccalloc(
                 NULL, (CCUINT64)n + 1,
                 CC_DBG_REL_TAG(".ccm find 参数", NULL)
@@ -92,7 +100,7 @@ static CCBOOL find_tokenize(
             }
             memcpy(text, args + begin, n);
             text[n] = '\0';
-            i++;
+            i = end + 1;
         }
         else
         {
@@ -158,16 +166,18 @@ static CCBOOL find_push_str(CCDyn *dyn, const char *text)
     return CCTRUE;
 }
 
-static CCBOOL find_add_result(CCDyn *results, const char *path)
+static CCINT32 find_add_result(CCDyn *results, const char *path, CCUINT32 max_results)
 {
     char **items = (char **)results->array;
     CCUINT32 count = results->size / (CCUINT32)sizeof(char *);
     for (CCUINT32 i = 0; i < count; i++)
     {
         if (strcmp(items[i], path) == 0)
-            return CCTRUE;
+            return 0;
     }
-    return find_push_str(results, path);
+    if (count >= max_results)
+        return -1;
+    return find_push_str(results, path) ? 1 : -2;
 }
 
 static int find_compare_str(const void *a, const void *b)
@@ -321,6 +331,7 @@ static CCBOOL find_scan_dir(
     char **excludes,
     CCUINT32 exclude_count,
     CCDyn *results,
+    const CCMakeCCMLimits *limits,
     const char *file,
     CCUINT32 line
 )
@@ -334,6 +345,7 @@ static CCBOOL find_scan_dir(
         CC_DBG_REL_TAG(".ccm find 虚拟路径", NULL)
     );
     root.rel = ccalloc(NULL, 1, CC_DBG_REL_TAG(".ccm find 相对路径", NULL));
+    root.depth = 0;
     if (!root.vpath || !root.rel)
     {
         if (root.vpath) ccalloc(root.vpath, 0, NULL);
@@ -387,6 +399,12 @@ static CCBOOL find_scan_dir(
             const char *name = entries[i].name;
             if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
                 continue;
+            if (entries[i].type == CC_FS_TYPE_DIR &&
+                item.depth >= limits->max_find_depth)
+            {
+                ccm_parse_failf(file, line, "${find} 目录深度超过限制");
+                goto Failed;
+            }
 
             size_t vl = strlen(item.vpath);
             size_t rl = strlen(item.rel);
@@ -425,6 +443,7 @@ static CCBOOL find_scan_dir(
                 CCMFindStackItem ci;
                 ci.vpath = cv;
                 ci.rel = cr;
+                ci.depth = item.depth + 1;
                 if (cc_dyn_core_push(
                         &stack, (CCUINT32)sizeof(CCMFindStackItem),
                         (CCINT32)sizeof(CCMFindStackItem), &ci
@@ -445,13 +464,29 @@ static CCBOOL find_scan_dir(
                     )
                 )
                 {
+                    if (results->size / (CCUINT32)sizeof(char *) >=
+                        limits->max_find_results)
+                    {
+                        ccalloc(cv, 0, NULL);
+                        ccalloc(cr, 0, NULL);
+                        ccm_parse_failf(file, line, "${find} 结果数量超过限制");
+                        goto Failed;
+                    }
                     char *joined = find_join_output(dir_prefix, cr);
-                    if (!joined || !find_add_result(results, joined))
+                    CCINT32 added = joined ? find_add_result(
+                        results, joined,
+                        limits->max_find_results
+                    ) : -2;
+                    if (added != 0 && added != 1)
                     {
                         if (joined) ccalloc(joined, 0, NULL);
                         ccalloc(cv, 0, NULL);
                         ccalloc(cr, 0, NULL);
-                        ccm_parse_failf(file, line, "内存分配失败");
+                        ccm_parse_failf(
+                            file, line,
+                            added == -1 ?
+                            "${find} 结果数量超过限制" : "内存分配失败"
+                        );
                         goto Failed;
                     }
                     ccalloc(joined, 0, NULL);
@@ -506,7 +541,7 @@ CCBOOL ccm_find_eval(
     *out_len = 0;
 
     CCMFindTokens tokens;
-    if (!find_tokenize(args, len, &tokens, file, line))
+    if (!find_tokenize(args, len, &tokens, ctx->limits.max_find_args, file, line))
         return CCFALSE;
 
     CCBOOL ok = CCFALSE;
@@ -613,7 +648,7 @@ CCBOOL ccm_find_eval(
                 includes.size / (CCUINT32)sizeof(char *),
                 (char **)excludes.array,
                 excludes.size / (CCUINT32)sizeof(char *),
-                &results, file, line
+                &results, &ctx->limits, file, line
             )
         )
             goto Finished;

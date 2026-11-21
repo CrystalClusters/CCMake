@@ -48,6 +48,25 @@ typedef struct ccmake_ccm_file_struct {
     CCBOOL    mounted;       /* 是否已在 VFS 中建立合成挂载点 */
 } CCMakeCCMFile;
 
+/* 配置解析资源预算；所有上限在分配前检查 */
+typedef struct ccmake_ccm_limits_struct {
+    CCUINT64 max_total_bytes;     /* 全部文件内容总字节 */
+    CCUINT64 max_file_bytes;      /* 单个文件字节 */
+
+    CCUINT32 max_files;           /* 文件注册表数量 */
+    CCUINT32 max_include_edges;   /* include 边总数 */
+    CCUINT32 max_include_depth;   /* include 链深度 */
+
+    CCUINT32 max_token_bytes;     /* 单个 token 字节数 */
+    CCUINT32 max_array_elements;  /* 单个数组元素数 */
+    CCUINT32 max_object_members;  /* 单个对象成员数 */
+    CCUINT32 max_value_depth;     /* 值嵌套深度 */
+
+    CCUINT32 max_find_args;       /* ${find} 参数 token 数 */
+    CCUINT32 max_find_results;    /* ${find} 结果数 */
+    CCUINT32 max_find_depth;      /* ${find} 目录深度 */
+} CCMakeCCMLimits;
+
 /* 阶段一上下文：文件表、include 边表、解析顺序与 VFS 探针 */
 typedef struct ccmake_ccm_context_struct {
     CCFiles *fs;          /* VFS 探针；ccm_locate 返回前释放 */
@@ -59,6 +78,8 @@ typedef struct ccmake_ccm_context_struct {
     char    *work_dir;    /* 规范化绝对工作目录 */
     char    *root_path;   /* 规范化绝对根文件 */
     CCUINT32 root_index;  /* 根文件在 files 中的下标 */
+    CCUINT64 total_bytes; /* 已装载文件内容总字节 */
+    CCMakeCCMLimits limits;
 } CCMakeCCMContext;
 
 /* 宿主路径类型（VFS 装载前的类型门） */
@@ -122,7 +143,8 @@ CCBOOL ccm_scan_includes(
     const char *content,
     CCUINT64 size,
     const char *display_path,
-    CCDyn *out_includes
+    CCDyn *out_includes,
+    CCUINT32 max_edges
 );
 
 /* ------------------------------------------------------------------------- */

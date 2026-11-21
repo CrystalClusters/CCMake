@@ -64,9 +64,68 @@ static CCBOOL define_add(const char *key, const char *value)
     return CCTRUE;
 }
 
-static CCBOOL parse_run(const char *root, CCMakeCCMContext *ctx)
+static CCBOOL parse_run_limits(
+    const char *root,
+    CCMakeCCMContext *ctx,
+    CCUINT32 max_token,
+    CCUINT32 max_array,
+    CCUINT32 max_object,
+    CCUINT32 max_depth
+)
 {
     ccm_context_init(ctx);
+    if (max_token)
+        ctx->limits.max_token_bytes = max_token;
+    if (max_array)
+        ctx->limits.max_array_elements = max_array;
+    if (max_object)
+        ctx->limits.max_object_members = max_object;
+    if (max_depth)
+        ctx->limits.max_value_depth = max_depth;
+    if (!ccm_locate(root, NULL, ctx))
+        return CCFALSE;
+    if (!ccvar_global_init())
+        return CCFALSE;
+    ccvar_clear(ccvar_global());
+    return ccm_parse(ctx);
+}
+
+static CCBOOL parse_run(const char *root, CCMakeCCMContext *ctx)
+{
+    return parse_run_limits(root, ctx, 0, 0, 0, 0);
+}
+
+static CCBOOL parse_run_include_limits(
+    const char *root,
+    CCMakeCCMContext *ctx,
+    CCUINT32 max_files,
+    CCUINT32 max_edges,
+    CCUINT32 max_depth
+)
+{
+    ccm_context_init(ctx);
+    if (max_files)
+        ctx->limits.max_files = max_files;
+    if (max_edges)
+        ctx->limits.max_include_edges = max_edges;
+    if (max_depth)
+        ctx->limits.max_include_depth = max_depth;
+    if (!ccm_locate(root, NULL, ctx))
+        return CCFALSE;
+    if (!ccvar_global_init())
+        return CCFALSE;
+    ccvar_clear(ccvar_global());
+    return ccm_parse(ctx);
+}
+
+static CCBOOL parse_run_find_limit(
+    const char *root,
+    CCMakeCCMContext *ctx,
+    CCUINT32 max_results
+)
+{
+    ccm_context_init(ctx);
+    ctx->limits.max_find_results = max_results;
     if (!ccm_locate(root, NULL, ctx))
         return CCFALSE;
     if (!ccvar_global_init())
@@ -384,6 +443,160 @@ static void test_comments(void)
     CC_CASE_END();
 }
 
+static void test_depth_limits(void)
+{
+    CC_CASE("PARSE-015", "值深度边界");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(parse_run("tests/data/ccm/parse/depth_128.ccm", &ctx),
+             "128 层嵌套成功");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run("tests/data/ccm/parse/depth_129.ccm", &ctx),
+             "129 层嵌套拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
+static void test_resource_limits(void)
+{
+    CC_CASE("PARSE-016", "资源上限与超长 token");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(!parse_run_limits("tests/data/ccm/parse/long_token.ccm",
+                               &ctx, 8, 0, 0, 0),
+             "超长字符串拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run_limits("tests/data/ccm/parse/limits_array.ccm",
+                               &ctx, 0, 3, 0, 0),
+             "数组元素超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run_limits("tests/data/ccm/parse/limits_object.ccm",
+                               &ctx, 0, 0, 3, 0),
+             "对象成员超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
+static void test_float_limits(void)
+{
+    CC_CASE("PARSE-017", "浮点有限性与范围");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(parse_run("tests/data/ccm/parse/float_max.ccm", &ctx),
+             "最大有限浮点成功");
+    CCVarValue v;
+    CC_CHECK_EQ_I64("读取浮点", CC_VAR_OK,
+                    ccvar_get(ccvar_global(), "value", &v));
+    CC_CHECK(v.type == CC_VAR_FLOAT, "浮点类型");
+    CC_CHECK(v.as.floating > 1.7e308, "浮点值有效");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run("tests/data/ccm/parse/float_overflow.ccm", &ctx),
+             "浮点溢出拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run("tests/data/ccm/parse/float_underflow.ccm", &ctx),
+             "浮点下溢拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
+static void test_phase1_limits(void)
+{
+    CC_CASE("PARSE-020", "include 文件/边/深度预算");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(!parse_run_include_limits("tests/data/ccm/chain/root.ccm",
+                                       &ctx, 2, 0, 0),
+             "文件数量超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run_include_limits("tests/data/ccm/chain/root.ccm",
+                                       &ctx, 0, 1, 0),
+             "include 边数量超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run_include_limits("tests/data/ccm/chain/root.ccm",
+                                       &ctx, 0, 0, 1),
+             "include 深度超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
+static void test_find_result_limit(void)
+{
+    CC_CASE("PARSE-021", "${find} 结果预算");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(!parse_run_find_limit("tests/data/ccm/parse/find.ccm",
+                                   &ctx, 1),
+             "结果数量超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
+static void test_quoted_expansion(void)
+{
+    CC_CASE("PARSE-018", "内建函数引号边界");
+    CCMakeCCMContext ctx;
+    CC_CHECK(parse_run("tests/data/ccm/parse/quoted_ref.ccm", &ctx),
+             "引号内 ${ref} 解析成功");
+
+    CCVarValue v;
+    CC_CHECK_EQ_I64("读取 sources", CC_VAR_OK,
+                    ccvar_get(ccvar_global(), "sources", &v));
+    CC_CHECK(v.type == CC_VAR_STRING, "结果为字符串");
+    char text[4096];
+    CCUINT32 n = v.as.string.len < sizeof(text) - 1
+                     ? v.as.string.len : sizeof(text) - 1;
+    memcpy(text, v.as.string.data, n);
+    text[n] = '\0';
+    CC_CHECK(strstr(text, "a.c") != NULL, "包含 a.c");
+    CC_CHECK(strstr(text, "skip_test.c") == NULL, "排除测试文件");
+
+    parse_cleanup(&ctx);
+    CC_CASE_END();
+}
+
+static void test_reuse_after_failure(void)
+{
+    CC_CASE("PARSE-019", "失败后重新解析");
+    CCMakeCCMContext ctx;
+
+    CC_CHECK(!parse_run("tests/data/ccm/parse/bad_key.ccm", &ctx),
+             "第一次错误失败");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(parse_run("tests/data/ccm/parse/basic.ccm", &ctx),
+             "第一次正确成功");
+    CCVarValue v;
+    CC_CHECK_EQ_I64("项目字段", CC_VAR_OK,
+                    ccvar_get(ccvar_global(), "project", &v));
+    CC_CHECK(value_string_is(&v, "demo"), "项目值");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(!parse_run("tests/data/ccm/parse/bad_value.ccm", &ctx),
+             "第二次错误失败");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(parse_run("tests/data/ccm/parse/basic.ccm", &ctx),
+             "第二次正确成功");
+    CC_CHECK_EQ_I64("项目字段恢复", CC_VAR_OK,
+                    ccvar_get(ccvar_global(), "project", &v));
+    CC_CHECK(value_string_is(&v, "demo"), "项目值恢复");
+    parse_cleanup(&ctx);
+
+    CC_CASE_END();
+}
+
 void test_ccm_parse(void)
 {
     test_basic();
@@ -398,6 +611,13 @@ void test_ccm_parse(void)
     test_find();
     test_find_ref();
     test_comments();
+    test_depth_limits();
+    test_resource_limits();
+    test_float_limits();
+    test_quoted_expansion();
+    test_reuse_after_failure();
+    test_phase1_limits();
+    test_find_result_limit();
     test_defines();
     test_define_bad_key();
 }

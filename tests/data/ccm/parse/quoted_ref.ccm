@@ -1,0 +1,2 @@
+"pattern": "*.c";
+"sources": ${find ./tests/data/ccm/findtree/src -include "${ref pattern}" -exclude *_test.c};

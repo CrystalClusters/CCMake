@@ -293,10 +293,12 @@ typedef struct ccmake_ccm_context_struct {
     char    *work_dir;    /* 规范化绝对工作目录 */
     char    *root_path;   /* 规范化绝对根文件 */
     CCUINT32 root_index;  /* 根文件下标 */
+    CCUINT64 total_bytes; /* 已装载文件内容总字节 */
+    CCMakeCCMLimits limits;
 } CCMakeCCMContext;
 ```
 
-文件与边存储在 `CCDyn` 中，元素之间使用下标互相引用。`CCDyn` 扩容会搬移元素内存，遍历与访问始终通过下标完成，不跨扩容持有元素指针。
+文件与边存储在 `CCDyn` 中，元素之间使用下标互相引用。`CCDyn` 扩容会搬移元素内存，遍历与访问始终通过下标完成，不跨扩容持有元素指针。`CCMakeCCMLimits` 的字段与默认值见 §7.8。
 
 文件、include 边、解析顺序与 DFS 栈都以 `CCDyn` 连续数组承载：
 
@@ -478,7 +480,21 @@ VFS 合成路径采用 `/__ccm:<序号>` 形式。装载前从序号 0 开始，
 
 每次 `ccm_locate` 结束都会摘除本次建立的合成节点，下一次定位从空闲序号重新开始。
 
-### 7.8 复杂度汇总
+### 7.8 资源预算
+
+阶段一从 `CCMakeCCMContext.limits` 读取输入预算，在分配前检查：
+
+| 预算 | 检查点 |
+|---|---|
+| `max_file_bytes` | 读取单个文件前 |
+| `max_total_bytes` | 累加文件内容前 |
+| `max_files` | 根文件与 include 文件追加前 |
+| `max_include_edges` | include 扫描追加边前 |
+| `max_include_depth` | include 目标追加前 |
+
+超限时输出明确原因，例如 `单个文件超过大小限制`、`include 数量超过限制`、`include 深度超过限制`。阶段二的 token、数组、对象、`${find}` 预算见 [CCM内容解析](CCM内容解析.md)。
+
+### 7.9 复杂度汇总
 
 设 n 为文件数、m 为 include 边数、L 为路径长度、C 为内容总字节数：
 
@@ -605,6 +621,7 @@ ccm_context_init
 | 套件 | 覆盖 |
 |---|---|
 | `CCM` | 单文件、链式、菱形、重复 include、直接与间接循环、注释/字符串、非法指令、缺失与任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、连续定位、路径规范化、失败清理 |
+| `PARSE` | include 文件数量、边数量、深度预算与 `${find}` 结果预算 |
 
 测试 fixture 位于 `tests/data/ccm/`，按用例分为单文件、链、菱形、循环、注释、错误指令、编码、工作目录、大小写等目录。编码类 fixture 以原始字节保存，`.gitattributes` 关闭文本换行转换。
 
