@@ -8,6 +8,7 @@ depends/     外部依赖
 include/     公开头文件
 scripts/     各平台细分构建脚本
 src/         源码
+tests/       测试脚本
 out/         构建产物
 ```
 
@@ -38,8 +39,27 @@ DEBUG 使用 `-O0 -g3 -Wall -Wextra`，RELEASE 使用 `-O2 -DNDEBUG -DCC_RELEASE
 out/
 ├── obj/                  中间目标文件（.o）
 └── <平台>_bin/           按平台架构命名的产物目录
-    └── ccmaker(.exe)     可执行文件
+    ├── ccmaker(.exe)     可执行文件
+    └── ccmake_test(.exe) 测试程序（build.bat / build.sh 生成）
 ```
+
+## 测试
+
+测试是一个独立的 C 程序（参考 CrystalStd 测试结构）：直接链接 `src/cmd.c` 并调用 `parse_cmd`，校验返回值、解析结果字段与解析阶段输出。`build.bat` / `build.sh` 会同时生成 `ccmaker` 与 `ccmake_test`。
+
+```bat
+build.bat
+test.bat
+test.bat CMD
+```
+
+```bash
+bash build.sh
+bash test.sh
+bash test.sh CMD
+```
+
+用例与目录说明见 [tests/README.md](tests/README.md)。
 
 ## 依赖
 

@@ -46,3 +46,11 @@ if errorlevel 1 (
     echo [错误] 编译可执行文件失败，中止。
     exit /b 1
 )
+
+:: 生成测试程序
+echo 生成测试程序...
+call "%~dp0scripts\build_test.bat" "%PLATFORM_STR%" "%CC_BUILD_CFLAGS%" "%DEPENDENCIES%"
+if errorlevel 1 (
+    echo [错误] 编译测试程序失败，中止。
+    exit /b 1
+)

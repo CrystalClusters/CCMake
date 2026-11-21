@@ -47,3 +47,7 @@ fi
 # 生成可执行文件
 echo "生成可执行文件..."
 bash scripts/build_bin.sh "${PLATFORM_STR}" "${CC_BUILD_CFLAGS}" "${DEPENDENCIES}"
+
+# 生成测试程序
+echo "生成测试程序..."
+bash scripts/build_test.sh "${PLATFORM_STR}" "${CC_BUILD_CFLAGS}" "${DEPENDENCIES}"

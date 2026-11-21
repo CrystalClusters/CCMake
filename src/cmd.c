@@ -9,9 +9,51 @@
 
 #include "ccmake_header.h"
 
+#ifdef CC_WINDOWS
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 static int g_index = 0;
 static int g_argc = 0;
 static char **g_argv = NULL;
+
+struct ccmake_global_var_struct ccmake_global_var;
+
+// -D 动态数组：先释放每条键值对的字符串，再释放数组本体
+static void clear_defines(void)
+{
+    CCMakeDefine def;
+    while (cc_dyn_core_pop(
+        &ccmake_global_var.defines,
+        (CCUINT32)sizeof(CCMakeDefine),
+        (CCINT32)sizeof(CCMakeDefine),
+        &def
+    ) == 0)
+    {
+        if (def.key) ccalloc(def.key, 0, NULL);
+        if (def.value) ccalloc(def.value, 0, NULL);
+    }
+    if (ccmake_global_var.defines.array)
+        ccalloc(ccmake_global_var.defines.array, 0, NULL);
+    ccmake_global_var.defines.array = NULL;
+    ccmake_global_var.defines.size = 0;
+    ccmake_global_var.defines.capacity = 0;
+}
+
+void clear_global_var(void)
+{
+    // 命令行参数是乱序排列的
+    // 无法做成原子化设计，只能一个个检查有没有初始化
+    if (ccmake_global_var.self_path) ccalloc(ccmake_global_var.self_path, 0, NULL);
+    if (ccmake_global_var.ccm_path) ccalloc(ccmake_global_var.ccm_path, 0, NULL);
+    if (ccmake_global_var.cmk_path) ccalloc(ccmake_global_var.cmk_path, 0, NULL);
+    if (ccmake_global_var.work_dir) ccalloc(ccmake_global_var.work_dir, 0, NULL);
+    if (ccmake_global_var.output_dir) ccalloc(ccmake_global_var.output_dir, 0, NULL);
+    if (ccmake_global_var.target) ccalloc(ccmake_global_var.target, 0, NULL);
+    clear_defines();
+}
 
 // 处理函数的统一签名
 typedef CCBOOL(*cmd_parse_func)(void);
@@ -22,38 +64,105 @@ typedef struct func_table_struct {
     cmd_parse_func func;
 } FUNC_TABLE;
 
-static CCBOOL _func_empty(void)
+// 取当前指令后面的值；g_index 停在该值上
+// 缺值、值为空字符串、值以下一个指令参数的形态出现都视为错误
+static const char *_take_value_(const char *func_name)
 {
-    color_print("%c_8f空函数\n");
     g_index++;
+    if (g_index >= g_argc || g_argv[g_index][0] == '-')
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "未找到%s参数：%s <---\n",
+            func_name, g_argv[g_index - 1]
+        );
+        return NULL;
+    }
+    if (g_argv[g_index][0] == '\0')
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "%s 的参数为空字符串 <---\n",
+            g_argv[g_index - 1]
+        );
+        return NULL;
+    }
+    return g_argv[g_index];
+}
+
+// 拷贝字符串到全局字段；重复出现时原地扩容覆盖，旧内存由 ccalloc 回收
+static CCBOOL _store_string_(char **dst, const char *value, const char *comment)
+{
+    CCUINT32 len = (CCUINT32)strlen(value);
+    char *tmp = ccalloc(*dst, len + 1, comment);
+    if (!tmp)
+    {
+        color_print(CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "内存分配失败\n");
+        return CCFALSE;
+    }
+    memcpy(tmp, value, len + 1);
+    *dst = tmp;
     return CCTRUE;
+}
+
+// 复制一段字符串到新分配的缓冲区
+static char *_dup_string_(const char *src, CCUINT32 len, const char *comment)
+{
+    char *dst = ccalloc(NULL, len + 1, comment);
+    if (!dst)
+    {
+        color_print(CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "内存分配失败\n");
+        return NULL;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+    return dst;
+}
+
+// 解析非负十进制整数：仅接受数字，且不超过 INT32_MAX
+static CCBOOL _parse_uint32_(const char *str, CCUINT32 *out)
+{
+    CCUINT64 value = 0;
+    if (str[0] == '\0')
+        return CCFALSE;
+    for (const char *p = str; *p != '\0'; p++)
+    {
+        if (*p < '0' || *p > '9')
+            return CCFALSE;
+        value = value * 10 + (CCUINT64)(*p - '0');
+        if (value > 0x7FFFFFFFu)
+            return CCFALSE;
+    }
+    *out = (CCUINT32)value;
+    return CCTRUE;
+}
+
+// 探测 CPU 核心数，作为 -j 的默认值
+static int _detect_cpu_cores_(void)
+{
+#ifdef CC_WINDOWS
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    if (info.dwNumberOfProcessors > 0)
+        return (int)info.dwNumberOfProcessors;
+#else
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cores > 0)
+        return (int)cores;
+#endif
+    return 1;
 }
 
 static CCBOOL _func_config_(void)
 {
-    g_index++;
-    if (g_index >= g_argc)
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "未找到config参数：%s <---\n",
-            g_argv[g_index - 1]
-        );
+    const char *value = _take_value_("config");
+    if (!value)
         return CCFALSE;
-    }
-    if (g_argv[g_index][0] == '-')
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "未找到config参数：%s -><- %s\n",
-            g_argv[g_index - 1], g_argv[g_index]
-        );
+    if (!_store_string_(
+            &ccmake_global_var.ccm_path,
+            value,
+            CC_DBG_REL_TAG(".ccm文件路径", NULL)))
         return CCFALSE;
-    }
-    // 拷贝字符串操作
-    CCUINT32 len = strlen(g_argv[g_index]);
-    ccmake_global_var.ccm_path = ccalloc(NULL, len + 1, CC_DBG_REL_TAG(".ccm文件路径", NULL));
-    strcpy(ccmake_global_var.ccm_path, g_argv[g_index]);
     // 跳过已拷贝的参数
     g_index++;
     return CCTRUE;
@@ -61,30 +170,242 @@ static CCBOOL _func_config_(void)
 
 static CCBOOL _func_file_(void)
 {
-    g_index++;
-    if (g_index >= g_argc)
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "未找到file参数：%s <---\n",
-            g_argv[g_index - 1]
-        );
+    const char *value = _take_value_("file");
+    if (!value)
         return CCFALSE;
-    }
-    if (g_argv[g_index][0] == '-')
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "未找到file参数：%s -><- %s\n",
-            g_argv[g_index - 1], g_argv[g_index]
-        );
+    if (!_store_string_(
+            &ccmake_global_var.cmk_path,
+            value,
+            CC_DBG_REL_TAG(".cmk文件路径", NULL)))
         return CCFALSE;
-    }
-    // 拷贝字符串操作
-    CCUINT32 len = strlen(g_argv[g_index]);
-    ccmake_global_var.cmk_path = ccalloc(NULL, len + 1, CC_DBG_REL_TAG(".ccm文件路径", NULL));
-    strcpy(ccmake_global_var.cmk_path, g_argv[g_index]);
     // 跳过已拷贝的参数
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_directory_(void)
+{
+    const char *value = _take_value_("directory");
+    if (!value)
+        return CCFALSE;
+    if (!_store_string_(
+            &ccmake_global_var.work_dir,
+            value,
+            CC_DBG_REL_TAG("工作目录", NULL)))
+        return CCFALSE;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_jobs_(void)
+{
+    const char *value = _take_value_("jobs");
+    if (!value)
+        return CCFALSE;
+    CCUINT32 jobs = 0;
+    if (!_parse_uint32_(value, &jobs))
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "jobs参数非法：%s（应为非负整数）\n",
+            value
+        );
+        return CCFALSE;
+    }
+    if (jobs == 0)
+    {
+        // 0 表示自动检测，同时把默认值明确告知用户
+        ccmake_global_var.jobs = _detect_cpu_cores_();
+        color_print(
+            "并行任务数：采用默认值 %d（0 = 自动检测）\n",
+            ccmake_global_var.jobs
+        );
+    }
+    else
+    {
+        ccmake_global_var.jobs = (int)jobs;
+    }
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_output_(void)
+{
+    const char *value = _take_value_("output");
+    if (!value)
+        return CCFALSE;
+    if (!_store_string_(
+            &ccmake_global_var.output_dir,
+            value,
+            CC_DBG_REL_TAG("输出目录", NULL)))
+        return CCFALSE;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_target_(void)
+{
+    const char *value = _take_value_("target");
+    if (!value)
+        return CCFALSE;
+    if (!_store_string_(
+            &ccmake_global_var.target,
+            value,
+            CC_DBG_REL_TAG("构建目标", NULL)))
+        return CCFALSE;
+    g_index++;
+    return CCTRUE;
+}
+
+// 追加一条 -D 键值对；键重复时以后来者为准
+static CCBOOL _define_add_(const char *key, CCUINT32 key_len, const char *value, CCUINT32 value_len)
+{
+    CCUINT32 count = ccmake_global_var.defines.size / (CCUINT32)sizeof(CCMakeDefine);
+    CCMakeDefine item;
+    // 重复的键：保留首次插入的位置，只替换值
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        cc_dyn_core_seek(
+            &ccmake_global_var.defines,
+            (CCUINT32)sizeof(CCMakeDefine),
+            (CCINT32)sizeof(CCMakeDefine),
+            &item, i
+        );
+        if (strlen(item.key) != key_len || memcmp(item.key, key, key_len) != 0)
+            continue;
+
+        char *new_value = _dup_string_(value, value_len, CC_DBG_REL_TAG("-D 值", NULL));
+        if (!new_value)
+            return CCFALSE;
+        char *old_value = item.value;
+        item.value = new_value;
+        if (cc_dyn_core_set(
+                &ccmake_global_var.defines,
+                (CCUINT32)sizeof(CCMakeDefine),
+                (CCINT32)sizeof(CCMakeDefine),
+                &item, i) != 0)
+        {
+            ccalloc(new_value, 0, NULL);
+            color_print(CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "动态数组写入失败\n");
+            return CCFALSE;
+        }
+        ccalloc(old_value, 0, NULL);
+        return CCTRUE;
+    }
+
+    // 新键：键和值各占一块内存，整体按值压入动态数组
+    CCMakeDefine def;
+    def.key = _dup_string_(key, key_len, CC_DBG_REL_TAG("-D 键", NULL));
+    if (!def.key)
+        return CCFALSE;
+    def.value = _dup_string_(value, value_len, CC_DBG_REL_TAG("-D 值", NULL));
+    if (!def.value)
+    {
+        ccalloc(def.key, 0, NULL);
+        return CCFALSE;
+    }
+    if (cc_dyn_core_push(
+            &ccmake_global_var.defines,
+            (CCUINT32)sizeof(CCMakeDefine),
+            (CCINT32)sizeof(CCMakeDefine),
+            &def) != 0)
+    {
+        ccalloc(def.key, 0, NULL);
+        ccalloc(def.value, 0, NULL);
+        color_print(CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "动态数组扩容失败\n");
+        return CCFALSE;
+    }
+    return CCTRUE;
+}
+
+static CCBOOL _func_define_(void)
+{
+    CCINT32 pairs = 0;
+    // 一个 -D 后面可以跟不定数量的 <键>=<值>，直到遇到下一条指令
+    while (g_index + 1 < g_argc && g_argv[g_index + 1][0] != '-')
+    {
+        g_index++;
+        const char *arg = g_argv[g_index];
+        if (arg[0] == '\0')
+        {
+            color_print(
+                CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+                "define 的参数为空字符串 <---\n"
+            );
+            return CCFALSE;
+        }
+        const char *eq = strchr(arg, '=');
+        // 必须形如 <键>=<值>，且键、值都不能为空
+        if (!eq || eq == arg || eq[1] == '\0')
+        {
+            color_print(
+                CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+                "无法解析的键值对：%s（应为 <键>=<值>，键值均不能为空）\n",
+                arg
+            );
+            return CCFALSE;
+        }
+        if (!_define_add_(
+                arg,
+                (CCUINT32)(eq - arg),
+                eq + 1,
+                (CCUINT32)strlen(eq + 1)))
+            return CCFALSE;
+        pairs++;
+    }
+    if (pairs == 0)
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "未找到define参数：%s <---\n",
+            g_argv[g_index]
+        );
+        return CCFALSE;
+    }
+    // 跳过最后一个键值对
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_verbose_(void)
+{
+    ccmake_global_var.verbose = CCTRUE;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_dry_run_(void)
+{
+    ccmake_global_var.dry_run = CCTRUE;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_always_build_(void)
+{
+    ccmake_global_var.always_build = CCTRUE;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_keep_going_(void)
+{
+    ccmake_global_var.keep_going = CCTRUE;
+    g_index++;
+    return CCTRUE;
+}
+
+// 这两个动作依赖 .ccm 解析：解析阶段只记录请求，继续收集配置参数，由后续流程执行
+static CCBOOL _func_list_targets_(void)
+{
+    ccmake_global_var.action = CC_CMD_ACTION_LIST_TARGETS;
+    g_index++;
+    return CCTRUE;
+}
+
+static CCBOOL _func_dump_config_(void)
+{
+    ccmake_global_var.action = CC_CMD_ACTION_DUMP_CONFIG;
     g_index++;
     return CCTRUE;
 }
@@ -92,18 +413,13 @@ static CCBOOL _func_file_(void)
 static CCBOOL _func_version_(void)
 {
     ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
+    g_index++;
     color_print(
         "CCMake - Crystal Cluster Make：\n"
-    #ifdef CC_WINDOWS
-        "Windows"
-    #elif defined CC_LINUX
-        "Linux"
-    #elif defined CC_ANDROID
-        "Android"
-    #else
-        "未知平台"
-    #endif
-        "\n版本：v%d.%d.%d\n", CCMAKE_VER_MAJOR, CCMAKE_VER_MINOR, CCMAKE_VER_BUILD
+        "%s %s\n"
+        "版本：v%d.%d.%d\n",
+        CCMAKE_PLATFORM_NAME, CCMAKE_ARCH_NAME,
+        CCMAKE_VER_MAJOR, CCMAKE_VER_MINOR, CCMAKE_VER_BUILD
     );
     return CCTRUE;
 }
@@ -111,12 +427,13 @@ static CCBOOL _func_version_(void)
 static CCBOOL _func_help_(void)
 {
     ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
+    g_index++;
     color_print(
         "-c, --config <文件>          指定 .ccm 配置文件（必填）\n"
         "-f, --file <文件>            指定 .cmk 构建脚本（必填）\n"
         "-C, --directory <目录>       切换工作目录\n"
-        "-j, --jobs <数量>            并行任务数（默认: CPU 核心数）\n"
-        "-D, --define <键=值> <键=值> 覆盖配置文件字段\n"
+        "-j, --jobs <数量>            并行任务数（0 = 自动检测，默认: CPU 核心数）\n"
+        "-D, --define <键=值>...      覆盖配置文件字段（可跟多个键值对）\n"
         "-o, --output <目录>          构建产物输出目录\n"
         "-t, --target <目标>          构建目标（如 debug, release）\n"
         "-v, --verbose                详细输出\n"
@@ -134,18 +451,18 @@ static CCBOOL _func_help_(void)
 static FUNC_TABLE func_table[] = {
     {"-c", _func_config_}, {"--config", _func_config_},
     {"-f", _func_file_}, {"--file", _func_file_},
-    {"-C", _func_empty}, {"--directory", _func_empty},
-    {"-j", _func_empty}, {"--jobs", _func_empty},
-    {"-D", _func_empty}, {"--define", _func_empty},
-    {"-o", _func_empty}, {"--output", _func_empty},
-    {"-t", _func_empty}, {"--target", _func_empty},
-    {"-v", _func_empty}, {"--verbose", _func_empty},
-    {"-n", _func_empty}, {"--dry-run", _func_empty},
-    {"-B", _func_empty}, {"--always-build", _func_empty},
-    {"-k", _func_empty}, {"--keep-going", _func_empty},
+    {"-C", _func_directory_}, {"--directory", _func_directory_},
+    {"-j", _func_jobs_}, {"--jobs", _func_jobs_},
+    {"-D", _func_define_}, {"--define", _func_define_},
+    {"-o", _func_output_}, {"--output", _func_output_},
+    {"-t", _func_target_}, {"--target", _func_target_},
+    {"-v", _func_verbose_}, {"--verbose", _func_verbose_},
+    {"-n", _func_dry_run_}, {"--dry-run", _func_dry_run_},
+    {"-B", _func_always_build_}, {"--always-build", _func_always_build_},
+    {"-k", _func_keep_going_}, {"--keep-going", _func_keep_going_},
     {"-h", _func_help_}, {"--help", _func_help_},
     {"-V", _func_version_}, {"--version", _func_version_},
-    {"--list-targets", _func_empty}, {"--dump-config", _func_empty}
+    {"--list-targets", _func_list_targets_}, {"--dump-config", _func_dump_config_}
 };
 #define FUNC_TABLE_SIZE (CCINT32)(sizeof(func_table) / sizeof(func_table[0]))
 
@@ -179,12 +496,23 @@ CCBOOL single_cmd()
 
 CCBOOL check_parse()
 {
-    if (
-        !ccmake_global_var.self_path ||
-        !ccmake_global_var.ccm_path ||
-        !ccmake_global_var.cmk_path
-    )
+    // 必填参数缺失时给出明确提示
+    if (!ccmake_global_var.ccm_path)
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "缺少必填参数：-c/--config\n"
+        );
         return CCFALSE;
+    }
+    if (!ccmake_global_var.cmk_path)
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "缺少必填参数：-f/--file\n"
+        );
+        return CCFALSE;
+    }
     return CCTRUE;
 }
 
@@ -196,9 +524,11 @@ CCBOOL parse_cmd(int argc, char **argv)
     g_index = 1;
     g_argc = argc;
     g_argv = argv;
-    CCUINT32 len = strlen(argv[0]);
-    ccmake_global_var.self_path = ccalloc(NULL, len + 1, CC_DBG_REL_TAG("可执行程序自指路径", NULL));
-    strcpy(ccmake_global_var.self_path, argv[0]);
+    if (!_store_string_(
+            &ccmake_global_var.self_path,
+            argv[0],
+            CC_DBG_REL_TAG("可执行程序自指路径", NULL)))
+        return CCFALSE;
     CCBOOL valid_cmd = CCTRUE;
     // 默认需要构建，可被 ACTION_DONE 覆盖
     ccmake_global_var.stat = CC_CMD_FLAG_NEED_BUILD;
@@ -212,5 +542,21 @@ CCBOOL parse_cmd(int argc, char **argv)
         if (ccmake_global_var.stat == CC_CMD_FLAG_ACTION_DONE)
             return CCTRUE;
     }
-    return check_parse() && valid_cmd;
+    if (!valid_cmd)
+        return CCFALSE;
+    // 需要配置的动作类参数由后续流程执行，解析阶段不校验构建必填项
+    if (ccmake_global_var.action != CC_CMD_ACTION_NONE)
+        return CCTRUE;
+    if (!check_parse())
+        return CCFALSE;
+    // 未指定 -j 时同样采用默认值（CPU 核心数）
+    if (ccmake_global_var.jobs <= 0)
+    {
+        ccmake_global_var.jobs = _detect_cpu_cores_();
+        color_print(
+            "并行任务数：未指定，采用默认值 %d\n",
+            ccmake_global_var.jobs
+        );
+    }
+    return CCTRUE;
 }
