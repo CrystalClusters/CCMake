@@ -1,0 +1,1 @@
+"sources": ${find ./tests/data/ccm/findtree/src -include *.c *.h -exclude *_test.c};

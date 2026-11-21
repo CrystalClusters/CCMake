@@ -11,7 +11,9 @@ tests/
   test_harness.c/.h       用例、断言、统计与 stdout 捕获
   cmd/test_cmd.c          命令行解析用例
   ccm/test_ccm_locate.c   CCM 文件检查与定位用例
-  data/ccm/               CCM 用例 fixture
+  ccm/test_ccm_parse.c    CCM 内容解析用例
+  vars/test_ccvar.c       全局变量树用例
+  data/ccm/               CCM 用例 fixture（不参与测试程序编译）
 ```
 
 产物：`out/<平台>_bin/ccmake_test(.exe)`。
@@ -22,12 +24,18 @@ tests/
 build.bat
 test.bat
 test.bat CMD
+test.bat CCM
+test.bat PARSE
+test.bat VARS
 ```
 
 ```bash
 bash build.sh
 bash test.sh
 bash test.sh CMD
+bash test.sh CCM
+bash test.sh PARSE
+bash test.sh VARS
 ```
 
 `test.bat` / `test.sh` 只检查产物是否存在并运行，不负责编译。
@@ -40,9 +48,11 @@ bash test.sh CMD
 - `-c/-f/-C/-o/-t` 字段写入、长格式、重复参数覆盖；
 - `-D`：一个 `-D` 多个键值对、重复键以后者为准、值中含 `=`；
 - `--list-targets` / `--dump-config` 的动作请求字段；
-- CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、扩展名、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理。
+- CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理；
+- CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键；
+- 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用。
 
-测试直接调用 `parse_cmd` / `ccm_locate`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
+测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
 
 ## 断言方式
 
@@ -52,4 +62,4 @@ bash test.sh CMD
 
 套件启动时先做一次 `CMD-HARNESS-000` 捕获自检：若当前环境无法接管 stdout，只报一条失败并中止，同时在 stderr 打印失败的系统调用与 errno，不会把全部用例误报为失败。
 
-测试程序与 `src/cmd.c` 使用同一套编译参数（Windows 下都带 `-fexec-charset=GBK`），中文期望值可以直接写成字符串字面量。
+测试程序链接 `src/` 下除 `main.c` 外的全部源码；`tests/data/` 仅存放 fixture，不参与编译。测试程序与 `src/` 使用同一套编译参数（Windows 下都带 `-fexec-charset=GBK`），中文期望值可以直接写成字符串字面量。

@@ -429,7 +429,7 @@ static CCBOOL _func_help_(void)
     ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
     g_index++;
     color_print(
-        "-c, --config <文件>          指定 .ccm 配置文件（必填）\n"
+        "-c, --config <文件>          指定配置文件（必填，扩展名不限）\n"
         "-f, --file <文件>            指定 .cmk 构建脚本（必填）\n"
         "-C, --directory <目录>       切换工作目录\n"
         "-j, --jobs <数量>            并行任务数（0 = 自动检测，默认: CPU 核心数）\n"

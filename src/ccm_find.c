@@ -1,0 +1,675 @@
+/*
+ * @Author: Renascent Adore lizaterop@gmail.com
+ * @Date: 2026-11
+ * @LastEditors: Renascent Adore lizaterop@gmail.com
+ * @LastEditTime: 2026-11
+ * @Description: .ccm 第二阶段 ${find} 文件发现（基于 VFS 目录遍历）
+ * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
+ */
+
+#include "ccm_internal.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <cc_wildcard.h>
+
+typedef struct ccm_find_token_list {
+    CCDyn tokens; /* char* */
+} CCMFindTokens;
+
+typedef struct ccm_find_stack_item {
+    char *vpath;
+    char *rel;
+} CCMFindStackItem;
+
+typedef struct ccm_find_entry {
+    char *name;
+    CCFsType type;
+} CCMFindEntry;
+
+typedef struct ccm_find_list_ctx {
+    CCDyn entries; /* CCMFindEntry[] */
+} CCMFindListCtx;
+
+static void find_tokens_free(CCMFindTokens *t)
+{
+    if (!t)
+        return;
+    char **items = (char **)t->tokens.array;
+    CCUINT32 count = t->tokens.size / (CCUINT32)sizeof(char *);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (items[i])
+            ccalloc(items[i], 0, NULL);
+    }
+    if (t->tokens.array)
+        ccalloc(t->tokens.array, 0, NULL);
+    memset(t, 0, sizeof(*t));
+}
+
+static CCBOOL find_tokenize(
+    const char *args,
+    CCUINT32 len,
+    CCMFindTokens *out,
+    const char *file,
+    CCUINT32 line
+)
+{
+    memset(out, 0, sizeof(*out));
+    CCUINT32 i = 0;
+    while (i < len)
+    {
+        while (i < len && (args[i] == ' ' || args[i] == '\t' ||
+                           args[i] == '\r' || args[i] == '\n'))
+            i++;
+        if (i >= len)
+            break;
+
+        CCUINT32 begin = i;
+        char *text = NULL;
+        if (args[i] == '"')
+        {
+            i++;
+            begin = i;
+            while (i < len && args[i] != '"')
+                i++;
+            if (i >= len)
+            {
+                find_tokens_free(out);
+                return ccm_parse_failf(file, line, "${find} 参数中的字符串未闭合");
+            }
+            CCUINT32 n = i - begin;
+            text = ccalloc(
+                NULL, (CCUINT64)n + 1,
+                CC_DBG_REL_TAG(".ccm find 参数", NULL)
+            );
+            if (!text)
+            {
+                find_tokens_free(out);
+                return ccm_parse_failf(file, line, "内存分配失败");
+            }
+            memcpy(text, args + begin, n);
+            text[n] = '\0';
+            i++;
+        }
+        else
+        {
+            while (i < len && args[i] != ' ' && args[i] != '\t' &&
+                   args[i] != '\r' && args[i] != '\n')
+                i++;
+            CCUINT32 n = i - begin;
+            text = ccalloc(
+                NULL, (CCUINT64)n + 1,
+                CC_DBG_REL_TAG(".ccm find 参数", NULL)
+            );
+            if (!text)
+            {
+                find_tokens_free(out);
+                return ccm_parse_failf(file, line, "内存分配失败");
+            }
+            memcpy(text, args + begin, n);
+            text[n] = '\0';
+        }
+
+        if (cc_dyn_core_push(
+                &out->tokens, (CCUINT32)sizeof(char *),
+                (CCINT32)sizeof(char *), &text
+            ) != 0
+        )
+        {
+            ccalloc(text, 0, NULL);
+            find_tokens_free(out);
+            return ccm_parse_failf(file, line, "内存分配失败");
+        }
+    }
+    return CCTRUE;
+}
+
+static CCBOOL find_buf_put(CCDyn *buf, const char *text, CCUINT32 len)
+{
+    for (CCUINT32 i = 0; i < len; i++)
+    {
+        if (cc_dyn_core_push(buf, 1, 1, (void *)&text[i]) != 0)
+            return CCFALSE;
+    }
+    return CCTRUE;
+}
+
+static CCBOOL find_push_str(CCDyn *dyn, const char *text)
+{
+    char *copy = ccalloc(
+        NULL, (CCUINT64)strlen(text) + 1,
+        CC_DBG_REL_TAG(".ccm find 路径", NULL)
+    );
+    if (!copy)
+        return CCFALSE;
+    memcpy(copy, text, strlen(text) + 1);
+    if (cc_dyn_core_push(
+            dyn, (CCUINT32)sizeof(char *),
+            (CCINT32)sizeof(char *), &copy
+        ) != 0
+    )
+    {
+        ccalloc(copy, 0, NULL);
+        return CCFALSE;
+    }
+    return CCTRUE;
+}
+
+static CCBOOL find_add_result(CCDyn *results, const char *path)
+{
+    char **items = (char **)results->array;
+    CCUINT32 count = results->size / (CCUINT32)sizeof(char *);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (strcmp(items[i], path) == 0)
+            return CCTRUE;
+    }
+    return find_push_str(results, path);
+}
+
+static int find_compare_str(const void *a, const void *b)
+{
+    const char *sa = *(const char *const *)a;
+    const char *sb = *(const char *const *)b;
+    return strcmp(sa, sb);
+}
+
+static CCBOOL find_match(
+    const char *name,
+    char **includes,
+    CCUINT32 include_count,
+    char **excludes,
+    CCUINT32 exclude_count
+)
+{
+    CCBOOL hit = CCFALSE;
+    for (CCUINT32 i = 0; i < include_count; i++)
+    {
+        if (cc_wildcard(includes[i], name))
+        {
+            hit = CCTRUE;
+            break;
+        }
+    }
+    if (!hit)
+        return CCFALSE;
+    for (CCUINT32 i = 0; i < exclude_count; i++)
+    {
+        if (cc_wildcard(excludes[i], name))
+            return CCFALSE;
+    }
+    return CCTRUE;
+}
+
+static CCINT32 find_list_callback(void *data, void *user)
+{
+    CCFsEntry *entry = (CCFsEntry *)data;
+    CCMFindListCtx *ctx = (CCMFindListCtx *)user;
+    CCMFindEntry item;
+    memset(&item, 0, sizeof(item));
+    size_t n = strlen(entry->name);
+    item.name = ccalloc(
+        NULL, (CCUINT64)n + 1,
+        CC_DBG_REL_TAG(".ccm find 条目", NULL)
+    );
+    if (!item.name)
+        return 1;
+    memcpy(item.name, entry->name, n + 1);
+    item.type = entry->type;
+    if (cc_dyn_core_push(
+            &ctx->entries, (CCUINT32)sizeof(CCMFindEntry),
+            (CCINT32)sizeof(CCMFindEntry), &item
+        ) != 0
+    )
+    {
+        ccalloc(item.name, 0, NULL);
+        return 1;
+    }
+    return 0;
+}
+
+static char *find_join_output(const char *dir, const char *rel)
+{
+    size_t dl = strlen(dir);
+    while (dl > 1 && dir[dl - 1] == '/')
+        dl--;
+#ifdef CC_WINDOWS
+    if (dl == 2 && dir[1] == ':')
+        dl = 3;
+#endif
+    size_t rl = strlen(rel);
+    CCBOOL has_slash = (dl > 0 && dir[dl - 1] == '/') ? CCTRUE : CCFALSE;
+    size_t need = dl + (has_slash ? 0 : 1) + rl + 1;
+    char *out = ccalloc(NULL, need, CC_DBG_REL_TAG(".ccm find 结果", NULL));
+    if (!out)
+        return NULL;
+    memcpy(out, dir, dl);
+    size_t pos = dl;
+    if (!has_slash)
+        out[pos++] = '/';
+    memcpy(out + pos, rel, rl + 1);
+    return out;
+}
+
+static void find_free_results(CCDyn *results)
+{
+    char **items = (char **)results->array;
+    CCUINT32 count = results->size / (CCUINT32)sizeof(char *);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (items[i])
+            ccalloc(items[i], 0, NULL);
+    }
+    if (results->array)
+        ccalloc(results->array, 0, NULL);
+    memset(results, 0, sizeof(*results));
+}
+
+static void find_free_str_list(CCDyn *list)
+{
+    char **items = (char **)list->array;
+    CCUINT32 count = list->size / (CCUINT32)sizeof(char *);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (items[i])
+            ccalloc(items[i], 0, NULL);
+    }
+    if (list->array)
+        ccalloc(list->array, 0, NULL);
+    memset(list, 0, sizeof(*list));
+}
+
+static void find_free_stack(CCDyn *stack)
+{
+    CCMFindStackItem *items = (CCMFindStackItem *)stack->array;
+    CCUINT32 count = stack->size / (CCUINT32)sizeof(CCMFindStackItem);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (items[i].vpath)
+            ccalloc(items[i].vpath, 0, NULL);
+        if (items[i].rel)
+            ccalloc(items[i].rel, 0, NULL);
+    }
+    if (stack->array)
+        ccalloc(stack->array, 0, NULL);
+    memset(stack, 0, sizeof(*stack));
+}
+
+static void find_free_entries(CCMFindListCtx *lc)
+{
+    CCMFindEntry *entries = (CCMFindEntry *)lc->entries.array;
+    CCUINT32 count = lc->entries.size / (CCUINT32)sizeof(CCMFindEntry);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (entries[i].name)
+            ccalloc(entries[i].name, 0, NULL);
+    }
+    if (lc->entries.array)
+        ccalloc(lc->entries.array, 0, NULL);
+    memset(lc, 0, sizeof(*lc));
+}
+
+static CCBOOL find_scan_dir(
+    CCFiles *fs,
+    const char *vpath,
+    const char *dir_prefix,
+    char **includes,
+    CCUINT32 include_count,
+    char **excludes,
+    CCUINT32 exclude_count,
+    CCDyn *results,
+    const char *file,
+    CCUINT32 line
+)
+{
+    CCDyn stack;
+    memset(&stack, 0, sizeof(stack));
+
+    CCMFindStackItem root;
+    root.vpath = ccalloc(
+        NULL, (CCUINT64)strlen(vpath) + 1,
+        CC_DBG_REL_TAG(".ccm find 虚拟路径", NULL)
+    );
+    root.rel = ccalloc(NULL, 1, CC_DBG_REL_TAG(".ccm find 相对路径", NULL));
+    if (!root.vpath || !root.rel)
+    {
+        if (root.vpath) ccalloc(root.vpath, 0, NULL);
+        if (root.rel) ccalloc(root.rel, 0, NULL);
+        ccm_parse_failf(file, line, "内存分配失败");
+        return CCFALSE;
+    }
+    memcpy(root.vpath, vpath, strlen(vpath) + 1);
+    root.rel[0] = '\0';
+    if (cc_dyn_core_push(
+            &stack, (CCUINT32)sizeof(CCMFindStackItem),
+            (CCINT32)sizeof(CCMFindStackItem), &root
+        ) != 0
+    )
+    {
+        ccalloc(root.vpath, 0, NULL);
+        ccalloc(root.rel, 0, NULL);
+        ccm_parse_failf(file, line, "内存分配失败");
+        return CCFALSE;
+    }
+
+    CCBOOL ok = CCFALSE;
+    CCMFindStackItem item;
+    memset(&item, 0, sizeof(item));
+    CCMFindListCtx lc;
+    memset(&lc, 0, sizeof(lc));
+
+    while (stack.size >= (CCUINT32)sizeof(CCMFindStackItem))
+    {
+        if (cc_dyn_core_pop(
+                &stack, (CCUINT32)sizeof(CCMFindStackItem),
+                (CCINT32)sizeof(CCMFindStackItem), &item
+            ) != 0
+        )
+        {
+            ccm_parse_failf(file, line, "内存分配失败");
+            goto Failed;
+        }
+
+        CCINT32 lr = ccfiles_list(fs, item.vpath, find_list_callback, &lc);
+        if (lr != CC_FS_OK)
+        {
+            ccm_parse_failf(file, line, "${find} 目录遍历失败：%s", item.vpath);
+            goto Failed;
+        }
+
+        CCMFindEntry *entries = (CCMFindEntry *)lc.entries.array;
+        CCUINT32 ec = lc.entries.size / (CCUINT32)sizeof(CCMFindEntry);
+        for (CCUINT32 i = 0; i < ec; i++)
+        {
+            const char *name = entries[i].name;
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+                continue;
+
+            size_t vl = strlen(item.vpath);
+            size_t rl = strlen(item.rel);
+            size_t nl = strlen(name);
+            char *cv = ccalloc(
+                NULL, (CCUINT64)vl + nl + 2,
+                CC_DBG_REL_TAG(".ccm find 虚拟路径", NULL)
+            );
+            char *cr = ccalloc(
+                NULL, (CCUINT64)rl + (rl ? 1 : 0) + nl + 1,
+                CC_DBG_REL_TAG(".ccm find 相对路径", NULL)
+            );
+            if (!cv || !cr)
+            {
+                if (cv) ccalloc(cv, 0, NULL);
+                if (cr) ccalloc(cr, 0, NULL);
+                ccm_parse_failf(file, line, "内存分配失败");
+                goto Failed;
+            }
+            memcpy(cv, item.vpath, vl);
+            cv[vl] = '/';
+            memcpy(cv + vl + 1, name, nl + 1);
+            if (rl)
+            {
+                memcpy(cr, item.rel, rl);
+                cr[rl] = '/';
+                memcpy(cr + rl + 1, name, nl + 1);
+            }
+            else
+            {
+                memcpy(cr, name, nl + 1);
+            }
+
+            if (entries[i].type == CC_FS_TYPE_DIR)
+            {
+                CCMFindStackItem ci;
+                ci.vpath = cv;
+                ci.rel = cr;
+                if (cc_dyn_core_push(
+                        &stack, (CCUINT32)sizeof(CCMFindStackItem),
+                        (CCINT32)sizeof(CCMFindStackItem), &ci
+                    ) != 0
+                )
+                {
+                    ccalloc(cv, 0, NULL);
+                    ccalloc(cr, 0, NULL);
+                    ccm_parse_failf(file, line, "内存分配失败");
+                    goto Failed;
+                }
+            }
+            else
+            {
+                if (find_match(
+                        name, includes, include_count,
+                        excludes, exclude_count
+                    )
+                )
+                {
+                    char *joined = find_join_output(dir_prefix, cr);
+                    if (!joined || !find_add_result(results, joined))
+                    {
+                        if (joined) ccalloc(joined, 0, NULL);
+                        ccalloc(cv, 0, NULL);
+                        ccalloc(cr, 0, NULL);
+                        ccm_parse_failf(file, line, "内存分配失败");
+                        goto Failed;
+                    }
+                    ccalloc(joined, 0, NULL);
+                }
+                ccalloc(cv, 0, NULL);
+                ccalloc(cr, 0, NULL);
+            }
+        }
+
+        find_free_entries(&lc);
+        ccalloc(item.vpath, 0, NULL);
+        ccalloc(item.rel, 0, NULL);
+        memset(&item, 0, sizeof(item));
+    }
+
+    ok = CCTRUE;
+
+Failed:
+    if (item.vpath)
+        ccalloc(item.vpath, 0, NULL);
+    if (item.rel)
+        ccalloc(item.rel, 0, NULL);
+    find_free_entries(&lc);
+    find_free_stack(&stack);
+    return ok;
+}
+
+static CCBOOL find_vpath_free(CCFiles *fs, const char *vpath)
+{
+    if (!fs || !vpath)
+        return CCTRUE;
+    /* 先卸载目录锚点，丢弃投影子节点；再摘除还原后的内存节点。
+       直接对目录锚点递归删除会按锚点物理路径解析子节点，触及宿主文件。 */
+    if (ccfiles_unmount(fs, vpath) == CC_FS_OK)
+        (void)ccfiles_remove(fs, vpath);
+    return CCTRUE;
+}
+
+CCBOOL ccm_find_eval(
+    CCMakeCCMContext *ctx,
+    const char *args,
+    CCUINT32 len,
+    char **out,
+    CCUINT32 *out_len,
+    const char *file,
+    CCUINT32 line
+)
+{
+    if (!ctx || !args || !out || !out_len)
+        return CCFALSE;
+    *out = NULL;
+    *out_len = 0;
+
+    CCMFindTokens tokens;
+    if (!find_tokenize(args, len, &tokens, file, line))
+        return CCFALSE;
+
+    CCBOOL ok = CCFALSE;
+    CCDyn dirs;
+    CCDyn includes;
+    CCDyn excludes;
+    memset(&dirs, 0, sizeof(dirs));
+    memset(&includes, 0, sizeof(includes));
+    memset(&excludes, 0, sizeof(excludes));
+    CCDyn results;
+    memset(&results, 0, sizeof(results));
+    CCDyn buf;
+    memset(&buf, 0, sizeof(buf));
+    CCFiles *fs = NULL;
+    CCDyn mounted;
+    memset(&mounted, 0, sizeof(mounted));
+
+    CCUINT32 mode = 0; /* 0=目录，1=include，2=exclude */
+    char **tk = (char **)tokens.tokens.array;
+    CCUINT32 tc = tokens.tokens.size / (CCUINT32)sizeof(char *);
+    for (CCUINT32 i = 0; i < tc; i++)
+    {
+        if (strcmp(tk[i], "-include") == 0)
+        {
+            mode = 1;
+            continue;
+        }
+        if (strcmp(tk[i], "-exclude") == 0)
+        {
+            mode = 2;
+            continue;
+        }
+        CCDyn *dst = (mode == 0) ? &dirs : (mode == 1 ? &includes : &excludes);
+        if (!find_push_str(dst, tk[i]))
+        {
+            ccm_parse_failf(file, line, "内存分配失败");
+            goto Finished;
+        }
+    }
+
+    if (dirs.size == 0 || includes.size == 0)
+    {
+        ccm_parse_failf(file, line, "${find} 需要目录与 -include 通配符");
+        goto Finished;
+    }
+
+    fs = ccfiles_create();
+    if (!fs)
+    {
+        ccm_parse_failf(file, line, "VFS 探针创建失败");
+        goto Finished;
+    }
+
+    char **dir_items = (char **)dirs.array;
+    CCUINT32 dir_count = dirs.size / (CCUINT32)sizeof(char *);
+    CCUINT32 serial = 0;
+
+    for (CCUINT32 d = 0; d < dir_count; d++)
+    {
+        char *real = ccm_path_normalize(
+            dir_items[d], ctx->work_dir,
+            CC_DBG_REL_TAG(".ccm find 目录", NULL)
+        );
+        if (!real)
+        {
+            ccm_parse_failf(file, line, "${find} 目录路径非法：%s", dir_items[d]);
+            goto Finished;
+        }
+        if (ccm_host_path_type(real) != CC_CCM_HOST_DIR)
+        {
+            ccm_parse_failf(
+                file, line, "${find} 目录不存在或不是目录：%s",
+                dir_items[d]
+            );
+            ccalloc(real, 0, NULL);
+            goto Finished;
+        }
+
+        char vpath[32];
+        CCFsStat st;
+        for (;;)
+        {
+            snprintf(vpath, sizeof(vpath), "/__find:%u", serial++);
+            if (ccfiles_stat(fs, vpath, &st) == CC_FS_ERR_NOENT)
+                break;
+        }
+        CCINT32 mr = ccfiles_mount(fs, vpath, real, CC_FS_MOUNT_DIR);
+        ccalloc(real, 0, NULL);
+        if (mr != CC_FS_OK)
+        {
+            ccm_parse_failf(file, line, "${find} 目录挂载失败");
+            goto Finished;
+        }
+        if (!find_push_str(&mounted, vpath))
+        {
+            (void)find_vpath_free(fs, vpath);
+            ccm_parse_failf(file, line, "内存分配失败");
+            goto Finished;
+        }
+
+        if (!find_scan_dir(
+                fs, vpath, dir_items[d],
+                (char **)includes.array,
+                includes.size / (CCUINT32)sizeof(char *),
+                (char **)excludes.array,
+                excludes.size / (CCUINT32)sizeof(char *),
+                &results, file, line
+            )
+        )
+            goto Finished;
+    }
+
+    {
+        char **res = (char **)results.array;
+        CCUINT32 rc = results.size / (CCUINT32)sizeof(char *);
+        if (rc > 1)
+            qsort(res, rc, sizeof(char *), find_compare_str);
+
+        for (CCUINT32 i = 0; i < rc; i++)
+        {
+            if (i > 0)
+            {
+                char sp = ' ';
+                if (cc_dyn_core_push(&buf, 1, 1, &sp) != 0)
+                {
+                    ccm_parse_failf(file, line, "内存分配失败");
+                    goto Finished;
+                }
+            }
+            if (!find_buf_put(&buf, res[i], (CCUINT32)strlen(res[i])))
+            {
+                ccm_parse_failf(file, line, "内存分配失败");
+                goto Finished;
+            }
+        }
+        char zero = '\0';
+        if (cc_dyn_core_push(&buf, 1, 1, &zero) != 0)
+        {
+            ccm_parse_failf(file, line, "内存分配失败");
+            goto Finished;
+        }
+        *out = (char *)buf.array;
+        *out_len = buf.size - 1;
+        memset(&buf, 0, sizeof(buf));
+        ok = CCTRUE;
+    }
+
+Finished:
+    if (buf.array)
+        ccalloc(buf.array, 0, NULL);
+    if (fs)
+    {
+        char **mounted_items = (char **)mounted.array;
+        CCUINT32 mc = mounted.size / (CCUINT32)sizeof(char *);
+        for (CCUINT32 i = 0; i < mc; i++)
+            (void)find_vpath_free(fs, mounted_items[i]);
+        ccfiles_destroy(fs);
+    }
+    find_free_str_list(&mounted);
+    find_free_results(&results);
+    find_free_str_list(&excludes);
+    find_free_str_list(&includes);
+    find_free_str_list(&dirs);
+    find_tokens_free(&tokens);
+    return ok;
+}

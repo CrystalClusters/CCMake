@@ -8,20 +8,21 @@
  */
 
 #include "ccm_internal.h"
-
-/* 第二阶段：内容解析。当前只完成第一阶段的检查与定位。 */
-CCBOOL ccm_parse(CCMakeCCMContext *ctx)
-{
-    CC_UNUSED(ctx);
-    color_print(
-        CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-        "配置文件内容解析（第二阶段）未实现\n"
-    );
-    return CCFALSE;
-}
+#include "ccvar.h"
 
 CCBOOL parse_ccm()
 {
+    if (!ccvar_global_init())
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "配置文件解析失败：全局变量树初始化失败\n"
+        );
+        return CCFALSE;
+    }
+    CCVarTree *vars = ccvar_global();
+    ccvar_clear(vars);
+
     CCMakeCCMContext ctx;
     ccm_context_init(&ctx);
 
@@ -34,10 +35,12 @@ CCBOOL parse_ccm()
     if (ok && ccmake_global_var.verbose)
         ccm_print_locations(&ctx);
 
-    // 第二阶段：解析文件内容
+    // 第二阶段：按解析顺序解析内容，写入全局变量树
     if (ok)
         ok = ccm_parse(&ctx);
 
     ccm_context_clear(&ctx);
+    if (!ok)
+        ccvar_clear(vars);
     return ok;
 }

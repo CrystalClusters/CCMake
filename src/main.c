@@ -8,6 +8,7 @@
  */
 
 #include "ccmake_header.h"
+#include "ccvar.h"
 
 int main(int argc, char **argv)
 {
@@ -29,9 +30,11 @@ int main(int argc, char **argv)
     );
 ActionDone:
     clear_global_var();
+    ccvar_global_deinit();
     return 0;
 FailedtoParseConfig:
 FailedtoParseCmd:
     clear_global_var();
+    ccvar_global_deinit();
     return 1;
 }

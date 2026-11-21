@@ -258,8 +258,11 @@ char *ccm_path_normalize(const char *path, const char *base, const char *comment
         }
 #endif
 
-        if (cc_dyn_core_push(&comps, (CCUINT32)sizeof(char *),
-                             (CCINT32)sizeof(char *), &comp) != 0)
+        if (cc_dyn_core_push(
+                &comps, (CCUINT32)sizeof(char *),
+                (CCINT32)sizeof(char *), &comp
+            ) != 0
+        )
         {
             ccalloc(work, 0, NULL);
             if (comps.array)

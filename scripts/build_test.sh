@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# 编译并链接 CCMake 测试程序（独立可执行文件，链接 src/cmd.c）
+# 编译并链接 CCMake 测试程序（独立可执行文件，链接 src/ 下除 main.c 外的源码）
 #
 # 用法: bash scripts/build_test.sh <platform_arch> [build_flags] [dependencies]
 #
@@ -42,8 +42,8 @@ if [ -z "${DEP_LIB}" ]; then
     exit 1
 fi
 
-# 收集测试源码与应用源码（测试程序不链接 main.c）
-SRCS=$(find tests -name '*.c' | LC_ALL=C sort)
+# 收集测试源码与应用源码（测试程序不链接 main.c；tests/data 为 fixture）
+SRCS=$(find tests -name '*.c' ! -path 'tests/data/*' | LC_ALL=C sort)
 APP_SRCS=$(find src -name '*.c' ! -name 'main.c' | LC_ALL=C sort)
 if [ -z "${SRCS}" ]; then
     echo "[错误] tests/ 下没有找到测试源文件。"

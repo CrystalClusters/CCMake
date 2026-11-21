@@ -2,7 +2,9 @@
 
 `.ccm` 文件解析分为两个阶段：第一阶段检查并定位根文件与全部 `@include` 文件，第二阶段解析文件内容。本文描述第一阶段的模块结构、技术选型与实现方式。
 
-第一阶段的产物是完整文件表、include 边表和后序解析顺序。阶段二只读取这些产物，不再访问文件系统。
+第二阶段的模块与解析规则见 [全局变量树](全局变量树.md) 与 [CCM内容解析](CCM内容解析.md)。
+
+第一阶段的产物是完整文件表、include 边表和后序解析顺序。阶段二读取这些产物，不重新定位 `.ccm` 文件；`${find}` 按自身参数访问目录。
 
 ## 选型摘要
 
@@ -14,7 +16,7 @@
 | 图算法 | 显式栈 DFS + 三状态标记，后序生成 `order[]`；边解析时完成环检测 |
 | 路径模型 | 规范化绝对宿主路径，`/` 分隔；根路径以 `-C` 为基准，include 路径以包含者目录为基准 |
 | include 发现 | 单遍字节状态机，跳过注释与字符串，跟踪括号深度，记录行号与字节列 |
-| 内容传递 | 已去 BOM 的内存快照随文件表交给阶段二，阶段二无文件系统依赖 |
+| 内容传递 | 已去 BOM 的内存快照随文件表交给阶段二；阶段二不依赖阶段一的文件定位，`${find}` 使用 VFS 访问目录 |
 | 资源管理 | `ccm_locate` 返回前释放全部 VFS 节点；`ccm_context_clear` 释放内容与数组 |
 
 ---
@@ -25,7 +27,7 @@
 |---|---|
 | 输入 | `-c/--config` 指定的根配置文件；`-C/--directory` 指定的工作目录 |
 | 输出 | `files[]`：所有被定位文件及其内容快照；`includes[]`：include 边；`order[]`：后序解析顺序 |
-| 文件检查 | 路径规范化、工作目录有效性、普通文件类型、可读性、编码标记、扩展名 |
+| 文件检查 | 路径规范化、工作目录有效性、普通文件类型、可读性、编码标记 |
 | 指令发现 | 识别顶层 `@include "..."`，跳过注释与字符串中的同名文本 |
 | 图处理 | 路径去重、循环检测、解析顺序生成 |
 | 不包含 | 键值语法、字段树、`${ref}`、`${find}`、`-D` 覆盖、`.cmk` 解析 |
@@ -150,7 +152,7 @@ Windows 将 '\' 统一为 '/'
 | 结束符 | 分号 |
 | 位置 | 文件顶层；括号深度必须为 0 |
 | 路径 | 字面量；不展开变量、函数、环境变量或通配符 |
-| 扩展名 | 目标必须以 `.ccm` 结尾（大小写不敏感） |
+| 内容检查 | 目标必须是普通文件、可读、无 NUL、编码合法；扩展名不限 |
 | 空白与注释 | token 之间允许空白、行注释和块注释 |
 
 路径按字节拷贝，不做转义处理。
@@ -190,7 +192,7 @@ Windows 将 '\' 统一为 '/'
 
 ### 5.5 根文件
 
-根文件以 `-c` 路径为输入，按 `-C` 基准解析为绝对路径，校验 `.ccm` 扩展名后进入注册表。根文件的 `parent` 为空，`depth` 为 0，`order[]` 的最后一项指向根文件。
+根文件以 `-c` 路径为输入，按 `-C` 基准解析为绝对路径，检查普通文件与编码后进入注册表；扩展名不参与判定。根文件的 `parent` 为空，`depth` 为 0，`order[]` 的最后一项指向根文件。
 
 ---
 
@@ -386,6 +388,41 @@ typedef struct ccmake_ccm_frame_struct {
 
 每个文件入栈一次、出栈一次，每条边处理一次，结构性遍历开销为 O(n + m)。`order[]` 的尾部追加为摊还 O(1)，n 个文件生成顺序的总开销为 O(n)。显式栈的最大深度为 include 深度，最坏为 n。
 
+循环本体：
+
+```text
+root 装载 → state=VISITING → push({root, 0})
+
+while stack 非空:
+    frame = top
+    if frame.next < file.include_count:
+        edge = includes[file.include_first + frame.next]
+        frame.next++
+        set_top(frame)
+        resolved = normalize(edge.literal, dirname(file.real_path))
+        target = find_file(resolved)
+
+        if target 已登记:
+            edge.child = target
+            if target.state == VISITING:
+                报告循环导入
+                fail
+            continue
+
+        target = append_file(resolved, ...)
+        load_file(target)
+        state[target] = VISITING
+        edge.child = target
+        push({target, 0})
+        continue
+
+    state[file] = VISITED
+    order.push(file)
+    pop()
+```
+
+伪代码中的 `continue` 都回到栈顶检查；只有文件所有 include 边处理完才追加 `order[]` 并弹栈，因此形成后序。
+
 后序追加保证每条边的目标先于包含者进入 `order[]`，根文件最后进入。
 
 ### 7.5 路径规范化：组件栈 + 动态缓冲
@@ -522,7 +559,6 @@ include 级错误：
 | 工作目录无效 | `工作目录不存在或不是目录` |
 | 文件缺失 | `文件不存在` |
 | 目标是目录 | `目标是目录，不是文件` |
-| 扩展名不符 | `@include 目标必须是 .ccm 文件` / `根配置文件必须以 .ccm 结尾` |
 | 读取失败 | `无法打开文件` / `无法读取` / `读取不完整` |
 | 编码不支持 | `不支持 UTF-16 编码，请使用 ASCII/UTF-8` |
 | 二进制内容 | `文件中包含 NUL 字节，疑似二进制文件` |
@@ -568,7 +604,7 @@ ccm_context_init
 
 | 套件 | 覆盖 |
 |---|---|
-| `CCM` | 单文件、链式、菱形、重复 include、直接与间接循环、注释/字符串、非法指令、缺失与扩展名、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、连续定位、路径规范化、失败清理 |
+| `CCM` | 单文件、链式、菱形、重复 include、直接与间接循环、注释/字符串、非法指令、缺失与任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、连续定位、路径规范化、失败清理 |
 
 测试 fixture 位于 `tests/data/ccm/`，按用例分为单文件、链、菱形、循环、注释、错误指令、编码、工作目录、大小写等目录。编码类 fixture 以原始字节保存，`.gitattributes` 关闭文本换行转换。
 

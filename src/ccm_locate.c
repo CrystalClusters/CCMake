@@ -9,7 +9,6 @@
 
 #include "ccm_internal.h"
 
-#include <ctype.h>
 #include <stdio.h>
 
 #define CC_CCM_LOCATE_COMMENT CC_DBG_REL_TAG("CCM 定位", NULL)
@@ -38,17 +37,6 @@ static CCUINT32 file_count(const CCMakeCCMContext *ctx)
 static CCUINT32 include_count(const CCMakeCCMContext *ctx)
 {
     return ctx->includes.size / (CCUINT32)sizeof(CCMakeCCMInclude);
-}
-
-static CCBOOL has_ccm_suffix(const char *path)
-{
-    size_t len = strlen(path);
-    if (len < 4 || path[len - 4] != '.')
-        return CCFALSE;
-    return (tolower((unsigned char)path[len - 3]) == 'c' &&
-            tolower((unsigned char)path[len - 2]) == 'c' &&
-            tolower((unsigned char)path[len - 1]) == 'm')
-               ? CCTRUE : CCFALSE;
 }
 
 void ccm_context_init(CCMakeCCMContext *ctx)
@@ -152,7 +140,9 @@ static CCUINT32 ccm_append_file(
             &ctx->files,
             (CCUINT32)sizeof(CCMakeCCMFile),
             (CCINT32)sizeof(CCMakeCCMFile),
-            &item) != 0)
+            &item
+        ) != 0
+    )
     {
         ccalloc(real_path, 0, NULL);
         return CC_CCM_NIL;
@@ -177,11 +167,12 @@ static CCBOOL ccm_stack_push(CCMakeCCMContext *ctx, CCUINT32 file)
     frame.file = file;
     frame.next = 0;
     return (cc_dyn_core_push(
-                &ctx->stack,
-                (CCUINT32)sizeof(CCMakeCCMFrame),
-                (CCINT32)sizeof(CCMakeCCMFrame),
-                &frame) == 0)
-               ? CCTRUE : CCFALSE;
+            &ctx->stack,
+            (CCUINT32)sizeof(CCMakeCCMFrame),
+            (CCINT32)sizeof(CCMakeCCMFrame),
+            &frame
+        ) == 0
+    ) ? CCTRUE : CCFALSE;
 }
 
 static CCBOOL ccm_stack_top(CCMakeCCMContext *ctx, CCMakeCCMFrame *out)
@@ -190,11 +181,12 @@ static CCBOOL ccm_stack_top(CCMakeCCMContext *ctx, CCMakeCCMFrame *out)
     if (count == 0)
         return CCFALSE;
     return (cc_dyn_core_seek(
-                &ctx->stack,
-                (CCUINT32)sizeof(CCMakeCCMFrame),
-                (CCINT32)sizeof(CCMakeCCMFrame),
-                out, count - 1) == 0)
-               ? CCTRUE : CCFALSE;
+            &ctx->stack,
+            (CCUINT32)sizeof(CCMakeCCMFrame),
+            (CCINT32)sizeof(CCMakeCCMFrame),
+            out, count - 1
+        ) == 0
+    ) ? CCTRUE : CCFALSE;
 }
 
 static CCBOOL ccm_stack_set_top(CCMakeCCMContext *ctx, const CCMakeCCMFrame *frame)
@@ -203,11 +195,12 @@ static CCBOOL ccm_stack_set_top(CCMakeCCMContext *ctx, const CCMakeCCMFrame *fra
     if (count == 0)
         return CCFALSE;
     return (cc_dyn_core_set(
-                &ctx->stack,
-                (CCUINT32)sizeof(CCMakeCCMFrame),
-                (CCINT32)sizeof(CCMakeCCMFrame),
-                (void *)frame, count - 1) == 0)
-               ? CCTRUE : CCFALSE;
+            &ctx->stack,
+            (CCUINT32)sizeof(CCMakeCCMFrame),
+            (CCINT32)sizeof(CCMakeCCMFrame),
+            (void *)frame, count - 1
+        ) == 0
+    ) ? CCTRUE : CCFALSE;
 }
 
 static void ccm_stack_pop(CCMakeCCMContext *ctx)
@@ -294,14 +287,18 @@ static CCBOOL ccm_strip_bom(
           content[2] == '\0' && content[3] == '\0') ||
          (content[0] == '\0' && content[1] == '\0' &&
           (unsigned char)content[2] == 0xFE && (unsigned char)content[3] == 0xFF)))
-        return ccm_load_error(real_path, via_path, via_line,
-                              "不支持 UTF-32 编码，请使用 ASCII/UTF-8");
+        return ccm_load_error(
+            real_path, via_path, via_line,
+            "不支持 UTF-32 编码，请使用 ASCII/UTF-8"
+        );
 
     if (*size >= 2 &&
         (((unsigned char)content[0] == 0xFF && (unsigned char)content[1] == 0xFE) ||
          ((unsigned char)content[0] == 0xFE && (unsigned char)content[1] == 0xFF)))
-        return ccm_load_error(real_path, via_path, via_line,
-                              "不支持 UTF-16 编码，请使用 ASCII/UTF-8");
+        return ccm_load_error(
+            real_path, via_path, via_line,
+            "不支持 UTF-16 编码，请使用 ASCII/UTF-8"
+        );
 
     if (*size >= 3 &&
         (unsigned char)content[0] == 0xEF && (unsigned char)content[1] == 0xBB &&
@@ -354,7 +351,8 @@ static CCBOOL ccm_load_file(
         return ccm_load_error(real_path, via_path, via_line, "VFS 挂载点分配失败");
 
     CCINT32 mount_ret = ccfiles_mount(
-        ctx->fs, f->v_path, real_path, CC_FS_MOUNT_FILE);
+        ctx->fs, f->v_path, real_path, CC_FS_MOUNT_FILE
+    );
     if (mount_ret != CC_FS_OK)
         return ccm_load_error(real_path, via_path, via_line, ccm_fs_error_text(mount_ret));
 
@@ -373,7 +371,9 @@ static CCBOOL ccm_load_file(
     if (f->size == (CCUINT64)-1)
         return ccm_load_error(real_path, via_path, via_line, "文件过大");
     f->content = ccalloc(
-        NULL, f->size + 1, CC_DBG_REL_TAG(".ccm 文件内容", NULL));
+        NULL, f->size + 1,
+        CC_DBG_REL_TAG(".ccm 文件内容", NULL)
+    );
     if (!f->content)
         return ccm_load_error(real_path, via_path, via_line, "内存分配失败");
     f->content[0] = '\0';
@@ -397,7 +397,9 @@ static CCBOOL ccm_load_file(
 
     CCUINT32 first = include_count(ctx);
     if (!ccm_scan_includes(
-            f->content, f->size, f->real_path, &ctx->includes))
+            f->content, f->size, f->real_path, &ctx->includes
+        )
+    )
         return CCFALSE;
 
     f = file_at(ctx, index);
@@ -421,8 +423,11 @@ static CCBOOL ccm_report_cycle(
     CCBOOL reached = CCFALSE;
     while (cur != CC_CCM_NIL && cur < file_count(ctx))
     {
-        if (cc_dyn_core_push(&chain, (CCUINT32)sizeof(CCUINT32),
-                             (CCINT32)sizeof(CCUINT32), &cur) != 0)
+        if (cc_dyn_core_push(
+                &chain, (CCUINT32)sizeof(CCUINT32),
+                (CCINT32)sizeof(CCUINT32), &cur
+            ) != 0
+        )
             break;
         if (cur == target)
         {
@@ -487,9 +492,6 @@ static CCBOOL ccm_locate_include(
     edge = include_at(ctx, edge_index);
     edge->resolved = resolved;
 
-    if (!has_ccm_suffix(resolved))
-        return ccm_load_error(resolved, parent_path, line, "@include 目标必须是 .ccm 文件");
-
     CCUINT32 existing = ccm_find_file(ctx, resolved);
     if (existing != CC_CCM_NIL)
     {
@@ -549,8 +551,10 @@ static CCBOOL ccm_verify_result(CCMakeCCMContext *ctx)
             &ctx->order,
             (CCUINT32)sizeof(CCUINT32),
             (CCINT32)sizeof(CCUINT32),
-            &last, order - 1) != 0 ||
-        last != ctx->root_index)
+            &last, order - 1
+        ) != 0 ||
+        last != ctx->root_index
+    )
     {
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
@@ -624,15 +628,6 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
         );
         return CCFALSE;
     }
-    if (!has_ccm_suffix(ctx->root_path))
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "配置文件定位失败：根配置文件必须以 .ccm 结尾：%s\n",
-            ctx->root_path
-        );
-        return CCFALSE;
-    }
 
     ctx->root_index = ccm_append_file(ctx, ctx->root_path, CC_CCM_NIL, 0, 0);
     if (ctx->root_index == CC_CCM_NIL)
@@ -688,7 +683,9 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
                 &ctx->order,
                 (CCUINT32)sizeof(CCUINT32),
                 (CCINT32)sizeof(CCUINT32),
-                &index) != 0)
+                &index
+            ) != 0
+        )
         {
             color_print(
                 CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
@@ -724,8 +721,11 @@ void ccm_print_locations(CCMakeCCMContext *ctx)
                 &ctx->order,
                 (CCUINT32)sizeof(CCUINT32),
                 (CCINT32)sizeof(CCUINT32),
-                &index, i) != 0)
+                &index, i
+            ) != 0
+        )
             continue;
         const CCMakeCCMFile *f = &((const CCMakeCCMFile *)ctx->files.array)[index];
-        color_print("  %u. %s\n", i + 1, f->real_path);    }
+        color_print("  %u. %s\n", i + 1, f->real_path);
+    }
 }

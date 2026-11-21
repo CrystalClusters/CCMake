@@ -131,7 +131,9 @@ static CCBOOL scan_push_include(
             out_includes,
             (CCUINT32)sizeof(CCMakeCCMInclude),
             (CCINT32)sizeof(CCMakeCCMInclude),
-            &item) != 0)
+            &item
+        ) != 0
+    )
         return CCFALSE;
     return CCTRUE;
 }
@@ -304,7 +306,9 @@ CCBOOL ccm_scan_includes(
                     return scan_fail(display_path, at_line, "@include 路径为空");
 
                 char *literal = ccalloc(
-                    NULL, path_len + 1, CC_DBG_REL_TAG("@include 路径", NULL));
+                    NULL, path_len + 1,
+                    CC_DBG_REL_TAG("@include 路径", NULL)
+                );
                 if (!literal)
                     return scan_fail(display_path, at_line, "内存分配失败");
                 memcpy(literal, content + path_begin, (size_t)path_len);

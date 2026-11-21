@@ -331,7 +331,7 @@ static void test_bad_directives(void)
 
 static void test_missing_and_suffix(void)
 {
-    CC_CASE("CCM-009", "缺失目标与扩展名校验");
+    CC_CASE("CCM-009", "缺失目标与任意后缀");
     CCMakeCCMContext ctx;
 
     ccm_context_init(&ctx);
@@ -341,13 +341,18 @@ static void test_missing_and_suffix(void)
     ccm_context_clear(&ctx);
 
     ccm_context_init(&ctx);
-    CC_CHECK(!run_locate("tests/data/ccm/bad/bad_ext.ccm", NULL, &ctx), "非 .ccm 失败");
-    CC_CHECK(text_has("必须是 .ccm"), "提示扩展名");
+    CC_CHECK(run_locate("tests/data/ccm/bad/bad_ext.ccm", NULL, &ctx),
+             "任意后缀 include 成功");
+    CC_CHECK_EQ_I64("文件数", 2, files_count(&ctx));
+    CC_CHECK(order_basename_is(&ctx, 0, "base.txt"), "base.txt 先解析");
+    CC_CHECK(order_basename_is(&ctx, 1, "bad_ext.ccm"), "根文件最后");
     ccm_context_clear(&ctx);
 
     ccm_context_init(&ctx);
-    CC_CHECK(!run_locate("tests/data/ccm/single/root.txt", NULL, &ctx), "根扩展名失败");
-    CC_CHECK(text_has("必须以 .ccm"), "提示根扩展名");
+    CC_CHECK(run_locate("tests/data/ccm/single/root_no_ext", NULL, &ctx),
+             "无后缀根文件成功");
+    CC_CHECK_EQ_I64("文件数", 1, files_count(&ctx));
+    CC_CHECK(order_basename_is(&ctx, 0, "root_no_ext"), "根文件入顺序");
     ccm_context_clear(&ctx);
 
     CC_CASE_END();

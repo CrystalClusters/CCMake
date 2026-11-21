@@ -11,6 +11,7 @@
 #define _INCLUDE_CCMAKE_CCM_INTERNAL_H_
 
 #include "ccmake_header.h"
+#include "ccvar.h"
 
 /* 文件 / include 边下标哨兵 */
 #define CC_CCM_NIL 0xFFFFFFFFu
@@ -129,5 +130,36 @@ CCBOOL ccm_scan_includes(
 /* ------------------------------------------------------------------------- */
 
 CCBOOL ccm_parse(CCMakeCCMContext *ctx);
+
+/* 第二阶段诊断；返回 CCFALSE，便于 return 传播 */
+CCBOOL ccm_parse_failf(
+    const char *file,
+    CCUINT32 line,
+    const char *fmt,
+    ...
+);
+
+/* 内建函数求值：${ref ...} / ${find ...} */
+CCBOOL ccm_builtin_eval(
+    CCMakeCCMContext *ctx,
+    const char *raw,
+    CCUINT32 len,
+    CCVarTree *tree,
+    char **out,
+    CCUINT32 *out_len,
+    const char *file,
+    CCUINT32 line
+);
+
+/* ${find ...} 求值；args 为已展开内嵌 ${} 的参数串 */
+CCBOOL ccm_find_eval(
+    CCMakeCCMContext *ctx,
+    const char *args,
+    CCUINT32 len,
+    char **out,
+    CCUINT32 *out_len,
+    const char *file,
+    CCUINT32 line
+);
 
 #endif
