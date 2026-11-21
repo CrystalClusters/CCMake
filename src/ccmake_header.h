@@ -16,6 +16,10 @@
 
 #include <string.h>
 
+#define CCMAKE_VER_MAJOR (CCUINT32)0
+#define CCMAKE_VER_MINOR (CCUINT32)0
+#define CCMAKE_VER_BUILD (CCUINT32)1
+
 typedef enum {
     CC_CMD_FLAG_ACTION_DONE,  // 已执行动作类参数
     CC_CMD_FLAG_NEED_BUILD    // 需要执行构建

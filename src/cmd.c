@@ -89,23 +89,44 @@ static CCBOOL _func_file_(void)
     return CCTRUE;
 }
 
+static CCBOOL _func_version_(void)
+{
+    ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
+    color_print(
+        "CCMake - Crystal Cluster Make：\n"
+    #ifdef CC_WINDOWS
+        "Windows"
+    #elif defined CC_LINUX
+        "Linux"
+    #elif defined CC_ANDROID
+        "Android"
+    #else
+        "未知平台"
+    #endif
+        "\n版本：v%d.%d.%d\n", CCMAKE_VER_MAJOR, CCMAKE_VER_MINOR, CCMAKE_VER_BUILD
+    );
+    return CCTRUE;
+}
+
 static CCBOOL _func_help_(void)
 {
     ccmake_global_var.stat = CC_CMD_FLAG_ACTION_DONE;
     color_print(
-        "-c, --config=<文件>        指定 .ccm 配置文件（必填）\n"
-        "-f, --file=<文件>          指定 .cmk 构建脚本（必填）\n"
-        "-C, --directory=<目录>     切换工作目录\n"
-        "-j, --jobs=<N>             并行任务数（默认: CPU 核心数）\n"
-        "-D, --define=<键>=<值>     覆盖配置文件字段\n"
-        "-o, --output=<目录>        构建产物输出目录\n"
-        "-t, --target=<目标>        构建目标（如 debug, release）\n"
-        "-v, --verbose              详细输出\n"
-        "-n, --dry-run              仅显示操作，不执行\n"
-        "-B, --always-build         强制重新构建\n"
-        "-k, --keep-going           遇到错误继续构建\n"
-        "-h, --help                 显示此帮助信息\n"
-        "-V, --version              显示版本信息\n"
+        "-c, --config <文件>          指定 .ccm 配置文件（必填）\n"
+        "-f, --file <文件>            指定 .cmk 构建脚本（必填）\n"
+        "-C, --directory <目录>       切换工作目录\n"
+        "-j, --jobs <数量>            并行任务数（默认: CPU 核心数）\n"
+        "-D, --define <键=值> <键=值> 覆盖配置文件字段\n"
+        "-o, --output <目录>          构建产物输出目录\n"
+        "-t, --target <目标>          构建目标（如 debug, release）\n"
+        "-v, --verbose                详细输出\n"
+        "-n, --dry-run                仅显示操作，不执行\n"
+        "-B, --always-build           强制重新构建\n"
+        "-k, --keep-going             遇到错误继续构建\n"
+        "    --list-targets           列出可用构建目标\n"
+        "    --dump-config            展开变量后输出完整配置\n"
+        "-h, --help                   显示此帮助信息\n"
+        "-V, --version                显示版本信息\n"
     );
     return CCTRUE;
 }
@@ -123,7 +144,8 @@ static FUNC_TABLE func_table[] = {
     {"-B", _func_empty}, {"--always-build", _func_empty},
     {"-k", _func_empty}, {"--keep-going", _func_empty},
     {"-h", _func_help_}, {"--help", _func_help_},
-    {"-V", _func_empty}, {"--version", _func_empty}
+    {"-V", _func_version_}, {"--version", _func_version_},
+    {"--list-targets", _func_empty}, {"--dump-config", _func_empty}
 };
 #define FUNC_TABLE_SIZE (CCINT32)(sizeof(func_table) / sizeof(func_table[0]))
 
