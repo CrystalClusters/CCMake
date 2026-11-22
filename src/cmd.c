@@ -42,17 +42,28 @@ static void clear_defines(void)
     ccmake_global_var.defines.capacity = 0;
 }
 
+void init_global_var(void)
+{
+    memset(&ccmake_global_var, 0, sizeof(ccmake_global_var));
+}
+
 void clear_global_var(void)
 {
-    // 命令行参数是乱序排列的
-    // 无法做成原子化设计，只能一个个检查有没有初始化
-    if (ccmake_global_var.self_path) ccalloc(ccmake_global_var.self_path, 0, NULL);
-    if (ccmake_global_var.ccm_path) ccalloc(ccmake_global_var.ccm_path, 0, NULL);
-    if (ccmake_global_var.cmk_path) ccalloc(ccmake_global_var.cmk_path, 0, NULL);
-    if (ccmake_global_var.work_dir) ccalloc(ccmake_global_var.work_dir, 0, NULL);
-    if (ccmake_global_var.output_dir) ccalloc(ccmake_global_var.output_dir, 0, NULL);
-    if (ccmake_global_var.target) ccalloc(ccmake_global_var.target, 0, NULL);
+    /* 与字段登记顺序相反：target/output/defines/work/cmk/ccm/self */
+    if (ccmake_global_var.target)
+        ccalloc(ccmake_global_var.target, 0, NULL);
+    if (ccmake_global_var.output_dir)
+        ccalloc(ccmake_global_var.output_dir, 0, NULL);
     clear_defines();
+    if (ccmake_global_var.work_dir)
+        ccalloc(ccmake_global_var.work_dir, 0, NULL);
+    if (ccmake_global_var.cmk_path)
+        ccalloc(ccmake_global_var.cmk_path, 0, NULL);
+    if (ccmake_global_var.ccm_path)
+        ccalloc(ccmake_global_var.ccm_path, 0, NULL);
+    if (ccmake_global_var.self_path)
+        ccalloc(ccmake_global_var.self_path, 0, NULL);
+    memset(&ccmake_global_var, 0, sizeof(ccmake_global_var));
 }
 
 // 处理函数的统一签名
@@ -518,6 +529,8 @@ CCBOOL check_parse()
 
 CCBOOL parse_cmd(int argc, char **argv)
 {
+    // 本函数只填充 ccmake_global_var，不拥有其生命周期；
+    // 失败回滚由调用方 clear_global_var 统一完成。
     // 没有参数的情况下默认触发 -h
     if (argc <= 1) return _func_help_();
     //
@@ -529,21 +542,15 @@ CCBOOL parse_cmd(int argc, char **argv)
             argv[0],
             CC_DBG_REL_TAG("可执行程序自指路径", NULL)))
         return CCFALSE;
-    CCBOOL valid_cmd = CCTRUE;
     // 默认需要构建，可被 ACTION_DONE 覆盖
     ccmake_global_var.stat = CC_CMD_FLAG_NEED_BUILD;
     while (g_index < g_argc)
     {
         if (!single_cmd())
-        {
-            valid_cmd = CCFALSE;
-            break;
-        }
+            return CCFALSE;
         if (ccmake_global_var.stat == CC_CMD_FLAG_ACTION_DONE)
             return CCTRUE;
     }
-    if (!valid_cmd)
-        return CCFALSE;
     // 需要配置的动作类参数由后续流程执行，解析阶段不校验构建必填项
     if (ccmake_global_var.action != CC_CMD_ACTION_NONE)
         return CCTRUE;

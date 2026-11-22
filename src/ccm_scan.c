@@ -122,7 +122,6 @@ static CCBOOL scan_push_include(
     CCMakeCCMInclude item;
     memset(&item, 0, sizeof(item));
     item.literal = literal;
-    item.resolved = NULL;
     item.line = line;
     item.column = column;
     item.child = CC_CCM_NIL;

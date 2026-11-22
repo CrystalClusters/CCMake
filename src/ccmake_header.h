@@ -63,7 +63,7 @@ typedef struct ccmake_define_struct {
     char *value;  // 值（ccalloc 分配）
 } CCMakeDefine;
 
-struct ccmake_global_var_struct{
+struct ccmake_global_var_struct {
     char *self_path;
     char *ccm_path;
     char *cmk_path;
@@ -84,7 +84,8 @@ extern struct ccmake_global_var_struct ccmake_global_var;
 // 提供命令行参数解析
 CCBOOL parse_cmd(int argc, char **argv);
 
-// 释放命令行解析阶段分配的全局内存
+// 命令行全局状态的成对生命周期入口
+void init_global_var(void);
 void clear_global_var(void);
 
 // 提供配置文件解析

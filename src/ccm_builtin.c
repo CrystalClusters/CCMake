@@ -172,6 +172,33 @@ static CCBOOL ccm_serialize_path(
     return CCTRUE;
 }
 
+static CCBOOL ccm_expand_one(
+    CCMakeCCMContext *ctx,
+    const char *raw,
+    CCUINT32 begin,
+    CCUINT32 end,
+    CCVarTree *tree,
+    CCMBuf *out,
+    const char *file,
+    CCUINT32 line
+)
+{
+    char *inner = NULL;
+    CCUINT32 inner_len = 0;
+    if (!ccm_builtin_eval(
+            ctx, raw + begin, end - begin, tree,
+            &inner, &inner_len, file, line
+        )
+    )
+        return CCFALSE;
+    CCBOOL ok = buf_put(out, inner, inner_len);
+    if (inner)
+        ccalloc(inner, 0, NULL);
+    if (!ok)
+        return ccm_parse_failf(file, line, "内存分配失败");
+    return CCTRUE;
+}
+
 /* 展开参数中的嵌套 ${...}，供 ${find} 使用；引号内的 ${...} 同样展开 */
 static CCBOOL ccm_expand_builtins(
     CCMakeCCMContext *ctx,
@@ -203,19 +230,11 @@ static CCBOOL ccm_expand_builtins(
                     if (!ccm_scan_builtin_end(raw, len, i + 1, &end64))
                         return ccm_parse_failf(file, line, "内建函数花括号未闭合");
                     CCUINT32 end = (CCUINT32)end64;
-                    char *inner = NULL;
-                    CCUINT32 inner_len = 0;
-                    if (!ccm_builtin_eval(
-                            ctx, raw + i + 2, end - (i + 2), tree,
-                            &inner, &inner_len, file, line
-                        )
-                    )
+                    if (!ccm_expand_one(
+                            ctx, raw, i + 2, end, tree,
+                            out, file, line
+                        ))
                         return CCFALSE;
-                    CCBOOL ok = buf_put(out, inner, inner_len);
-                    if (inner)
-                        ccalloc(inner, 0, NULL);
-                    if (!ok)
-                        return ccm_parse_failf(file, line, "内存分配失败");
                     i = end + 1;
                     continue;
                 }
@@ -237,19 +256,11 @@ static CCBOOL ccm_expand_builtins(
             if (!ccm_scan_builtin_end(raw, len, i + 1, &end64))
                 return ccm_parse_failf(file, line, "内建函数花括号未闭合");
             CCUINT32 end = (CCUINT32)end64;
-            char *inner = NULL;
-            CCUINT32 inner_len = 0;
-            if (!ccm_builtin_eval(
-                    ctx, raw + i + 2, end - (i + 2), tree,
-                    &inner, &inner_len, file, line
-                )
-            )
+            if (!ccm_expand_one(
+                    ctx, raw, i + 2, end, tree,
+                    out, file, line
+                ))
                 return CCFALSE;
-            CCBOOL ok = buf_put(out, inner, inner_len);
-            if (inner)
-                ccalloc(inner, 0, NULL);
-            if (!ok)
-                return ccm_parse_failf(file, line, "内存分配失败");
             i = end + 1;
             continue;
         }

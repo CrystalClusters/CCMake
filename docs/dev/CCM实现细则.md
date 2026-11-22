@@ -64,7 +64,7 @@ parse_ccm
 宿主 stat 类型门：只接受普通文件
   → 选择一个空闲合成路径 "/__ccm:<序号>"
   → ccfiles_mount(fs, v_path, real_path, CC_FS_MOUNT_FILE)
-  → ccfiles_stat               读取 size / mtime
+  → ccfiles_stat               读取 size
   → ccfiles_open + ccfiles_read 读入完整内容
   → 内容快照进入文件表
 ```
@@ -262,7 +262,6 @@ typedef enum {
 
 typedef struct ccmake_ccm_include_struct {
     char     *literal;    /* @include 原始路径 */
-    char     *resolved;   /* 规范化绝对路径 */
     CCUINT32  line;       /* @include 行号 */
     CCUINT32  column;     /* @include 列号 */
     CCUINT32  child;      /* 目标文件下标；CC_CCM_NIL 表示未解析 */
@@ -273,7 +272,6 @@ typedef struct ccmake_ccm_file_struct {
     char     *v_path;        /* VFS 合成挂载点 */
     char     *content;       /* 内容快照 + 结尾 0 */
     CCUINT64  size;          /* 内容字节数 */
-    CCUINT64  mtime;         /* VFS stat 的秒级 mtime */
     CCUINT32  include_first; /* 边表起始下标 */
     CCUINT32  include_count; /* 边数量 */
     CCUINT32  parent;        /* 首次包含者下标；根为 CC_CCM_NIL */
@@ -289,9 +287,7 @@ typedef struct ccmake_ccm_context_struct {
     CCDyn    includes;    /* CCMakeCCMInclude[] */
     CCDyn    order;       /* CCUINT32[]，后序解析顺序 */
     CCDyn    stack;       /* DFS 帧 */
-    CCDyn    path_buf;    /* 路径临时缓冲 */
     char    *work_dir;    /* 规范化绝对工作目录 */
-    char    *root_path;   /* 规范化绝对根文件 */
     CCUINT32 root_index;  /* 根文件下标 */
     CCUINT64 total_bytes; /* 已装载文件内容总字节 */
     CCMakeCCMLimits limits;
@@ -593,8 +589,12 @@ ccm_context_init
        └─ 失败：文件表、边表与内容保留在上下文中，VFS 已释放
   → ccm_context_clear
        ├─ 若 VFS 仍存在：摘除全部挂载点并销毁探针
-       └─ 释放所有文件项、边项与动态数组
+       ├─ order（最后创建）→ stack
+       ├─ includes（逆序）→ files（逆序）
+       └─ work_dir（最早创建）
 ```
+
+`root_path` 归一化结果与每条 include 的 `resolved` 都在创建它们的函数内释放；文件表保存的是自己复制的路径副本，不接管调用方指针。
 
 阶段一结束后，`files[]` 中的内容快照与 VFS 无关。任何失败路径都经由统一清理出口归还 VFS 节点，不在全局虚拟树中遗留 `/__ccm:*` 节点。
 
@@ -608,7 +608,6 @@ ccm_context_init
 |---|---|
 | `files[i].real_path` | 诊断与来源标识 |
 | `files[i].content` / `size` | 已去 BOM 的完整内容 |
-| `files[i].mtime` | 文件时间元数据 |
 | `files[i].includes` | include 边及行号 |
 | `order[]` | 解析顺序 |
 

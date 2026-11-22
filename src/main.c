@@ -12,27 +12,33 @@
 
 int main(int argc, char **argv)
 {
-    // 一定要记得清空内存脏数据
-    memset(&ccmake_global_var, 0, sizeof(ccmake_global_var));
-    // 步骤一，命令行解析
+    // 步骤一，初始化命令行状态
+    init_global_var();
+    // 步骤二，命令行解析
     if (!parse_cmd(argc, argv))
         goto FailedtoParseCmd;
     if (ccmake_global_var.stat == CC_CMD_FLAG_ACTION_DONE)
-        goto ActionDone;
-    // 步骤二，配置文件解析
+        goto Done;
+
+    // 步骤三，创建全局变量树；生命周期与 Done/Failed 的 deinit 成对
+    if (!ccvar_global_init())
+    {
+        color_print(
+            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+            "配置文件解析失败：全局变量树初始化失败\n"
+        );
+        goto FailedtoInitGlobal;
+    }
+    // 步骤四，配置文件解析
     if (!parse_ccm())
         goto FailedtoParseConfig;
-    color_print(
-        "%s\n%s\n%s\n",
-        ccmake_global_var.self_path,
-        ccmake_global_var.ccm_path,
-        ccmake_global_var.cmk_path
-    );
-ActionDone:
+
+Done:
     clear_global_var();
     ccvar_global_deinit();
     return 0;
 FailedtoParseConfig:
+FailedtoInitGlobal:
 FailedtoParseCmd:
     clear_global_var();
     ccvar_global_deinit();

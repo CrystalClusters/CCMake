@@ -1693,8 +1693,9 @@ CCVarTree *ccvar_create(void)
 static void var_free_all(CCVarTree *tree)
 {
     CCUINT32 count = var_node_count(tree);
-    for (CCUINT32 i = 0; i < count; i++)
-        var_node_free_payload(tree, i);
+    /* 节点按创建顺序存放，释放走逆序 */
+    for (CCUINT32 i = count; i > 0; i--)
+        var_node_free_payload(tree, i - 1);
     if (tree->nodes.array)
         ccalloc(tree->nodes.array, 0, NULL);
     memset(&tree->nodes, 0, sizeof(tree->nodes));

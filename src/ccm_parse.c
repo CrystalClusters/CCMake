@@ -579,14 +579,15 @@ static CCBOOL parser_number(
     CCBOOL isf = (strchr(text, '.') || strchr(text, 'e') || strchr(text, 'E'))
                      ? CCTRUE : CCFALSE;
     errno = 0;
+    CCBOOL ok = CCFALSE;
     if (isf)
     {
         double value = 0;
         if (!parser_parse_float(text, &value))
         {
-            ccalloc(text, 0, NULL);
-            return ccm_parse_failf(p->lex.file, p->tok.line,
-                                   "浮点数格式非法或超出范围");
+            ccm_parse_failf(p->lex.file, p->tok.line,
+                            "浮点数格式非法或超出范围");
+            goto Done;
         }
         *is_float = CCTRUE;
         *floating = value;
@@ -597,14 +598,17 @@ static CCBOOL parser_number(
         long long value = strtoll(text, &end, 10);
         if (errno == ERANGE || !end || *end != '\0')
         {
-            ccalloc(text, 0, NULL);
-            return ccm_parse_failf(p->lex.file, p->tok.line, "整数格式非法或超出范围");
+            ccm_parse_failf(p->lex.file, p->tok.line, "整数格式非法或超出范围");
+            goto Done;
         }
         *is_float = CCFALSE;
         *integer = (CCINT64)value;
     }
+    ok = CCTRUE;
+
+Done:
     ccalloc(text, 0, NULL);
-    return CCTRUE;
+    return ok;
 }
 
 static CCBOOL parser_parse_object_members(
@@ -759,6 +763,31 @@ static CCBOOL parser_parse_value(
     }
 }
 
+static CCBOOL parser_parse_object_member(
+    CCMParser *p,
+    const char *path,
+    CCUINT32 depth
+)
+{
+    char *child = parser_path_key(path, p->tok.text, p->tok.len);
+    if (!child)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
+    if (!parser_advance(p) || !parser_need(p, CCM_TOK_COLON, "冒号"))
+        goto Failed;
+    if (!parser_advance(p))
+        goto Failed;
+    if (!parser_parse_value(p, child, CC_VAR_WRITE_REPLACE, depth))
+        goto Failed;
+    ccalloc(child, 0, NULL);
+    if (!parser_need(p, CCM_TOK_SEMI, "分号"))
+        return CCFALSE;
+    return parser_advance(p);
+
+Failed:
+    ccalloc(child, 0, NULL);
+    return CCFALSE;
+}
+
 static CCBOOL parser_parse_object_members(
     CCMParser *p,
     const char *path,
@@ -779,31 +808,69 @@ static CCBOOL parser_parse_object_members(
                 p->lex.file, p->tok.line,
                 "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
             );
-
-        char *child = parser_path_key(path, p->tok.text, p->tok.len);
-        if (!child)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-        if (!parser_advance(p) || !parser_need(p, CCM_TOK_COLON, "冒号"))
-        {
-            ccalloc(child, 0, NULL);
-            return CCFALSE;
-        }
-        if (!parser_advance(p))
-        {
-            ccalloc(child, 0, NULL);
-            return CCFALSE;
-        }
-        CCBOOL ok = parser_parse_value(p, child, CC_VAR_WRITE_REPLACE, depth);
-        ccalloc(child, 0, NULL);
-        if (!ok)
-            return CCFALSE;
-        if (!parser_need(p, CCM_TOK_SEMI, "分号"))
-            return CCFALSE;
-        if (!parser_advance(p))
+        if (!parser_parse_object_member(p, path, depth))
             return CCFALSE;
         members++;
     }
     return CCTRUE;
+}
+
+static CCBOOL parser_array_object(
+    CCMParser *p,
+    const char *path,
+    CCUINT32 depth
+)
+{
+    CCUINT32 index = 0;
+    if (!parser_push_value(
+            p, path, CC_VAR_OBJECT, NULL, 0, &index,
+            "追加数组对象"
+        ))
+        return CCFALSE;
+    char *child = parser_path_index(path, index);
+    if (!child)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
+    if (!parser_advance(p))
+        goto Failed;
+    if (!parser_parse_object_members(p, child, depth + 1))
+        goto Failed;
+    ccalloc(child, 0, NULL);
+    if (!parser_need(p, CCM_TOK_RBRACE, "对象右花括号"))
+        return CCFALSE;
+    return parser_advance(p);
+
+Failed:
+    ccalloc(child, 0, NULL);
+    return CCFALSE;
+}
+
+static CCBOOL parser_array_array(
+    CCMParser *p,
+    const char *path,
+    CCUINT32 depth
+)
+{
+    CCUINT32 index = 0;
+    if (!parser_push_value(
+            p, path, CC_VAR_ARRAY, NULL, 0, &index,
+            "追加数组"
+        ))
+        return CCFALSE;
+    char *child = parser_path_index(path, index);
+    if (!child)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
+    if (!parser_advance(p))
+        goto Failed;
+    if (!parser_parse_array_members(p, child, depth + 1))
+        goto Failed;
+    ccalloc(child, 0, NULL);
+    if (!parser_need(p, CCM_TOK_RBRACKET, "数组右方括号"))
+        return CCFALSE;
+    return parser_advance(p);
+
+Failed:
+    ccalloc(child, 0, NULL);
+    return CCFALSE;
 }
 
 static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 depth)
@@ -855,56 +922,10 @@ static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 dept
     }
 
     case CCM_TOK_LBRACE:
-    {
-        CCUINT32 index = 0;
-        if (!parser_push_value(
-                p, path, CC_VAR_OBJECT, NULL, 0, &index,
-                "追加数组对象"
-            )
-        )
-            return CCFALSE;
-        char *child = parser_path_index(path, index);
-        if (!child)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-        if (!parser_advance(p))
-        {
-            ccalloc(child, 0, NULL);
-            return CCFALSE;
-        }
-        CCBOOL ok = parser_parse_object_members(p, child, depth + 1);
-        ccalloc(child, 0, NULL);
-        if (!ok)
-            return CCFALSE;
-        if (!parser_need(p, CCM_TOK_RBRACE, "对象右花括号"))
-            return CCFALSE;
-        return parser_advance(p);
-    }
+        return parser_array_object(p, path, depth);
 
     case CCM_TOK_LBRACKET:
-    {
-        CCUINT32 index = 0;
-        if (!parser_push_value(
-                p, path, CC_VAR_ARRAY, NULL, 0, &index,
-                "追加数组"
-            )
-        )
-            return CCFALSE;
-        char *child = parser_path_index(path, index);
-        if (!child)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-        if (!parser_advance(p))
-        {
-            ccalloc(child, 0, NULL);
-            return CCFALSE;
-        }
-        CCBOOL ok = parser_parse_array_members(p, child, depth + 1);
-        ccalloc(child, 0, NULL);
-        if (!ok)
-            return CCFALSE;
-        if (!parser_need(p, CCM_TOK_RBRACKET, "数组右方括号"))
-            return CCFALSE;
-        return parser_advance(p);
-    }
+        return parser_array_array(p, path, depth);
 
     case CCM_TOK_BUILTIN:
     {
@@ -961,6 +982,33 @@ static CCBOOL parser_parse_array_members(
     return CCTRUE;
 }
 
+static CCBOOL parser_parse_top_field(CCMParser *p)
+{
+    if (p->tok.type != CCM_TOK_STRING)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "字段名必须是字符串");
+    if (!ccvar_key_valid(p->tok.text, p->tok.len))
+        return ccm_parse_failf(
+            p->lex.file, p->tok.line,
+            "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
+        );
+
+    char *path = parser_path_key("", p->tok.text, p->tok.len);
+    if (!path)
+        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
+    if (!parser_advance(p) || !parser_need(p, CCM_TOK_COLON, "冒号"))
+        goto Failed;
+    if (!parser_advance(p))
+        goto Failed;
+    if (!parser_parse_value(p, path, CC_VAR_WRITE_MERGE, 0))
+        goto Failed;
+    ccalloc(path, 0, NULL);
+    return parser_expect(p, CCM_TOK_SEMI, "字段结束分号");
+
+Failed:
+    ccalloc(path, 0, NULL);
+    return CCFALSE;
+}
+
 static CCBOOL parser_parse_file(
     CCMakeCCMContext *ctx,
     const CCMakeCCMFile *file,
@@ -994,32 +1042,7 @@ static CCBOOL parser_parse_file(
             continue;
         }
 
-        if (p.tok.type != CCM_TOK_STRING)
-            return ccm_parse_failf(p.lex.file, p.tok.line, "字段名必须是字符串");
-        if (!ccvar_key_valid(p.tok.text, p.tok.len))
-            return ccm_parse_failf(
-                p.lex.file, p.tok.line,
-                "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
-            );
-
-        char *path = parser_path_key("", p.tok.text, p.tok.len);
-        if (!path)
-            return ccm_parse_failf(p.lex.file, p.tok.line, "内存分配失败");
-        if (!parser_advance(&p) || !parser_need(&p, CCM_TOK_COLON, "冒号"))
-        {
-            ccalloc(path, 0, NULL);
-            return CCFALSE;
-        }
-        if (!parser_advance(&p))
-        {
-            ccalloc(path, 0, NULL);
-            return CCFALSE;
-        }
-        CCBOOL ok = parser_parse_value(&p, path, CC_VAR_WRITE_MERGE, 0);
-        ccalloc(path, 0, NULL);
-        if (!ok)
-            return CCFALSE;
-        if (!parser_expect(&p, CCM_TOK_SEMI, "字段结束分号"))
+        if (!parser_parse_top_field(&p))
             return CCFALSE;
     }
     return CCTRUE;
@@ -1049,8 +1072,8 @@ CCBOOL ccm_parse(CCMakeCCMContext *ctx)
     }
 
     /* -D 覆盖：全部文件之后应用，优先级最高；键按路径段解释 */
-    CCUINT32 def_count = ccmake_global_var.defines.size /
-                         (CCUINT32)sizeof(CCMakeDefine);
+    CCUINT32 def_count =
+        ccmake_global_var.defines.size / (CCUINT32)sizeof(CCMakeDefine);
     for (CCUINT32 i = 0; i < def_count; i++)
     {
         CCMakeDefine def;

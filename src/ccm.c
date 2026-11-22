@@ -12,16 +12,15 @@
 
 CCBOOL parse_ccm()
 {
-    if (!ccvar_global_init())
+    CCVarTree *vars = ccvar_global();
+    if (!vars)
     {
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "配置文件解析失败：全局变量树初始化失败\n"
+            "配置文件解析失败：全局变量树未初始化\n"
         );
         return CCFALSE;
     }
-    CCVarTree *vars = ccvar_global();
-    ccvar_clear(vars);
 
     CCMakeCCMContext ctx;
     ccm_context_init(&ctx);

@@ -85,10 +85,26 @@ void ccm_context_clear(CCMakeCCMContext *ctx)
 
     ccm_release_vfs(ctx);
 
-    CCUINT32 files = file_count(ctx);
-    for (CCUINT32 i = 0; i < files; i++)
+    /* 依赖序：VFS 先释放；其余按创建顺序逆序 */
+    if (ctx->order.array)
+        ccalloc(ctx->order.array, 0, NULL);
+    if (ctx->stack.array)
+        ccalloc(ctx->stack.array, 0, NULL);
+
+    CCUINT32 includes = include_count(ctx);
+    for (CCUINT32 i = includes; i > 0; i--)
     {
-        CCMakeCCMFile *f = file_at(ctx, i);
+        CCMakeCCMInclude *inc = include_at(ctx, i - 1);
+        if (inc->literal)
+            ccalloc(inc->literal, 0, NULL);
+    }
+    if (ctx->includes.array)
+        ccalloc(ctx->includes.array, 0, NULL);
+
+    CCUINT32 files = file_count(ctx);
+    for (CCUINT32 i = files; i > 0; i--)
+    {
+        CCMakeCCMFile *f = file_at(ctx, i - 1);
         if (f->real_path)
             ccalloc(f->real_path, 0, NULL);
         if (f->v_path)
@@ -99,59 +115,41 @@ void ccm_context_clear(CCMakeCCMContext *ctx)
     if (ctx->files.array)
         ccalloc(ctx->files.array, 0, NULL);
 
-    CCUINT32 includes = include_count(ctx);
-    for (CCUINT32 i = 0; i < includes; i++)
-    {
-        CCMakeCCMInclude *inc = include_at(ctx, i);
-        if (inc->literal)
-            ccalloc(inc->literal, 0, NULL);
-        if (inc->resolved)
-            ccalloc(inc->resolved, 0, NULL);
-    }
-    if (ctx->includes.array)
-        ccalloc(ctx->includes.array, 0, NULL);
-
-    if (ctx->order.array)
-        ccalloc(ctx->order.array, 0, NULL);
-    if (ctx->stack.array)
-        ccalloc(ctx->stack.array, 0, NULL);
-    if (ctx->path_buf.array)
-        ccalloc(ctx->path_buf.array, 0, NULL);
     if (ctx->work_dir)
         ccalloc(ctx->work_dir, 0, NULL);
-    if (ctx->root_path)
-        ccalloc(ctx->root_path, 0, NULL);
 
     memset(ctx, 0, sizeof(*ctx));
 }
 
-/* 追加文件项；成功时接管 real_path，失败时返回 CC_CCM_NIL 并释放 real_path */
+/* 追加文件项；函数复制 real_path，调用方保留其所有权 */
 static CCUINT32 ccm_append_file(
     CCMakeCCMContext *ctx,
-    char *real_path,
+    const char *real_path,
     CCUINT32 parent,
     CCUINT32 via_line,
     CCUINT32 depth
 )
 {
     if (!ctx || !real_path)
-    {
-        if (real_path)
-            ccalloc(real_path, 0, NULL);
         return CC_CCM_NIL;
-    }
     if (file_count(ctx) >= ctx->limits.max_files)
-    {
-        ccalloc(real_path, 0, NULL);
         return CC_CCM_NIL;
-    }
+
+    size_t path_len = strlen(real_path);
+    char *path_copy = ccalloc(
+        NULL, (CCUINT64)path_len + 1,
+        CC_DBG_REL_TAG(".ccm 文件路径", NULL)
+    );
+    if (!path_copy)
+        return CC_CCM_NIL;
+    memcpy(path_copy, real_path, path_len + 1);
+
     CCMakeCCMFile item;
     memset(&item, 0, sizeof(item));
-    item.real_path = real_path;
+    item.real_path = path_copy;
     item.v_path = NULL;
     item.content = NULL;
     item.size = 0;
-    item.mtime = 0;
     item.include_first = CC_CCM_NIL;
     item.include_count = 0;
     item.parent = parent;
@@ -168,7 +166,7 @@ static CCUINT32 ccm_append_file(
         ) != 0
     )
     {
-        ccalloc(real_path, 0, NULL);
+        ccalloc(path_copy, 0, NULL);
         return CC_CCM_NIL;
     }
     return file_count(ctx) - 1;
@@ -390,7 +388,6 @@ static CCBOOL ccm_load_file(
 
     f = file_at(ctx, index);
     f->size = st.size;
-    f->mtime = st.mtime;
 
     if (f->size == (CCUINT64)-1)
         return ccm_load_error(real_path, via_path, via_line, "文件过大");
@@ -479,9 +476,7 @@ static CCBOOL ccm_report_cycle(
     if (!reached)
     {
         color_print("%s -> %s\n", file_at(ctx, target)->real_path, current_path);
-        if (chain.array)
-            ccalloc(chain.array, 0, NULL);
-        return CCFALSE;
+        goto Done;
     }
 
     CCUINT32 count = chain.size / (CCUINT32)sizeof(CCUINT32);
@@ -494,6 +489,7 @@ static CCBOOL ccm_report_cycle(
     }
     color_print(":%u -> %s\n", edge_line, file_at(ctx, target)->real_path);
 
+Done:
     if (chain.array)
         ccalloc(chain.array, 0, NULL);
     return CCFALSE;
@@ -522,11 +518,11 @@ static CCBOOL ccm_locate_include(
         return ccm_load_error(literal, parent_path, line, "@include 路径非法");
 
     edge = include_at(ctx, edge_index);
-    edge->resolved = resolved;
 
     CCUINT32 existing = ccm_find_file(ctx, resolved);
     if (existing != CC_CCM_NIL)
     {
+        ccalloc(resolved, 0, NULL);
         edge = include_at(ctx, edge_index);
         edge->child = existing;
         if (file_at(ctx, existing)->state == CC_CCM_FILE_VISITING)
@@ -536,12 +532,17 @@ static CCBOOL ccm_locate_include(
 
     CCUINT32 depth = file_at(ctx, parent_index)->depth + 1;
     if (depth > ctx->limits.max_include_depth)
+    {
+        ccalloc(resolved, 0, NULL);
         return ccm_load_error(literal, parent_path, line, "include 深度超过限制");
+    }
     if (file_count(ctx) >= ctx->limits.max_files)
+    {
+        ccalloc(resolved, 0, NULL);
         return ccm_load_error(literal, parent_path, line, "include 文件数量超过限制");
+    }
     CCUINT32 index = ccm_append_file(ctx, resolved, parent_index, line, depth);
-    /* 新文件接管 resolved；边不再持有，避免同一块内存被释放两次 */
-    include_at(ctx, edge_index)->resolved = NULL;
+    ccalloc(resolved, 0, NULL);
     if (index == CC_CCM_NIL)
         return ccm_load_error(literal, parent_path, line, "内存分配失败");
 
@@ -655,8 +656,10 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
         return CCFALSE;
     }
 
-    ctx->root_path = ccm_path_normalize(root_path, ctx->work_dir, CC_CCM_LOCATE_COMMENT);
-    if (!ctx->root_path)
+    char *root_norm = ccm_path_normalize(
+        root_path, ctx->work_dir, CC_CCM_LOCATE_COMMENT
+    );
+    if (!root_norm)
     {
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
@@ -667,6 +670,7 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
 
     if (file_count(ctx) >= ctx->limits.max_files)
     {
+        ccalloc(root_norm, 0, NULL);
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
             "配置文件定位失败：文件数量超过限制\n"
@@ -674,17 +678,19 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
         return CCFALSE;
     }
 
-    ctx->root_index = ccm_append_file(ctx, ctx->root_path, CC_CCM_NIL, 0, 0);
-    if (ctx->root_index == CC_CCM_NIL)
+    CCUINT32 root_index = ccm_append_file(
+        ctx, root_norm, CC_CCM_NIL, 0, 0
+    );
+    ccalloc(root_norm, 0, NULL);
+    if (root_index == CC_CCM_NIL)
     {
-        ctx->root_path = NULL;
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
             "配置文件定位失败：内存分配失败\n"
         );
         return CCFALSE;
     }
-    ctx->root_path = NULL; /* 所有权已转移给 files */
+    ctx->root_index = root_index;
 
     if (!ccm_load_file(ctx, ctx->root_index, NULL, 0))
         goto Finished;

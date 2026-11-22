@@ -26,16 +26,13 @@
 ## 2. 解析总流程
 
 ```text
-parse_ccm
-  → ccvar_global_init / ccvar_clear
-  → ccm_locate
-      → 文件注册表 + include 边表
-      → order[] 后序序列
-  → ccm_parse
-      → for each order[i]:
-            parser_parse_file
-      → 应用 -D
-  → 失败时 ccvar_clear
+main
+  → ccvar_global_init
+  → parse_ccm
+      → ccvar_clear
+      → ccm_locate
+      → ccm_parse
+  → ccvar_global_deinit
 ```
 
 `ccm_parse` 只使用 `files[]` 的内存快照与 `order[]`，不访问 `.ccm` 源文件；`${find}` 按自身参数访问目录。
@@ -217,13 +214,10 @@ array       := "[" (value (","? value)*)? ","? "]"
 2. 读取第一个 token；
 3. 循环直到 EOF：
    - 遇到 `@include`：消费路径字符串与分号，跳过；
-   - 否则当前 token 必须是字符串，作为字段名；
-   - 用 `ccvar_key_valid` 校验键名；
-   - 建立字段路径；
-   - 必须跟 `:`；
-   - 解析值；
-   - 必须跟 `;`；
+   - 否则调用 `parser_parse_top_field`；
 4. 任意一步失败立即返回，错误带文件与行号。
+
+`parser_parse_top_field` 负责字段名校验、路径构造、冒号/值/分号消费；路径只在 `Failed` 标签释放一次。函数末尾通过 `parser_expect` 消费分号并推进 token。
 
 ### 5.2 键名与路径
 
@@ -269,21 +263,19 @@ targets[2].sources[1]
 ```text
 while 当前 token != "}":
     成员名必须是字符串并符合键名规则
-    拼接子路径
-    期望 ":"
-    解析值
-    期望 ";"
+    调用 parser_parse_object_member
 ```
 
-顶层字段对象使用 `CC_VAR_WRITE_MERGE`；对象内部的对象成员使用 `CC_VAR_WRITE_REPLACE`。
+`parser_parse_object_member` 负责拼接子路径、消费冒号、解析值与分号；失败时只经 `Failed` 标签释放一次子路径。顶层字段对象使用 `CC_VAR_WRITE_MERGE`；对象内部的对象成员使用 `CC_VAR_WRITE_REPLACE`。
 
 ### 5.5 数组
 
 数组元素循环：
 
 - 字符串、数字、布尔直接追加；
-- `{` 追加对象，生成 `[index]` 子路径后解析成员；
-- `[` 追加数组，生成 `[index]` 子路径后递归解析；
+- `{` 调用 `parser_array_object`；
+- `[` 调用 `parser_array_array`；
+- 两个辅助函数各自拼 `[index]` 子路径、递归解析并在 `Failed` 标签释放一次子路径；
 - 元素之间可用逗号或空白分隔；
 - 允许尾逗号；
 - 数组元素顺序就是 `ccvar_array_push` 的调用顺序。
@@ -399,6 +391,32 @@ ${find <目录...> -include <通配符...> [-exclude <通配符...>]}
 3. 创建独立 `CCFiles` 探针；
 4. 挂载到合成路径 `/__find:N`；
 5. 调用 `find_scan_dir`。
+
+`CCMFindScan` 聚合 `fs`、资源预算、通配符、结果表、诊断位置与目录栈；`find_scan_dir(scan, vpath)` 只接收这两个参数。
+
+遍历拆成四层：
+
+| 函数 | 职责 |
+|---|---|
+| `find_scan_dir` | 创建根栈项、调用遍历、统一释放栈 |
+| `find_scan_loop` | 弹出目录，驱动子目录 DFS |
+| `find_scan_entries` | 列目录并逐个处理条目 |
+| `find_scan_entry` | 组装子路径，压子目录或匹配文件 |
+
+`find_scan_entry` 使用本地 `cv`/`cr` 持有待转移的路径：压栈成功后所有权交给栈项；失败时通过 `FailedJoined` / `FailedPaths` 两级标签释放，标签只释放该阶段已经确定分配成功的资源。结果路径 `joined` 在写入结果表后立即释放。`find_scan_entries`、`find_scan_loop`、`find_scan_dir` 都在各自作用域内完成清理，不使用通用 `Done` 标签，也不依赖 `ccalloc(NULL, 0, NULL)` 的空操作行为。
+
+`CCMFindStackItem` 在每次构造时先 `memset`，再成对赋值 `vpath` / `rel` / `depth`，最后才压栈：
+
+```c
+CCMFindStackItem child;
+memset(&child, 0, sizeof(child));
+child.vpath = cv;
+child.rel = cr;
+child.depth = dir->depth + 1;
+cc_dyn_core_push(&scan->stack, sizeof(child), sizeof(child), &child);
+```
+
+两条路径都在 `cc_dyn_core_push` 调用前完成初始化；赋值语句之间有序，压栈读取的是完整结构体。`find_make_item` 和 `find_make_child_paths` 也先置空输出指针，再在两条路径都成功后同时发布，避免半初始化指针泄漏到调用方。
 
 `find_scan_dir` 使用显式栈：
 
@@ -575,15 +593,30 @@ for i in order[]:
 解析采用首错终止。失败时 `parse_ccm` 清空全局树，避免后续流程使用半成品配置。
 
 ```text
-parse_ccm
-  ├─ ccvar_global_init
-  ├─ ccvar_clear
-  ├─ 第一阶段 ccm_locate
-  ├─ 第二阶段 ccm_parse → 写入全局树
-  └─ 失败：ccvar_clear
 main
+  ├─ ccvar_global_init
+  ├─ parse_ccm
+  │    ├─ ccvar_clear
+  │    ├─ ccm_locate
+  │    └─ ccm_parse → 写入全局树
   └─ ccvar_global_deinit
 ```
+
+创建与释放都在 `main` 的同一生命周期内成对出现；`parse_ccm` 使用已创建的空树，解析失败时清空本次写入的内容。成功路径直接进入 `Done`，失败标签逐级回落到 `FailedtoParseCmd` 后统一销毁。
+
+### 11.1 资源所有权
+
+| 资源 | 创建者 | 释放者 |
+|---|---|---|
+| `ccmake_global_var` 的字符串、`defines` | `parse_cmd` 写入 | `main` 调用 `clear_global_var` |
+| 全局 `CCVarTree` | `main` 的 `ccvar_global_init` | `main` 的 `ccvar_global_deinit` |
+| 全局树中的配置内容 | `ccm_parse` 写入 | `parse_ccm` 失败时 `ccvar_clear`，整树由 `main` 销毁 |
+| `CCMakeCCMContext`、文件表、边表、`order` | `parse_ccm` 内的 `ccm_context_init` / `ccm_locate` | 同一函数内的 `ccm_context_clear` |
+| 单个字段字符串、对象/数组节点 | `ccvar_set` / `ccvar_array_push` 内部复制 | 树内部覆盖或删除时释放 |
+| `${ref}` / `${find}` 输出字符串 | `ccm_builtin_eval` | 调用方解析器释放 |
+| `${find}` 的 `vpath` / `rel` / 结果路径 | `find_scan_*` 内部 | 对应 `find_scan_*` 作用域内释放 |
+
+`clear_global_var` 只清理 `ccmake_global_var` 自己持有的字段；`ccvar_global_deinit` 只销毁全局树。两者不再在同一次运行中互相重复清理。
 
 ## 12. 复杂度
 

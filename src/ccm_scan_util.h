@@ -1,9 +1,14 @@
-#ifndef CCM_SCAN_UTIL_H
-#define CCM_SCAN_UTIL_H
+/*
+ * @Description: CCM 各扫描阶段共享的字符串与 ${...} 边界扫描接口
+ * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
+ */
+
+#ifndef _INCLUDE_CCM_SCAN_UTIL_H_
+#define _INCLUDE_CCM_SCAN_UTIL_H_
 
 #include <crystal_cluster.h>
 
-/*
+/**
  * 共享扫描基元。
  * quote_pos 指向起始双引号；open_pos 指向 ${ 后的左花括号。
  * 成功时 *end 指向闭合字符，调用方自行推进到 end + 1。

@@ -7,8 +7,8 @@
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
-#ifndef _INCLUDE_CCMAKE_CCM_INTERNAL_H_
-#define _INCLUDE_CCMAKE_CCM_INTERNAL_H_
+#ifndef _INCLUDE_CCM_INTERNAL_H_
+#define _INCLUDE_CCM_INTERNAL_H_
 
 #include "ccmake_header.h"
 #include "ccvar.h"
@@ -26,7 +26,6 @@ typedef enum {
 /* 一条 @include 指令：literal 来自文件内容，resolved/child 在定位时填充 */
 typedef struct ccmake_ccm_include_struct {
     char     *literal;    /* 原始路径字符串（ccalloc 分配） */
-    char     *resolved;   /* 规范化后的绝对路径（ccalloc 分配） */
     CCUINT32  line;       /* @include 所在行（1 基） */
     CCUINT32  column;     /* @include 所在字节列（1 基） */
     CCUINT32  child;      /* 目标文件在 files 中的下标；CC_CCM_NIL 表示未解析 */
@@ -38,7 +37,6 @@ typedef struct ccmake_ccm_file_struct {
     char     *v_path;        /* VFS 合成挂载点，如 "/__ccm:0" */
     char     *content;       /* 文件字节 + 结尾 0；已去 UTF-8 BOM */
     CCUINT64  size;          /* content 有效字节数 */
-    CCUINT64  mtime;         /* VFS stat 给出的秒级 mtime */
     CCUINT32  include_first; /* 本文件 include 边在 includes 中的起始下标 */
     CCUINT32  include_count; /* 本文件 include 边数量 */
     CCUINT32  parent;        /* 首次包含它的文件下标；根为 CC_CCM_NIL */
@@ -74,9 +72,7 @@ typedef struct ccmake_ccm_context_struct {
     CCDyn    includes;    /* CCMakeCCMInclude[] */
     CCDyn    order;       /* CCUINT32[]：后序解析顺序 */
     CCDyn    stack;       /* CCMakeCCMFrame[]：DFS 临时栈 */
-    CCDyn    path_buf;    /* 路径拼接临时缓冲 */
     char    *work_dir;    /* 规范化绝对工作目录 */
-    char    *root_path;   /* 规范化绝对根文件 */
     CCUINT32 root_index;  /* 根文件在 files 中的下标 */
     CCUINT64 total_bytes; /* 已装载文件内容总字节 */
     CCMakeCCMLimits limits;
@@ -136,6 +132,7 @@ CC_CCM_HOST_TYPE ccm_host_path_type(const char *path);
 
 /*
  * 扫描 content 中的 @include 指令，追加到 out_includes（CCMakeCCMInclude 数组）。
+ * 成功的边项持有 literal，out_includes 的持有者负责最终释放。
  * 只做 include 发现所需的词法处理（注释、字符串、括号深度、行号），
  * 不解析键值语法。display_path 仅用于错误信息。
  */
@@ -161,7 +158,8 @@ CCBOOL ccm_parse_failf(
     ...
 );
 
-/* 内建函数求值：${ref ...} / ${find ...} */
+/* 内建函数求值：${ref ...} / ${find ...}
+ * 成功时 *out 为新分配字符串，调用方负责 ccalloc(*out, 0, NULL)。 */
 CCBOOL ccm_builtin_eval(
     CCMakeCCMContext *ctx,
     const char *raw,
@@ -173,7 +171,8 @@ CCBOOL ccm_builtin_eval(
     CCUINT32 line
 );
 
-/* ${find ...} 求值；args 为已展开内嵌 ${} 的参数串 */
+/* ${find ...} 求值；args 为已展开内嵌 ${} 的参数串
+ * 成功时 *out 为新分配字符串，调用方负责 ccalloc(*out, 0, NULL)。 */
 CCBOOL ccm_find_eval(
     CCMakeCCMContext *ctx,
     const char *args,

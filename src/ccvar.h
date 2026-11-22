@@ -84,6 +84,7 @@ void ccvar_clear(CCVarTree *tree);
  *   CC_VAR_OBJECT: data 为 NULL，mode 选择合并或替换；
  *   CC_VAR_ARRAY:  data 为 NULL，mode 忽略。
  * 对象合并、旧值清理、路径中间对象创建由树内部完成。
+ * data 只读；字符串按 len 复制，其他类型按值复制，树不接管调用方指针。
  */
 CCVarResult ccvar_set(
     CCVarTree *tree, const char *path,
@@ -116,6 +117,7 @@ CCINT32 ccvar_foreach_element(
 CCVarResult ccvar_remove(CCVarTree *tree, const char *path);
 
 /* 全局单例 */
+/* 全局单例：由 main 在同一生命周期内成对调用 init / deinit */
 CCBOOL ccvar_global_init(void);
 CCVarTree *ccvar_global(void);
 void ccvar_global_deinit(void);
