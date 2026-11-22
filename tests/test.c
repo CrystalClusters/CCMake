@@ -18,7 +18,8 @@ static const test_suite g_suites[] = {
     { "CCM", "CCM 文件检查与定位", test_ccm_locate },
     { "PARSE", "CCM 内容解析", test_ccm_parse },
     { "VARS", "全局变量树", test_ccvar },
-    { "CMK", "CMK 词法分析", test_cmk_lexer }
+    { "CMK", "CMK 词法分析", test_cmk_lexer },
+    { "CMKAST", "CMK AST 模型", test_cmk_ast }
 };
 
 #define SUITE_COUNT ((CCUINT32)(sizeof(g_suites) / sizeof(g_suites[0])))

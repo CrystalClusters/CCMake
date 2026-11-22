@@ -1,13 +1,13 @@
 # CMK 词法与语法
 
-本文冻结 `.cmk` 的词法规则与语法骨架，作为 Lexer、Parser 与语义分析的共同依据。[CMK 文件规范](CMK文件规范.md) 描述语言能力与示例；本文只补充实现所需的形式化边界。未在规范中明确的细节，按 C 语言习惯处理，并在本文记录。
+本文冻结 `.cmk` 的词法规则与语法骨架，作为 Lexer、Parser 与语义分析的共同依据。[CMK 文件规范](CMK文件规范.md) 描述语言能力与示例；[CMK AST 与解析设计](CMK%20AST与解析设计.md) 冻结 M2 的 AST 数据模型与 Parser 策略。未在规范中明确的细节，按 C 语言习惯处理，并在本文记录。
 
 ## 1. 阶段边界
 
 | 阶段 | 输入 | 输出 | 不负责 |
 |---|---|---|---|
 | Lexer | 源码字节、文件路径 | token 序列与词法诊断 | 名称解析、类型、目标图 |
-| Parser | token 序列 | AST | 类型检查、符号解析 |
+| Parser | token 序列 | AST | 类型检查、符号解析、求值、加载模块 |
 | Semantic | AST、配置变量树、内建签名表 | 已验证的 AST | 生成 IR、执行进程 |
 
 Lexer 与 Parser 是首错终止：遇到第一个词法或语法错误立即返回，不尝试恢复。
@@ -176,57 +176,64 @@ config_path := key ( "." key | "[" digit+ "]" )*
 ## 5. 语法
 
 ```text
-file            := { import | include | top_statement } ;
+file            := { import_decl | include_decl | top_item } ;
 
-import          := "@import" ( func_import | target_import ) "from" string ";" ;
+import_decl     := "@import" ( func_import | target_import ) "from" string ";" ;
 func_import     := "func" ( "*" | ident { "," ident } ) [ "as" ident ] ;
 target_import   := "target" ident { "," ident } "as" ident ;
-include         := "@include" string ";" ;
+include_decl    := "@include" string ";" ;
 
-top_statement   := declaration | if_statement ;
+top_item        := declaration | top_if ;
+top_if          := "if" "(" expression ")" top_branch [ "else" top_branch ] ;
+top_branch      := target_decl | top_if | "{" { target_decl | top_if } "}" ;
 
 declaration     := variable_decl | function_decl | target_decl ;
 variable_decl   := [ "const" ] type ident "=" expression ";" ;
 
-type            := "string" | "int" | "bool" | "float" | "action"
-                 | "target_ref" | "list" "<" type ">" ;
+type            := scalar_type | "list" "<" type ">" ;
+scalar_type     := "string" | "int" | "bool" | "float"
+                 | "action" | "target_ref" ;
+return_type     := type | "void" ;
 
 function_decl   := "func" ident "(" [ parameter { "," parameter } ] ")"
-                   "->" ( type | "void" ) block ;
+                   "->" return_type block ;
 parameter       := type ident ;
 
-target_decl     := "target" ident "(" ")" block ;
+target_decl     := "target" ident "(" ")" target_body ;
+target_body     := "{" { target_field } "}" ;
+target_field    := type ident "=" expression ";" ;
 
-block           := "{" { statement } "}" ;
+block           := "{" { block_item } "}" ;
+block_item      := variable_decl | statement ;
 
-statement       := variable_decl | block | if_statement | while_statement
+statement       := block | if_statement | while_statement
                  | for_statement | "break" ";" | "continue" ";"
-                 | return_statement | expression_statement ;
+                 | return_statement | assignment_statement
+                 | expression_statement ;
 
 if_statement    := "if" "(" expression ")" statement
                    [ "else" statement ] ;
 while_statement := "while" "(" expression ")" statement ;
 for_statement   := "for" "(" type ident "in" expression ")" statement ;
 return_statement := "return" [ expression ] ";" ;
+assignment_statement := ( ident | discard ) ( "=" | "+=" ) expression ";" ;
 expression_statement := expression ";" ;
 
-expression      := assignment ;
-assignment      := ( ident | discard ) ( "=" | "+=" ) assignment
-                 | logical_or ;
+expression      := logical_or ;
 logical_or      := logical_and { "||" logical_and } ;
 logical_and     := equality { "&&" equality } ;
 equality        := relational { ( "==" | "!=" ) relational } ;
-relational      := additive { ( "<" | ">" | "<=" | ">=" ) additive } ;
+relational      := additive [ ( "<" | ">" | "<=" | ">=" ) additive ] ;
 additive        := multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative  := unary { ( "*" | "/" | "%" ) unary } ;
-unary           := ( "!" | "-" ) unary | postfix ;
-postfix         := primary { call_suffix | index_suffix | member_suffix } ;
-call_suffix     := "(" [ expression { "," expression } ] ")" ;
+unary           := ( "!" | "-" | "+" ) unary | postfix ;
+postfix         := primary { index_suffix | member_suffix } ;
 index_suffix    := "[" expression "]" ;
 member_suffix   := "." ident ;
 primary         := int | float | string | "true" | "false"
-                 | config_ref | ident | "(" expression ")"
-                 | list_literal ;
+                 | config_ref | ident [ call_suffix ]
+                 | "(" expression ")" | list_literal ;
+call_suffix     := "(" [ expression { "," expression } ] ")" ;
 list_literal    := "{" [ expression { "," expression } [ "," ] ] "}" ;
 config_ref      := "@{" config_path "}" ;
 config_path     := key { "." key | "[" int "]" } ;
@@ -236,14 +243,19 @@ discard         := "_" ;
 说明：
 
 - `target` 声明使用空参数列表 `()`，不是普通函数；
-- 列表字面量使用 `{}`，与代码块在语法上由上下文区分：声明右侧、实参位置与动作列表位置按表达式解析；
+- `target_body` 是独立语法入口，不是普通 `block`；字段直接挂在 `TARGET_DECL` 下；
+- 变量声明是 `block_item`，不是 `statement`：`if (cond) int x = 1;` 语法错误，需要写成 `if (cond) { int x = 1; }`；
+- 列表字面量使用 `{}`，与代码块由 Parser 按上下文入口区分，Lexer 不做推断；
 - 表达式语句的返回值必须被使用或赋给 `_`，由语义层强制；
-- `assignment` 的左值目前只允许变量名与 `_`；列表元素、目标引用不是可赋值对象；
+- 赋值是语句级结构，只允许 `ident` 或 `_` 作左值；不允许 `a = b = c`、`if (x = 1)`、`f(x = 1)`；
+- 比较禁止链式：`a < b < c` 是语法错误；`a == b == c` 仍按左结合解析；
+- 调用只允许裸标识符：`f()`、`f(a)` 合法，`(f)()`、`f()()` 语法拒绝；
 - `for` 只有 `for-in` 形式，没有 C 的三段式 `for`；
-- 顶层 `if` 只用于选择声明；语义层限制其分支内容，语法层允许普通语句；
-- 目标体使用普通 `block`，语义层限制为四个字段的 `list<T>` 声明；
-- `{}` 的双重含义由 Parser 按上下文判断：Lexer 只产生 `LBRACE` / `RBRACE`，不区分代码块与列表字面量；M2 采用明确的递归下降解析，不在 Lexer 阶段消除歧义；
-- Lexer 与 Parser 都保持首错终止；M2 初期不引入多错误恢复或局部重同步，等 AST 与语义分析稳定后再评估是否需要恢复机制。
+- 顶层 `if` 使用 `top_if`，分支只允许 `target_decl` 或嵌套 `top_if`；函数/块内 `if` 使用普通 `if_statement`；
+- 目标字段语法接受任意类型与字段名，字段白名单与 `list<T>` 类型由语义层检查；
+- `@include` / `@import` 只记录路径，Parser 不加载文件；
+- `{}` 的双重含义由 Parser 提供 `parse_block`、`parse_target_fields`、`parse_list` 三个入口，不使用通用 `parse_braces`，也不做大量 Token 回溯；
+- Lexer 与 Parser 都保持首错终止；M2 初期不引入多错误恢复或局部重同步。
 
 ## 6. 优先级与结合性
 
@@ -252,21 +264,46 @@ discard         := "_" ;
 | 级别 | 运算符 | 结合性 |
 |---|---|---|
 | 1 | 调用 `()`、索引 `[]`、成员 `.` | 左 |
-| 2 | 一元 `!` `-` | 右 |
+| 2 | 一元 `!` `-` `+` | 右 |
 | 3 | `*` `/` `%` | 左 |
 | 4 | `+` `-` | 左 |
-| 5 | `<` `>` `<=` `>=` | 左 |
+| 5 | `<` `>` `<=` `>=` | 非链式 |
 | 6 | `==` `!=` | 左 |
 | 7 | `&&` | 左 |
 | 8 | `\|\|` | 左 |
-| 9 | `=` `+=` | 右 |
+| — | `=` `+=` | 语句级，不进入表达式 |
 
-- 赋值是表达式但不是普通右值；解析结果由语义层限制为语句级赋值；
+- 赋值是语句级结构，不是表达式；`a = b = c` 与条件内赋值都被语法拒绝；
+- 关系比较禁止链式：`a < b < c` 是语法错误；`a == b == c` 仍按左结合解析；
+- 调用只允许裸标识符；`(f)()`、`f()()` 是语法错误；
 - 比较与逻辑运算的结果是 `bool`；`&&`、`||` 短路求值；
 - 没有隐式类型转换；`+` 的字符串拼接与列表连接由语义层按类型分派；
 - 列表字面量 `{}` 的元素类型由声明、返回类型或目标字段上下文确定。
 
+Pratt 绑定力：
+
+| 运算符 | `lbp` |
+|---|---:|
+| `\|\|` | 10 |
+| `&&` | 20 |
+| `==` `!=` | 30 |
+| `<` `>` `<=` `>=` | 40 |
+| `+` `-` | 50 |
+| `*` `/` `%` | 60 |
+
+关系层级在同一个 Pratt 调用内使用 `relational_seen` 标记；已经解析过一个关系运算符后再遇到关系运算符直接报错。括号或嵌套表达式使用新的标记。
+
 ## 7. 语法之外的约束
+
+### 7.1 语法层直接拒绝
+
+- `a = b = c`、`if (x = 1)`、`f(x = 1)`：赋值只能作为语句；
+- `a < b < c`：不支持链式比较；
+- `(f)()`、`f()()`：调用只允许裸标识符；
+- 顶层 `if` 分支出现函数声明、变量声明、导入或包含：顶层 if 只选择 target；
+- `target` 体出现普通语句、函数声明或嵌套 target：target 体只允许字段声明。
+
+### 7.2 语义层拒绝
 
 以下内容语法接受，但由后续阶段拒绝：
 
@@ -301,6 +338,12 @@ M1 已落地：
 
 `CMK-027` 是确定性的随机字节输入测试，固定种子、固定轮数，用于保证 Lexer 在各种字节组合下不崩溃、不越界；后续可以在同一入口接 libFuzzer 做长时间覆盖引导测试。
 
+M2.0 的 AST 数据模型与预算默认值已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`CMKAST` 测试套件）；Parser 尚未开始。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
+
+| 套件 | 用例 | 覆盖 |
+|---|---|---|
+| `CMKAST` | `AST-001` 至 `AST-009` | 根节点与生命周期、文件/字符串复制、节点与字符串越界、父/子/兄弟链接、挂接规则、visitor、校验失败路径、函数/target/导入节点布局、类型分类、预算默认值 |
+
 ### 8.1 Lexer 输入契约
 
 | 参数 | 规则 |
@@ -325,5 +368,6 @@ M1 已落地：
 - 诊断消息动态分配，不设固定长度上限；
 - Lexer 只记录诊断，由调用方决定何时输出，便于后续 Parser 在单次错误中统一打印；
 - token 数量、标识符长度、字符串长度不设语言层配额；`CCUINT32` 字段的表示上限在越界时给出明确诊断；
+- Parser 的实现资源预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)，预算可设为 0 关闭，不属于语言语义限制；
 - 行号或列号超过 `CCUINT32` 表示范围时，诊断分别为“行号超出表示上限”“列号超出表示上限”，不允许位置回绕；
 - 源码尺寸超过 `size_t` 可表示范围时，`cmk_source_set` 返回失败，不进行分配或复制。

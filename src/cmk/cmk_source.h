@@ -19,6 +19,16 @@ typedef struct cmk_location {
     CCUINT32 col;
 } CMKLocation;
 
+/* 一段源码范围；end_line/end_col 指向最后一个字节（包含） */
+typedef struct cmk_source_span {
+    CCUINT64 offset;   /* 起始字节偏移 */
+    CCUINT64 width;    /* 覆盖的字节数 */
+    CCUINT32 line;     /* 起始行，1 基 */
+    CCUINT32 col;      /* 起始字节列，1 基 */
+    CCUINT32 end_line; /* 最后一个字节所在行，1 基 */
+    CCUINT32 end_col;  /* 最后一个字节所在列，1 基（包含） */
+} CMKSourceSpan;
+
 /* 一份已装载的 .cmk 源码；path 与 data 都由本结构持有，data 末尾补 0 */
 typedef struct cmk_source {
     char *path;

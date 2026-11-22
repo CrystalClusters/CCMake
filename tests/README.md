@@ -13,6 +13,7 @@ tests/
   ccm/test_ccm_locate.c   CCM 文件检查与定位用例
   ccm/test_ccm_parse.c    CCM 内容解析用例
   cmk/test_cmk_lexer.c    CMK 词法分析用例
+  cmk/test_cmk_ast.c      CMK AST 模型用例
   vars/test_ccvar.c       全局变量树用例
   data/ccm/               CCM 用例 fixture（不参与测试程序编译）
 ```
@@ -29,6 +30,7 @@ test.bat CCM
 test.bat PARSE
 test.bat VARS
 test.bat CMK
+test.bat CMKAST
 ```
 
 ```bash
@@ -39,6 +41,7 @@ bash test.sh CCM
 bash test.sh PARSE
 bash test.sh VARS
 bash test.sh CMK
+bash test.sh CMKAST
 ```
 
 `test.bat` / `test.sh` 只检查产物是否存在并运行，不负责编译。
@@ -54,7 +57,8 @@ bash test.sh CMK
 - CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理；
 - CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键，以及值深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用；
 - 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用；
-- CMK 词法：token 序列、位置与 `offset`/`width` 边界、关键字/运算符、注释与 EOF、字符串转义与解码缓冲生命周期、空字符串、数字与指数错误位置、`@include`/`@import` 与 `@{...}` 配置引用、指令名称边界、NUL/CRLF、源码缓冲区所有权与尺寸边界、非法初始化参数、行号/列号表示上限、确定性随机字节输入健壮性。
+- CMK 词法：token 序列、位置与 `offset`/`width` 边界、关键字/运算符、注释与 EOF、字符串转义与解码缓冲生命周期、空字符串、数字与指数错误位置、`@include`/`@import` 与 `@{...}` 配置引用、指令名称边界、NUL/CRLF、源码缓冲区所有权与尺寸边界、非法初始化参数、行号/列号表示上限、确定性随机字节输入健壮性；
+- CMK AST：根节点与生命周期、文件路径/字符串复制、节点与字符串 ID 越界、父子/兄弟链接、重复挂接与祖先环拒绝、visitor 先序遍历与中断、post-parse 校验的孤儿/环/子节点类型/字符串引用/类型节点错误、函数/target/导入节点布局、类型分类，以及 `CMKLimits` 默认值。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
 

@@ -760,7 +760,13 @@ src/cmk/
   cmk_token.h
   cmk_lexer.c/h
   cmk_ast.c/h
-  cmk_parser.c/h
+  cmk_limits.c/h
+  cmk_parser.h
+  cmk_parser_internal.h
+  cmk_parser.c           Parser 公共入口、Token 缓冲、诊断、事务
+  cmk_parser_expr.c      Pratt 表达式解析
+  cmk_parser_stmt.c      语句解析
+  cmk_parser_decl.c      声明、导入、target 解析
   cmk_diagnostic.c/h
   cmk_semantic.c/h
   cmk_scope.c/h
@@ -778,11 +784,14 @@ src/cmk/
 - 构建脚本递归编译 `src/`，`src/cmk/` 无需修改构建入口；
 - 测试放 `tests/cmk/`，并加入 `scripts/build_test.*` 的测试目录；
 - 不一次性创建所有文件，按里程碑逐步落地；
-- `cmk_program` 或 `cmk_context` 是源码、AST、IR、诊断、值 arena 的根所有者。
+- `cmk_program` 或 `cmk_context` 是源码、AST、IR、诊断、值 arena 的根所有者；
+- M2 的 AST 数据模型、Parser 拆分、所有权与预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)。
 
 ## 10. 资源与失败
 
 CMK 不设置语言层的循环次数、递归次数、token 数量、AST 节点数量、目标数量或列表长度配额。
+
+Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算默认 0，只受内存约束；语法/表达式递归深度默认开启，用于保护宿主调用栈。该预算不属于语言语义限制，设为 0 即可关闭。详见 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 第 6 节。
 
 - 循环按条件执行，由脚本自身决定终止；
 - 递归使用动态调用帧，只受可用内存和宿主资源约束；
@@ -799,7 +808,7 @@ CMK 不设置语言层的循环次数、递归次数、token 数量、AST 节点
 |---|---|---|
 | M0 | 语言规范、EBNF、样例、诊断、所有权表、内建 ABI | 语法、目标模型和内建接口冻结 |
 | M1 | Lexer | Token 序列、位置、长度和错误测试 |
-| M2 | AST / Parser | 完整样例 AST golden test |
+| M2 | AST / Parser（见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)） | AST 所有权与校验、表达式优先级、完整样例 AST golden test |
 | M3 | Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误 |
 | M4 | Value / Configure 求值 | 表达式、函数、内建调用、while 可运行；不执行外部命令 |
 | M5 | Lowering / IR / Plan Validation | 生成可冻结计划，AST 可释放 |
