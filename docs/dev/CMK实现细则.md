@@ -20,7 +20,7 @@
 
 | 能力 | 决策 |
 |---|---|
-| 类型 | `int`、`float`、`bool`、`string`、`list`、`file_stat`、`action` |
+| 类型 | `int`、`float`、`bool`、`string`、`list<T>`、`action`、`target_ref` |
 | 变量 | C 风格类型声明，块作用域，可重新赋值 |
 | 函数 | 支持参数、返回值、递归 |
 | 条件 | `if` / `else if` / `else` |
@@ -43,7 +43,7 @@
 ```c
 string cc = @{toolchain.c};
 int retries = 3;
-list files = @{sources};
+list<string> files = @{sources};
 
 if (cc == "gcc") {
     string profile = "gnu";
@@ -61,10 +61,29 @@ if (cc == "gcc") {
 - `const` 变量的值不可重新赋值；
 - 变量在声明处初始化。
 
+#### 列表类型
+
+`list<T>` 是同质列表，`T` 是元素类型：
+
+```c
+list<string> args = {"-O2", "-c", "main.c"};
+list<action> actions = {mkdir("build")};
+```
+
+- 不允许裸 `list`，元素类型必须写清楚；
+- 不允许嵌套列表；
+- 空列表 `{}` 的元素类型由声明、函数返回类型或目标字段上下文确定；
+- `+` 只连接两个元素类型相同的列表；
+- `+=` 只追加一个元素，元素类型必须与列表元素类型一致；
+- 索引 `list[i]` 从 0 开始，越界在运行时报告错误；
+- `.ccm` 数组映射为同质 `list<T>`；空数组需要上下文类型，混合或嵌套数组报错；
+- `action` 只能作为值传递和存入 `list<action>`，不能直接执行；
+- `target_ref` 只用于 `depends_on`，不是普通用户变量类型。
+
 ### 2.3 函数
 
 ```c
-func compiler_flags(string profile) -> list {
+func compiler_flags(string profile) -> list<string> {
     if (profile == "release") {
         return {"-O2", "-DNDEBUG"};
     }
@@ -75,29 +94,36 @@ func compiler_flags(string profile) -> list {
 - 函数是 Turing 完备性的核心，不允许删除；
 - 支持递归；
 - 支持 `return`；
+- 返回类型必须显式声明；无返回值写 `-> void`，省略返回类型是语义错误；
+- `return;` 只能用于 `-> void`；非 void 函数的所有控制流路径都必须返回值；
 - 返回值必须被使用，或显式赋给 `_`；
+- 函数可以返回 `action` 或 `list<action>`，用于构造目标动作；
 - 函数内部不能执行外部命令，也不能声明 `target`；
 - 函数只做配置计算：读取 `@{...}`、运算、条件、循环、返回值和列表构造。
+
+`error(...)` 的类型是 `-> void`，但标记为不返回：调用后当前 Configure 控制流终止，不生成可执行 Plan。非 void 函数在 `error()` 之后的路径不需要返回值；其他路径必须返回值。
 
 ### 2.4 外部命令
 
 Configure 阶段不执行外部命令，也不创建进程。平台、工具链、架构、编译器等可以由 `.ccm` 配置变量传入，也可以由只读 `host_info` 查询系统信息；文件搜索使用 `find_files`。宿主访问仅限注册表中的只读内建：
 
 ```c
-string platform = @{platform};
+string target_platform = @{platform};
+string host_os = host_info("os");
 string cc = @{toolchain.c};
-string os = host_info("os");
 
-if (platform == "windows") {
-    list flags = {"-D_WIN32", "-O2"};
+if (target_platform == "windows") {
+    list<string> flags = {"-D_WIN32", "-O2"};
 }
 ```
+
+`target_platform` 是构建目标平台，`host_os` 是当前运行 CCMake 的主机系统；交叉编译时两者可以不同。
 
 外部命令只作为目标动作，在 Build 阶段执行：
 
 ```c
 target app() {
-    list actions = {
+    list<action> actions = {
         mkdir("build"),
         command("cc", {"-O2", "-c", "main.c", "-o", "main.o"})
     };
@@ -120,28 +146,32 @@ target app() {
 
 1. **Parser**：生成 `CMK_AST_CALL`，保存函数名、实参列表和源码位置。
 2. **Semantic**：把函数名解析为函数符号；检查实参数量、类型和返回类型；检测未定义函数。
-3. **Value Runtime**：建立调用帧，保存参数、局部变量和返回地址；返回值按值复制到调用者。
-4. **限制**：设置最大调用深度和最大帧数；超过预算报错，不依赖栈溢出。
+3. **Value Runtime**：建立调用帧，保存参数、局部变量和返回地址；返回值按值复制到调用者。调用帧存放在 Runtime 的动态数组中，不使用固定深度配额。
+4. **深度**：CMK 语言层不设递归次数上限；递归只受可用内存和宿主资源约束，分配失败返回明确诊断。
 5. **所有权**：参数和返回值使用值复制或 arena 借用；被调用函数不能释放调用者的值；返回的 list/string 由调用方持有或由 arena 统一回收。
 
 支持：
 
 ```c
-func flags(string profile) -> list {
+func flags(string profile) -> list<string> {
     if (profile == "release") {
         return {"-O2", "-DNDEBUG"};
     }
     return {"-O0", "-g"};
 }
 
+func log_flags(string profile) -> void {
+    info("profile: %s", profile);
+}
+
 target app() {
-    list actions = {
+    list<action> actions = {
         command("cc", flags(@{mode}) + {"src/main.c", "-o", "build/app"})
     };
 }
 ```
 
-- 支持递归，但受调用深度限制；
+- 支持递归，不设 CMK 层递归次数上限；
 - 不支持闭包、函数指针、匿名函数和动态调用；
 - 函数调用可以出现在顶层变量初始化、`if`/`for` 条件、目标字段和动作参数中，全部在 Configure 阶段求值；
 - 函数调用不能出现在 `target` 名或 `depends_on` 的目标引用位置，目标身份保持静态；
@@ -157,11 +187,11 @@ target app() {
 | Parser | 低 | 调用表达式与普通表达式同层 |
 | 符号解析 | 中 | 函数名、参数数量、返回类型、递归符号 |
 | 类型检查 | 中 | 实参/返回值、list 元素类型、`_` 丢弃 |
-| 调用帧 | 中 | 参数、局部变量、返回地址、递归深度 |
+| 调用帧 | 中 | 参数、局部变量、返回地址、动态帧数组 |
 | 值所有权 | 中 | 参数复制、返回值移动/复制、arena |
 | 错误传播 | 低 | 统一 `CCFALSE` + 诊断 |
 
-主要风险是递归深度和 list/string 返回值复制成本；用调用深度预算和 arena 分配控制，不引入闭包或函数指针。
+主要风险是递归的内存占用和 list/string 返回值复制成本；用动态调用帧和 arena 分配处理，不设置语言层递归配额，不引入闭包或函数指针。
 
 ### 2.6 内建函数与扩展接口
 
@@ -169,7 +199,7 @@ target app() {
 
 ```c
 int n = len(@{sources});
-list hits = find_files("*.c", {"src", "tests"});
+list<string> hits = find_files("*.c", {"src", "tests"});
 string os = host_info("os");
 ```
 
@@ -184,7 +214,7 @@ string os = host_info("os");
 | 纯计算 | `len`、`join`、`subst`、`basename`、`dirname` | Configure | 无宿主副作用 |
 | 只读查询 | `find_files`、`host_info` | Configure | 读文件系统或系统信息，不创建进程 |
 | 动作构造 | `command`、`mkdir`、`copy`、`move`、`remove` | Configure | 返回 `action`，Build 阶段执行 |
-| 诊断 | `info`、`warn`、`error` | Configure | 输出日志；`error` 终止配置 |
+| 诊断 | `info`、`warn`、`error` | Configure | 输出日志；`error` 带 `CMK_BUILTIN_NORETURN`，终止配置 |
 
 `host_info` 只接受固定键：`os`、`arch`、`cpu_count`、`path_separator`。工具链信息仍由 `.ccm` 注入，不在内建中执行编译器探测。
 
@@ -198,7 +228,8 @@ typedef enum cmk_builtin_flags {
     CMK_BUILTIN_READ_FS     = 1u << 1,
     CMK_BUILTIN_QUERY_HOST  = 1u << 2,
     CMK_BUILTIN_BUILD_ACTION = 1u << 3,
-    CMK_BUILTIN_VARIADIC    = 1u << 4
+    CMK_BUILTIN_VARIADIC    = 1u << 4,
+    CMK_BUILTIN_NORETURN    = 1u << 5
 } CMKBuiltinFlags;
 
 typedef struct cmk_builtin_arg {
@@ -315,16 +346,82 @@ static const CMKBuiltinSpec host_info_spec = {
 - 不允许内建自行创建进程；外部命令统一走 `command` 动作；
 - 输出值由 Runtime arena 分配，模块不保留跨调用指针。
 
-#### 资源限制
+#### 资源与失败
 
-- 参数数量上限；
-- 字符串结果上限；
-- `find_files` 最大结果数、最大遍历深度、最大匹配长度；
-- `host_info` 键白名单；
-- 内建调用总次数上限；
-- 错误信息长度上限。
+- 内建参数数量由签名决定，不是额外配额；
+- 结果字符串和列表由 Runtime arena 分配；内存不足返回明确诊断；
+- 不设置内建调用总次数上限；
+- `find_files` 使用已访问集合避免文件系统循环，不截断结果数量或遍历深度；
+- `host_info` 键白名单属于接口定义，不是能力限制；
+- 诊断信息动态分配，不设固定长度上限。
 
-限制在分配前检查，超限返回明确诊断。
+### 2.7 模块与导入
+
+一个 `.cmk` 文件是一个模块。模块身份是规范化后的绝对路径；同一文件通过不同相对路径或符号链接到达时，按同一模块处理。Windows 路径比较不区分大小写，POSIX 区分大小写。
+
+#### 函数导入与目标导入分离
+
+函数导入只引入函数符号，不暴露目标：
+
+```c
+@import func compile, link from "rules/compile.cmk";
+@import func compile as gcc_compile from "rules/gcc.cmk";
+```
+
+目标导入必须显式列出目标，并绑定模块别名：
+
+```c
+@import target core, utils from "targets/common.cmk" as common;
+```
+
+- 函数导入不把被导入模块的 `target` 加入当前计划；
+- 目标导入不把被导入模块的函数并入当前函数命名空间；
+- 目标通过 `别名.目标名` 引用，例如 `common.core`；
+- 目标别名在导入文件中唯一；同一模块重复使用不同别名报错；
+- 函数可以用 `as` 单独重命名；`*` 只用于函数批量导入，不用于目标；
+- 目标不支持批量导入，必须显式列出目标名。
+
+#### 模块级符号
+
+每个模块拥有自己的模块级全局变量和私有函数：
+
+- 模块级变量在模块加载时初始化一次；
+- 模块级变量只在本模块的函数和目标字段中可见；
+- 其他模块只能通过导入的函数间接使用这些变量；
+- 导入函数时，模块级变量仍按该模块的环境初始化；
+- 导入目标时，目标字段和动作参数在同一模块环境中求值。
+
+#### 目标闭包
+
+导入 `common.core` 时：
+
+- `core` 以及它在同一模块内依赖的目标自动加入计划；
+- 这些私有依赖不自动获得 `common.*` 别名；
+- 调用方只能引用显式导入的目标；
+- 跨模块依赖必须由目标所在模块自己通过 `@import target` 建立；
+- 导入目标不会自动重新导出其依赖。
+
+#### 递归与循环
+
+- 模块导入递归解析；
+- 同一模块只加载一次；
+- 直接或间接循环导入报错，错误包含完整导入链；
+- 导入循环在 Configure 阶段、目标求值之前检测；
+- 函数导入和目标导入共享同一模块加载状态，但符号暴露规则独立。
+
+#### 模块评估顺序
+
+1. 解析导入声明，建立模块依赖图；
+2. 检测循环；
+3. 按依赖顺序加载模块；
+4. 初始化模块级变量；
+5. 语义检查所有声明；
+6. 对当前选中目标闭包涉及的目标字段求值；
+7. 未导入的目标不加入计划，也不执行目标字段求值。
+
+目标身份仍由 `module + name` 组成，别名只影响源码中的引用写法，不进入稳定身份。
+
+模块表、模块级变量和模块 AST 由 Program/Context 持有；Plan 只保存复制后的目标、动作和字符串，不借用模块 AST。
 
 ## 3. 目标模型
 
@@ -334,10 +431,10 @@ static const CMKBuiltinSpec host_info_spec = {
 
 ```c
 target app() {
-    list depends_on = {core, utils};
-    list inputs = {"src/main.c"};
-    list outputs = {"build/app"};
-    list actions = {
+    list<target_ref> depends_on = {core, utils};
+    list<string> inputs = {"src/main.c"};
+    list<string> outputs = {"build/app"};
+    list<action> actions = {
         mkdir("build"),
         command("cc", {"-O2", "src/main.c", "-o", "build/app"})
     };
@@ -346,13 +443,14 @@ target app() {
 
 - `target` 是声明，不是普通表达式；
 - 目标名后使用空参数列表 `()`，表示这是一个无参数、按名字选择的构建单元；
-- 目标字段是 C 风格的 `list` 声明：`类型 名称 = { ... };`
+- 目标字段是 C 风格的 `list<T>` 声明：`list<T> 名称 = { ... };`
 - 列表字面量使用花括号 `{ ... }`，不使用方括号；
+- 目标字段类型固定为 `list<target_ref>`、`list<string>`、`list<action>`；
 - 默认目标名为 `main`；
 - `-t` 省略时选择 `main`；
 - `-t name` 选择一个目标并构建其依赖闭包；`name` 可以是根模块目标名或 `别名.目标名`；
-- 目标名在所属模块内唯一；模块导入后通过 `别名.目标名` 引用；
-- 根模块的 `main()` 是默认入口；
+- 目标名在所属模块内唯一；跨模块引用必须通过 `@import target ... as 别名`，写作 `别名.目标名`；
+- 根模块的 `main()` 是默认入口；导入模块的 `main()` 不自动成为入口；
 - 目标可以只有 `depends_on`，作为聚合目标；
 - 未知字段、重复字段、类型不匹配在语义分析阶段报错。
 
@@ -360,14 +458,14 @@ target app() {
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `depends_on` | `list` of target refs | 否 | 依赖目标 |
+| `depends_on` | `list<target_ref>` | 否 | 依赖目标 |
 | `inputs` | `list<string>` | 否 | 输入文件 |
 | `outputs` | `list<string>` | 否 | 输出文件 |
 | `actions` | `list<action>` | 否 | 按顺序执行的动作 |
 
 未知字段、重复字段、非法类型均报错。
 
-`depends_on` 的元素是目标引用，不是字符串或变量；目标引用保持静态，便于计划验证。
+`depends_on` 的元素是目标引用，不是字符串或变量；目标引用保持静态。本模块目标直接写名字，跨模块目标写 `别名.目标名`，且该目标必须已通过 `@import target` 显式导入。
 
 ### 3.3 动作
 
@@ -393,8 +491,8 @@ remove(path)
 
 ```c
 target app() {
-    list outputs = {"build/app"};
-    list actions = {
+    list<string> outputs = {"build/app"};
+    list<action> actions = {
         command("cc", {"-O2", "src/main.c", "-o", "build/app"})
     };
 }
@@ -434,7 +532,9 @@ Build
 
 - 执行配置期表达式、函数和条件；
 - 不允许执行外部命令；
-- 平台、架构、工具链信息只来自 `.ccm` 配置变量；
+- 构建配置（目标平台、工具链、编译器、编译选项）来自 `.ccm`；
+- 当前执行主机的系统信息来自只读 `host_info`；
+- 两类信息不隐式互相覆盖，交叉编译时目标平台与宿主系统分别保存；
 - 目标声明由 Plan Builder 收集；
 - 结束时生成 `CMKPlan`；
 - `CMKPlan` 冻结后不再执行脚本语句。
@@ -458,6 +558,16 @@ Build
 - Configure 不是需要用户手动执行的第二阶段，而是本次 `ccmake` 调用中的“解析与计划”阶段；
 - `-v` 输出中明确显示 Configure / Build 分界；
 - Build 阶段不重新解释脚本，不会出现 `main` 已结束又执行脚本的情况。
+
+### 4.4 错误阶段
+
+| 阶段 | 错误来源 | 结果 |
+|---|---|---|
+| Configure | `error()`、语义错误、配置缺失、计划验证失败 | 终止 Configure，不生成可执行 Plan |
+| Build | 进程退出失败、文件动作失败 | 当前目标 `FAILED`，由 Scheduler 传播 |
+| Build | 用户中断或 fail-fast 取消 | 相关目标 `CANCELLED`，终止并回收子进程 |
+
+`error()` 只在 Configure 阶段执行。Build 阶段不重新解释脚本，因此不存在脚本层 `error()` 的重复执行；Build 失败统一表示为任务状态。
 
 ## 5. IR 与所有权
 
@@ -536,8 +646,7 @@ typedef struct cmk_plan {
 - 动作参数非法；
 - 空动作聚合目标；
 - `main` 或 `-t` 目标不存在；
-- 路径非法；
-- 资源预算超限。
+- 路径非法。
 
 ## 6. Scheduler
 
@@ -601,7 +710,7 @@ void cmk_process_destroy(CMKProcess *proc);
 - 支持 Windows 与 POSIX 后端；
 - argv 直接传给 `CreateProcess` / `execvp`，不经过 shell；
 - 进程组/Job Object 负责取消时回收子进程树；
-- stdout/stderr 捕获有长度上限；
+- stdout/stderr 默认流式输出；需要捕获时由 Executor 动态缓冲，内存不足返回明确错误；
 - 退出码、信号、超时分别表示。
 
 ### 7.2 Executor 职责
@@ -671,25 +780,18 @@ src/cmk/
 - 不一次性创建所有文件，按里程碑逐步落地；
 - `cmk_program` 或 `cmk_context` 是源码、AST、IR、诊断、值 arena 的根所有者。
 
-## 10. 资源预算
+## 10. 资源与失败
 
-新增 `CMKLimits`，至少限制：
+CMK 不设置语言层的循环次数、递归次数、token 数量、AST 节点数量、目标数量或列表长度配额。
 
-- 单个 `.cmk` 字节数；
-- 总导入字节数；
-- token 数量与 token 长度；
-- AST 节点数量；
-- 函数调用深度；
-- 循环迭代次数；
-- 变量数量；
-- 目标数量；
-- 每目标依赖数、动作数；
-- 字符串/list 元素数量；
-- 进程参数数量、环境变量数量；
-- stdout/stderr 捕获上限；
-- 并发任务数。
-
-所有限制在分配前检查，错误必须明确指出限制类型。
+- 循环按条件执行，由脚本自身决定终止；
+- 递归使用动态调用帧，只受可用内存和宿主资源约束；
+- 源码、AST、目标、动作和字符串按需分配；
+- 分配失败返回明确的资源错误，不静默截断；
+- 无限循环是语言允许的程序，由用户中断或外部终止处理；
+- `find_files` 使用已访问集合避免文件系统循环，不固定截断结果；
+- stdout/stderr 默认流式处理，捕获时动态缓冲；
+- `-j` 是并发控制参数，不是语言能力限制。
 
 ## 11. 实施顺序
 

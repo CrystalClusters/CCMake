@@ -39,12 +39,12 @@ Build Context       Build Procedure
 @include "config/project.ccm";
 
 target main() {
-    list depends_on = {app};
+    list<target_ref> depends_on = {app};
 }
 
 target app() {
-    list outputs = {"hello"};
-    list actions = {
+    list<string> outputs = {"hello"};
+    list<action> actions = {
         command(@{cc}, {@{cflags}, "-o", "hello"} + @{sources})
     };
 }
@@ -102,12 +102,12 @@ int y = 2;
 | | | | |
 |---|---|---|---|
 | `string` | `int` | `bool` | `float` |
-| `list` | `action` | `target` | |
+| `list` | `action` | `target` | `target_ref` |
 | `const` | `if` | `else` | `for` |
 | `in` | `while` | `break` | `continue` |
 | `func` | `return` | `@include` | `@import` |
 | `from` | `as` | `true` | `false` |
-| `_` | | | |
+| `void` | `_` | | |
 
 ---
 
@@ -121,8 +121,9 @@ int y = 2;
 | `int` | 有符号整数 | `42` |
 | `float` | 浮点数 | `3.14` |
 | `bool` | 布尔值 | `true` / `false` |
-| `list` | 有序值列表 | `{"a", "b", "c"}` |
+| `list<T>` | 同质列表，T 为元素类型 | `list<string> files = {"a", "b"}` |
 | `action` | 目标动作 | `command("cc", {...})` |
+| `target_ref` | 静态目标引用，仅用于 `depends_on` | `core`、`common.utils` |
 
 ### 变量声明
 
@@ -131,7 +132,7 @@ string  compiler = "gcc";
 int     jobs     = 8;
 bool    verbose  = false;
 float   scale    = 2.5;
-list    files    = {"main.c", "util.c"};
+list<string> files = {"main.c", "util.c"};
 ```
 
 ### 从 CCM 取值
@@ -187,7 +188,7 @@ string first   = @{defines[0]};             // "CC_USE_VULKAN"
 ### 列表操作
 
 ```c
-list sources = {"a.c", "b.c"};
+list<string> sources = {"a.c", "b.c"};
 
 // 追加
 sources += "c.c";                    // {"a.c", "b.c", "c.c"}
@@ -201,6 +202,14 @@ string all = join(sources, ",");     // "a.c,b.c,c.c"
 // 长度
 int n = len(sources);                // 3
 ```
+
+- `list<T>` 是同质列表，元素类型必须显式声明；
+- 空列表 `{}` 的元素类型由声明、函数返回类型或目标字段上下文确定；
+- `+` 连接两个元素类型相同的列表；
+- `+=` 只追加一个元素，元素类型必须匹配；
+- 索引从 0 开始，越界在运行时报告错误；
+- 不支持嵌套列表；
+- `.ccm` 数组映射为同质 `list<T>`，空数组需要上下文类型，混合或嵌套数组报错。
 
 ---
 
@@ -231,12 +240,24 @@ int n = len(sources);                // 3
 
 #### 别名
 
-当导入的接口与本地名称冲突时，使用 `as` 重命名：
+当导入的函数与本地名称冲突时，使用 `as` 重命名：
 
 ```c
 @import func compile as gcc_compile from "rules/gcc.cmk";
 @import func compile as msvc_compile from "rules/msvc.cmk";
 ```
+
+#### 目标导入
+
+函数导入与目标导入是独立语义。目标必须显式列出并绑定模块别名：
+
+```c
+@import target core, utils from "targets/common.cmk" as common;
+```
+
+目标通过 `common.core`、`common.utils` 引用；函数导入不会暴露目标，目标导入也不会把函数并入当前函数命名空间。模块级变量和私有函数只在该模块内部可见，完整规则见 [CMK实现细则](CMK实现细则.md)。
+
+模块级变量不跨模块导出；其他模块只能通过导入的函数间接使用。
 
 ---
 
@@ -267,7 +288,7 @@ if (verbose && jobs > 4) {
 遍历列表：
 
 ```c
-list files = @{c_files};
+list<string> files = @{c_files};
 for (string src in files) {
     info("处理文件: %s", src);
 }
@@ -294,6 +315,14 @@ func 函数名(参数列表) -> 返回类型 {
 }
 ```
 
+返回类型必须显式声明。无返回值写 `-> void`，省略返回类型是语义错误。
+
+```c
+func print_info(string message) -> void {
+    info("%s", message);
+}
+```
+
 ### 参数与返回值
 
 ```c
@@ -301,21 +330,25 @@ func object_name(string src) -> string {
     return subst(src, ".c", ".o");
 }
 
-func release_flags() -> list {
+func release_flags() -> list<string> {
     return {"-O2", "-DNDEBUG"};
 }
 ```
+
+`return;` 只能用于 `-> void` 函数；非 void 函数的所有控制流路径都必须返回值。函数可以返回 `action` 或 `list<action>`，用于构造目标动作。
+
+`error()` 的类型是 `-> void`，但属于不返回函数：调用后终止 Configure，不生成可执行 Plan。
 
 ### 调用
 
 ```c
 string obj = object_name("main.c");
-list flags = release_flags();
+list<string> flags = release_flags();
 ```
 
 ### 作用域
 
-函数内部声明的变量为局部变量，外部不可见。函数可以访问全局变量和 `@{...}` 配置值。
+函数内部声明的变量为局部变量，外部不可见。函数可以访问所属模块的模块级变量和 `@{...}` 配置值。
 
 ### 入口
 
@@ -343,7 +376,7 @@ object_name("main.c");                // ❌ 编译错误：返回值未处理
 
 ## 命令执行边界
 
-Configure 阶段**不执行外部命令**。平台、工具链、架构、编译器等信息可以通过 `.ccm` 配置变量传入，也可以由只读内建 `host_info` 查询：
+Configure 阶段**不执行外部命令**。构建目标平台、工具链、编译器等信息通过 `.ccm` 配置变量传入；当前执行主机的系统信息通过只读内建 `host_info` 查询。两者不隐式互相覆盖，交叉编译时分别保存：
 
 ```text
 "platform": "windows";
@@ -353,9 +386,9 @@ Configure 阶段**不执行外部命令**。平台、工具链、架构、编译
 ```
 
 ```c
-string platform = @{platform};
-string cc       = @{toolchain.c};
-string os       = host_info("os");
+string target_platform = @{platform};
+string host_os = host_info("os");
+string cc = @{toolchain.c};
 ```
 
 ### 目标动作
@@ -364,7 +397,7 @@ string os       = host_info("os");
 
 ```c
 target app() {
-    list actions = {
+    list<action> actions = {
         mkdir("build"),
         command("cc", {"-O2", "-c", "main.c", "-o", "main.o"}),
         copy("main.o", "build/main.o")
@@ -378,6 +411,8 @@ target app() {
 - 动作参数在 Configure 阶段求值，执行发生在 Build 阶段；
 - 需要 Shell 语义时显式调用 `sh -c` / `cmd /c`，由脚本自行承担风险。
 
+Build 阶段的进程失败和文件动作失败不经过 `error()`，而是由 Scheduler 标记目标 `FAILED` 并传播到依赖目标。
+
 ---
 
 ## 内置函数库
@@ -388,11 +423,11 @@ target app() {
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
-| `find_files` | `find_files(pattern, roots) -> list` | 在只读根目录中搜索匹配文件 |
+| `find_files` | `find_files(pattern, roots) -> list<string>` | 在只读根目录中搜索匹配文件 |
 | `host_info` | `host_info(key) -> string` | 查询只读系统信息：`os`、`arch`、`cpu_count`、`path_separator` |
 
 ```c
-list sources = find_files("*.c", {"src", "tests"});
+list<string> sources = find_files("*.c", {"src", "tests"});
 string os = host_info("os");
 string cpus = host_info("cpu_count");
 ```
@@ -406,8 +441,8 @@ string cpus = host_info("cpu_count");
 | `subst` | `subst(string, from, to) -> string` | 将字符串中所有 `from` 替换为 `to` |
 | `basename` | `basename(path) -> string` | 提取路径的文件名部分 |
 | `dirname` | `dirname(path) -> string` | 提取路径的目录部分 |
-| `join` | `join(list, sep) -> string` | 将列表以分隔符拼接为字符串 |
-| `len` | `len(list) -> int` | 返回列表元素个数 |
+| `join` | `join(list<string>, sep) -> string` | 将列表以分隔符拼接为字符串 |
+| `len` | `len(list<T>) -> int` | 返回列表元素个数 |
 
 ```c
 string obj  = subst("src/main.c", ".c", ".o");   // "src/main.o"
@@ -423,7 +458,9 @@ int    n    = len(sources);                      // 3
 |------|------|------|
 | `info` | `info(fmt, args...)` | 输出信息日志 |
 | `warn` | `warn(fmt, args...)` | 输出警告日志 |
-| `error` | `error(fmt, args...)` | 输出错误日志并中止构建 |
+| `error` | `error(fmt, args...) -> void` | 输出错误诊断并终止 Configure；不生成可执行 Plan |
+
+`info`、`warn`、`error` 都是 `-> void`。`error` 标记为不返回：调用后当前 Configure 控制流结束，不会进入 Build。
 
 ```c
 info("开始构建: %s", target_name);
@@ -458,16 +495,16 @@ func object_of(string src) -> string {
     return subst(src, ".c", ".obj");
 }
 
-func compile_actions() -> list {
-    list actions = {mkdir("build")};
+func compile_actions() -> list<action> {
+    list<action> actions = {mkdir("build")};
     for (string src in @{sources}) {
         actions += command(@{toolchain.c}, {@{cflags}, "/c", src, "/Fo" + object_of(src)});
     }
     return actions;
 }
 
-func link_actions() -> list {
-    list args = {};
+func link_actions() -> list<action> {
+    list<string> args = {};
     for (string src in @{sources}) {
         args += object_of(src);
     }
@@ -476,12 +513,12 @@ func link_actions() -> list {
 }
 
 target main() {
-    list depends_on = {app};
+    list<target_ref> depends_on = {app};
 }
 
 target app() {
-    list outputs = {@{output}};
-    list actions = compile_actions() + link_actions();
+    list<string> outputs = {@{output}};
+    list<action> actions = compile_actions() + link_actions();
 }
 ```
 
@@ -503,8 +540,8 @@ target app() {
 ```c
 @include "project.ccm";
 
-func cflags() -> list {
-    list flags = @{cflags};
+func cflags() -> list<string> {
+    list<string> flags = @{cflags};
     if (@{platform} == "windows") {
         flags += "/W4";
     } else {
@@ -514,12 +551,12 @@ func cflags() -> list {
 }
 
 target main() {
-    list depends_on = {app};
+    list<target_ref> depends_on = {app};
 }
 
 target app() {
-    list outputs = {"build/app"};
-    list actions = {
+    list<string> outputs = {"build/app"};
+    list<action> actions = {
         mkdir("build"),
         command(@{toolchain.c}, cflags() + {"-c", "src/main.c", "-o", "build/main.o"}),
         command(@{toolchain.linker}, {"build/main.o", "-o", "build/app"})
@@ -533,37 +570,37 @@ target app() {
 
 ```c
 target main() {
-    list depends_on = {app, assets};
+    list<target_ref> depends_on = {app, assets};
 }
 
 target app() {
-    list depends_on = {core, main_obj};
-    list outputs = {"build/app"};
-    list actions = {
+    list<target_ref> depends_on = {core, main_obj};
+    list<string> outputs = {"build/app"};
+    list<action> actions = {
         mkdir("build"),
         command(@{toolchain.linker}, {"build/main.o", "build/core.o", "-o", "build/app"})
     };
 }
 
 target main_obj() {
-    list outputs = {"build/main.o"};
-    list actions = {
+    list<string> outputs = {"build/main.o"};
+    list<action> actions = {
         mkdir("build"),
         command(@{toolchain.c}, {@{cflags}, "-c", "src/main.c", "-o", "build/main.o"})
     };
 }
 
 target core() {
-    list outputs = {"build/core.o"};
-    list actions = {
+    list<string> outputs = {"build/core.o"};
+    list<action> actions = {
         mkdir("build"),
         command(@{toolchain.c}, {@{cflags}, "-c", "src/core.c", "-o", "build/core.o"})
     };
 }
 
 target assets() {
-    list outputs = {"build/assets.stamp"};
-    list actions = {
+    list<string> outputs = {"build/assets.stamp"};
+    list<action> actions = {
         mkdir("build"),
         copy("assets/logo.png", "build/logo.png")
     };
@@ -594,17 +631,19 @@ target assets() {
 | `int` | 整数类型 |
 | `bool` | 布尔类型 |
 | `float` | 浮点数类型 |
-| `list` | 列表类型 |
+| `list<T>` | 同质列表类型 |
 | `action` | 目标动作类型 |
 | `target` | 构建目标声明 |
+| `target_ref` | 静态目标引用类型 |
 | `const` | 常量修饰 |
 | `if` / `else` | 条件分支 |
 | `for` / `in` | 遍历循环 |
 | `while` | 条件循环 |
 | `break` / `continue` | 循环控制 |
 | `func` / `return` | 函数定义与返回 |
+| `void` | 无返回值函数的返回类型 |
 | `@include` | 导入 CCM 数据 |
-| `@import` | 导入 CMK 函数接口 |
+| `@import` | 导入 CMK 函数或目标 |
 | `from` / `as` | 导入修饰子句 |
 | `true` / `false` | 布尔字面量 |
 | `_` | 显式丢弃返回值 |
