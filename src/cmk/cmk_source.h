@@ -33,6 +33,7 @@ void cmk_source_clear(CMKSource *source);
  * 用调用方的 path / data 副本重建源码缓冲区，旧内容先释放。
  * data 只读，size 为有效字节数；内部复制并追加结尾 0，不接管调用方指针。
  * path 与 data 都不能为 NULL（data 在 size 为 0 时可传 NULL）。
+ * size 必须满足 size <= SIZE_MAX - 1；超出时返回 CCFALSE，旧内容保持不变。
  */
 CCBOOL cmk_source_set(
     CMKSource *source, const char *path,

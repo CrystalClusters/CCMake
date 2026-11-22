@@ -16,8 +16,17 @@
 
 /*
  * 单遍词法分析器。
- * file / data 为借用指针，必须在 Lexer 生命周期内保持有效；
- * 字符串解码缓冲与诊断对象由 Lexer 持有，通过 cmk_lexer_clear 释放。
+ *
+ * 输入契约：
+ *   - data == NULL 只允许与 size == 0 搭配；
+ *   - size > 0 时 data 必须指向至少 size 字节的有效内存；
+ *   - size 必须能用 size_t 表示；
+ *   - file 借用，可为 NULL 表示匿名源码；诊断输出时显示为 "(.cmk)"；
+ *   - data 借用，Lexer 不复制、不接管，必须在 Lexer 生命周期内保持有效。
+ *
+ * 初始化失败时返回 CCFALSE，Lexer 进入可预测的失败状态：
+ * 仍可调用 cmk_lexer_clear 释放，cmk_lexer_next 只会返回 CCFALSE。
+ * 常规入口使用 cmk_lexer_init_source；裸指针入口主要用于测试与特殊场景。
  */
 typedef struct cmk_lexer {
     const char *file;
@@ -32,12 +41,12 @@ typedef struct cmk_lexer {
     CCBOOL failed;
 } CMKLexer;
 
-void cmk_lexer_init(
+CCBOOL cmk_lexer_init(
     CMKLexer *lex, const char *file,
     const char *data, CCUINT64 size
 );
 
-void cmk_lexer_init_source(CMKLexer *lex, const CMKSource *source);
+CCBOOL cmk_lexer_init_source(CMKLexer *lex, const CMKSource *source);
 
 void cmk_lexer_clear(CMKLexer *lex);
 

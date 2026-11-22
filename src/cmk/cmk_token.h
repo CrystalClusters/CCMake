@@ -84,17 +84,23 @@ typedef enum {
 
 /*
  * 一个词法单元。
- * text / len 指向源码切片，不复制、不保证以 0 结尾：
- *   - 标识符、关键字：标识符自身；
+ * offset / width 始终覆盖源码中的完整词法单元：
+ *   offset 为起始字节偏移，width 为包含引号、'@'、'@{' 与 '}' 的字节宽度。
+ * text / len 指向源码切片，不复制、不保证以 0 结尾，范围按 token 类型约定：
+ *   - 标识符、关键字、数字、运算符、标点：完整词法单元；
  *   - 字符串：去掉外层双引号后的原始字节（可能含反斜杠转义）；
  *   - @include / @import：不含 '@' 的指令名；
  *   - @{...}：花括号内部原样字节。
  * string / string_len 只用于字符串：解码后的字节，借自 Lexer 的临时缓冲，
  * 在下一次 cmk_lexer_next 或 cmk_lexer_clear 前有效，可包含 0 字节。
- * line / col 从 1 开始，col 按字节计数。
+ * Parser 必须在读取到字符串 token 时立即复制到 AST 拥有的内存，不得缓存 token
+ * 序列后统一构造 AST。
+ * line / col 从 1 开始，col 按字节计数，指向完整词法单元的起点。
  */
 typedef struct cmk_token {
     CMKTokenType type;
+    CCUINT64 offset;
+    CCUINT64 width;
     const char *text;
     CCUINT32 len;
     const char *string;

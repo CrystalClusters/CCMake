@@ -12,6 +12,7 @@
 #include <ccalloc.h>
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <string.h>
 
 #define CMK_LEXER_COMMENT CC_DBG_REL_TAG(".cmk 词法分析器", NULL)
@@ -297,7 +298,41 @@ static CCBOOL lex_errorf(
     return CCFALSE;
 }
 
-static void lex_newline(CMKLexer *lex)
+static CCBOOL lex_advance_column(CMKLexer *lex)
+{
+    if (lex->col == 0xFFFFFFFFu)
+        return lex_errorf(
+            lex, lex->line, lex->col,
+            "列号超出表示上限"
+        );
+    lex->col++;
+    return CCTRUE;
+}
+
+static CCBOOL lex_advance_columns(CMKLexer *lex, CCUINT32 count)
+{
+    if (count > 0xFFFFFFFFu - lex->col)
+        return lex_errorf(
+            lex, lex->line, lex->col,
+            "列号超出表示上限"
+        );
+    lex->col += count;
+    return CCTRUE;
+}
+
+static CCBOOL lex_advance_line(CMKLexer *lex)
+{
+    if (lex->line == 0xFFFFFFFFu)
+        return lex_errorf(
+            lex, lex->line, lex->col,
+            "行号超出表示上限"
+        );
+    lex->line++;
+    lex->col = 1;
+    return CCTRUE;
+}
+
+static CCBOOL lex_newline(CMKLexer *lex)
 {
     if (lex->data[lex->pos] == '\r' &&
         lex->pos + 1 < lex->size &&
@@ -305,8 +340,7 @@ static void lex_newline(CMKLexer *lex)
         lex->pos += 2;
     else
         lex->pos++;
-    lex->line++;
-    lex->col = 1;
+    return lex_advance_line(lex);
 }
 
 /* 跳过空白与注释；块注释不嵌套 */
@@ -318,12 +352,14 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
         if (c == ' ' || c == '\t' || c == '\f' || c == '\v')
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
             continue;
         }
         if (c == '\n' || c == '\r')
         {
-            lex_newline(lex);
+            if (!lex_newline(lex))
+                return CCFALSE;
             continue;
         }
         if (c == '\0')
@@ -336,7 +372,8 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
             lex->data[lex->pos + 1] == '/')
         {
             lex->pos += 2;
-            lex->col += 2;
+            if (!lex_advance_columns(lex, 2))
+                return CCFALSE;
             while (lex->pos < lex->size &&
                    lex->data[lex->pos] != '\n' &&
                    lex->data[lex->pos] != '\r')
@@ -347,7 +384,8 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
                         "文件中包含 NUL 字节，疑似二进制文件"
                     );
                 lex->pos++;
-                lex->col++;
+                if (!lex_advance_column(lex))
+                    return CCFALSE;
             }
             continue;
         }
@@ -358,7 +396,8 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
             CCUINT32 start_line = lex->line;
             CCUINT32 start_col = lex->col;
             lex->pos += 2;
-            lex->col += 2;
+            if (!lex_advance_columns(lex, 2))
+                return CCFALSE;
             for (;;)
             {
                 if (lex->pos >= lex->size)
@@ -371,7 +410,8 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
                     lex->data[lex->pos + 1] == '/')
                 {
                     lex->pos += 2;
-                    lex->col += 2;
+                    if (!lex_advance_columns(lex, 2))
+                        return CCFALSE;
                     break;
                 }
                 if (lex->data[lex->pos] == '\0')
@@ -381,11 +421,15 @@ static CCBOOL lex_skip_trivia(CMKLexer *lex)
                     );
                 if (lex->data[lex->pos] == '\n' ||
                     lex->data[lex->pos] == '\r')
-                    lex_newline(lex);
+                {
+                    if (!lex_newline(lex))
+                        return CCFALSE;
+                }
                 else
                 {
                     lex->pos++;
-                    lex->col++;
+                    if (!lex_advance_column(lex))
+                        return CCFALSE;
                 }
             }
             continue;
@@ -406,7 +450,8 @@ static CCBOOL lex_scan_ident(CMKLexer *lex, CMKToken *token)
            lex_is_ident_continue(lex->data[lex->pos]))
     {
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
     }
 
     CCUINT64 len = lex->pos - begin;
@@ -434,18 +479,20 @@ static CCBOOL lex_scan_number(CMKLexer *lex, CMKToken *token)
         // .5 形式：小数点后必须有数字
         is_float = CCTRUE;
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
         if (lex->pos >= lex->size ||
             !lex_is_digit(lex->data[lex->pos]))
             return lex_errorf(
-                lex, token->line, token->col,
+                lex, lex->line, lex->col,
                 "数字格式非法：小数点后缺少数字"
             );
         while (lex->pos < lex->size &&
                lex_is_digit(lex->data[lex->pos]))
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
         }
     }
     else
@@ -454,19 +501,22 @@ static CCBOOL lex_scan_number(CMKLexer *lex, CMKToken *token)
                lex_is_digit(lex->data[lex->pos]))
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
         }
         if (lex->pos < lex->size && lex->data[lex->pos] == '.')
         {
             // 1. 与 1.5 都作为浮点数
             is_float = CCTRUE;
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
             while (lex->pos < lex->size &&
                    lex_is_digit(lex->data[lex->pos]))
             {
                 lex->pos++;
-                lex->col++;
+                if (!lex_advance_column(lex))
+                    return CCFALSE;
             }
         }
     }
@@ -476,25 +526,28 @@ static CCBOOL lex_scan_number(CMKLexer *lex, CMKToken *token)
     {
         is_float = CCTRUE;
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
         if (lex->pos < lex->size &&
             (lex->data[lex->pos] == '+' ||
              lex->data[lex->pos] == '-'))
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
         }
         if (lex->pos >= lex->size ||
             !lex_is_digit(lex->data[lex->pos]))
             return lex_errorf(
-                lex, token->line, token->col,
+                lex, lex->line, lex->col,
                 "数字格式非法：指数部分缺少数字"
             );
         while (lex->pos < lex->size &&
                lex_is_digit(lex->data[lex->pos]))
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
         }
     }
 
@@ -549,7 +602,8 @@ static CCBOOL lex_scan_string(CMKLexer *lex, CMKToken *token)
     CCUINT32 quote_col = lex->col;
 
     lex->pos++;
-    lex->col++;
+    if (!lex_advance_column(lex))
+        return CCFALSE;
     CCUINT64 begin = lex->pos;
 
     for (;;)
@@ -577,7 +631,8 @@ static CCBOOL lex_scan_string(CMKLexer *lex, CMKToken *token)
         if (c == '\\')
         {
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
             if (lex->pos >= lex->size)
                 return lex_errorf(
                     lex, quote_line, quote_col,
@@ -607,12 +662,14 @@ static CCBOOL lex_scan_string(CMKLexer *lex, CMKToken *token)
                 );
             }
             lex->pos++;
-            lex->col++;
+            if (!lex_advance_column(lex))
+                return CCFALSE;
             continue;
         }
 
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
     }
 
     CCUINT64 raw_len = lex->pos - begin;
@@ -691,7 +748,8 @@ static CCBOOL lex_scan_string(CMKLexer *lex, CMKToken *token)
     token->string_len = decoded;
 
     lex->pos++;
-    lex->col++;
+    if (!lex_advance_column(lex))
+        return CCFALSE;
     return CCTRUE;
 }
 
@@ -701,7 +759,8 @@ static CCBOOL lex_scan_config_ref(CMKLexer *lex, CMKToken *token)
     CCUINT32 at_col = lex->col;
 
     lex->pos += 2;
-    lex->col += 2;
+    if (!lex_advance_columns(lex, 2))
+        return CCFALSE;
     CCUINT64 begin = lex->pos;
 
     while (lex->pos < lex->size)
@@ -709,6 +768,11 @@ static CCBOOL lex_scan_config_ref(CMKLexer *lex, CMKToken *token)
         char c = lex->data[lex->pos];
         if (c == '}')
             break;
+        if (c == '\0')
+            return lex_errorf(
+                lex, lex->line, lex->col,
+                "文件中包含 NUL 字节，疑似二进制文件"
+            );
         if (c == '\n' || c == '\r')
             return lex_errorf(
                 lex, at_line, at_col,
@@ -722,7 +786,8 @@ static CCBOOL lex_scan_config_ref(CMKLexer *lex, CMKToken *token)
                 (unsigned int)(unsigned char)c
             );
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
     }
 
     if (lex->pos >= lex->size)
@@ -742,7 +807,8 @@ static CCBOOL lex_scan_config_ref(CMKLexer *lex, CMKToken *token)
     token->len = (CCUINT32)len;
 
     lex->pos++;
-    lex->col++;
+    if (!lex_advance_column(lex))
+        return CCFALSE;
     return CCTRUE;
 }
 
@@ -755,7 +821,13 @@ static CCBOOL lex_scan_at(CMKLexer *lex, CMKToken *token)
     CCUINT32 at_col = lex->col;
 
     lex->pos++;
-    lex->col++;
+    if (!lex_advance_column(lex))
+        return CCFALSE;
+    if (lex->pos < lex->size && lex->data[lex->pos] == '\0')
+        return lex_errorf(
+            lex, lex->line, lex->col,
+            "文件中包含 NUL 字节，疑似二进制文件"
+        );
     if (lex->pos >= lex->size ||
         !lex_is_ident_start(lex->data[lex->pos]))
         return lex_errorf(lex, at_line, at_col, "@ 后缺少指令名");
@@ -765,7 +837,8 @@ static CCBOOL lex_scan_at(CMKLexer *lex, CMKToken *token)
            lex_is_ident_continue(lex->data[lex->pos]))
     {
         lex->pos++;
-        lex->col++;
+        if (!lex_advance_column(lex))
+            return CCFALSE;
     }
 
     CCUINT64 len = lex->pos - begin;
@@ -943,7 +1016,8 @@ static CCBOOL lex_scan_symbol(CMKLexer *lex, CMKToken *token)
     token->text = data + pos;
     token->len = width;
     lex->pos += width;
-    lex->col += width;
+    if (!lex_advance_columns(lex, width))
+        return CCFALSE;
     return CCTRUE;
 }
 
@@ -951,32 +1025,54 @@ static CCBOOL lex_scan_symbol(CMKLexer *lex, CMKToken *token)
  * 对外接口
  * ========================================================================== */
 
-void cmk_lexer_init(
+static CCBOOL lex_init_invalid(
+    CMKLexer *lex,
+    const char *file,
+    const char *message
+)
+{
+    lex->failed = CCTRUE;
+    (void)cmk_diagnostic_set(
+        &lex->diagnostic, CMK_DIAG_ERROR,
+        file, 0, 0, "%s", message
+    );
+    return CCFALSE;
+}
+
+CCBOOL cmk_lexer_init(
     CMKLexer *lex, const char *file,
     const char *data, CCUINT64 size
 )
 {
     if (!lex)
-        return;
+        return CCFALSE;
     memset(lex, 0, sizeof(*lex));
-    lex->file = file;
-    lex->data = data;
-    lex->size = size;
     lex->line = 1;
     lex->col = 1;
     cmk_diagnostic_init(&lex->diagnostic);
+
+    if ((!data && size > 0) || size > (CCUINT64)SIZE_MAX)
+        return lex_init_invalid(
+            lex, file,
+            "词法分析器初始化参数非法：源码指针或长度无效"
+        );
+
+    lex->file = file;
+    lex->data = data;
+    lex->size = size;
+    return CCTRUE;
 }
 
-void cmk_lexer_init_source(CMKLexer *lex, const CMKSource *source)
+CCBOOL cmk_lexer_init_source(CMKLexer *lex, const CMKSource *source)
 {
     if (!lex)
-        return;
+        return CCFALSE;
     if (!source)
     {
-        cmk_lexer_init(lex, NULL, NULL, 0);
-        return;
+        (void)cmk_lexer_init(lex, NULL, NULL, 0);
+        return lex_init_invalid(lex, NULL, "源码对象为空");
     }
-    cmk_lexer_init(lex, source->path, source->data, source->size);
+    return cmk_lexer_init(lex, source->path, source->data, source->size);
 }
 
 void cmk_lexer_clear(CMKLexer *lex)
@@ -1005,6 +1101,7 @@ CCBOOL cmk_lexer_next(CMKLexer *lex, CMKToken *token)
     if (!lex_skip_trivia(lex))
         return CCFALSE;
 
+    token->offset = lex->pos;
     token->line = lex->line;
     token->col = lex->col;
 
@@ -1021,18 +1118,25 @@ CCBOOL cmk_lexer_next(CMKLexer *lex, CMKToken *token)
             "文件中包含 NUL 字节，疑似二进制文件"
         );
 
+    CCBOOL ok;
     if (lex_is_ident_start(c))
-        return lex_scan_ident(lex, token);
-    if (lex_is_digit(c))
-        return lex_scan_number(lex, token);
-    if (c == '.' && lex->pos + 1 < lex->size &&
-        lex_is_digit(lex->data[lex->pos + 1]))
-        return lex_scan_number(lex, token);
-    if (c == '"')
-        return lex_scan_string(lex, token);
-    if (c == '@')
-        return lex_scan_at(lex, token);
-    return lex_scan_symbol(lex, token);
+        ok = lex_scan_ident(lex, token);
+    else if (lex_is_digit(c))
+        ok = lex_scan_number(lex, token);
+    else if (c == '.' && lex->pos + 1 < lex->size &&
+             lex_is_digit(lex->data[lex->pos + 1]))
+        ok = lex_scan_number(lex, token);
+    else if (c == '"')
+        ok = lex_scan_string(lex, token);
+    else if (c == '@')
+        ok = lex_scan_at(lex, token);
+    else
+        ok = lex_scan_symbol(lex, token);
+
+    if (!ok)
+        return CCFALSE;
+    token->width = lex->pos - token->offset;
+    return CCTRUE;
 }
 
 const CMKDiagnostic *cmk_lexer_diagnostic(const CMKLexer *lex)

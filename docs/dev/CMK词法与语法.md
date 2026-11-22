@@ -19,7 +19,9 @@ Lexer 与 Parser 是首错终止：遇到第一个词法或语法错误立即返
 - `\n`、`\r`、`\r\n` 都按一次换行计；CRLF 作为一个换行，列号在换行后回到 1；
 - 列号按字节递增，非 ASCII 字符（如中文注释）占多个列；
 - 文件中的 NUL 字节视为二进制内容，词法阶段报错；
-- UTF-8 BOM、编码合法性由装载模块在交给 Lexer 前处理；Lexer 不主动跳过 BOM。
+- UTF-8 BOM、编码合法性由装载模块在交给 Lexer 前处理；Lexer 不主动跳过 BOM；
+- 源码长度使用 `CCUINT64`，行号与列号使用 `CCUINT32`；位置推进经过显式检查，超过表示上限时报告“行号/列号超出表示上限”，不允许回绕；
+- 文件路径可以为 NULL，表示匿名源码；诊断输出用 `(.cmk)` 代替文件路径。
 
 ## 3. 词法规则
 
@@ -94,7 +96,8 @@ exponent := ("e" | "E") ["+" | "-"] digit+
 
 - 其他转义序列是词法错误；
 - token 同时提供原始切片（`text`/`len`）与解码结果（`string`/`string_len`）；解码结果由 Lexer 持有，下一次读取前有效；
-- 字符串可按字节包含 0，长度以 `string_len` 为准。
+- 字符串可按字节包含 0，长度以 `string_len` 为准；
+- **Parser 约定**：Parser 读到字符串 token 时立即把 `string`/`string_len` 复制到 AST 节点拥有的内存；不得先缓存 token 序列、稍后再统一构造 AST，因为 Lexer 的解码缓冲会在下一次读取时被复用。
 
 ### 3.5 指令与配置引用
 
@@ -148,6 +151,27 @@ config_path := key ( "." key | "[" digit+ "]" )*
 | 指令 | `AT_INCLUDE` `AT_IMPORT` `CONFIG_REF` |
 | 标点 | `LPAREN` `RPAREN` `LBRACE` `RBRACE` `LBRACKET` `RBRACKET` `COMMA` `SEMI` `DOT` |
 | 运算符 | `PLUS` `MINUS` `STAR` `SLASH` `PERCENT` `ASSIGN` `PLUS_ASSIGN` `EQ` `NE` `LT` `GT` `LE` `GE` `AND` `OR` `NOT` `ARROW` |
+
+### 4.1 Token 字段与边界
+
+| 字段 | 含义 |
+|---|---|
+| `type` | token 类型 |
+| `offset` | 完整词法单元在源码中的起始字节偏移 |
+| `width` | 完整词法单元字节宽度，包含引号、`@`、`@{` 与 `}`；EOF 为 0 |
+| `text` / `len` | 源码切片，范围按 token 类型约定，见下表；不保证以 0 结尾 |
+| `string` / `string_len` | 仅字符串：解码后的字节，借自 Lexer |
+| `line` / `col` | 完整词法单元的起始位置，行号与字节列号从 1 开始 |
+
+`text`/`len` 不是所有 token 的完整词法单元，Parser 若需要完整源码范围必须使用 `offset`/`width`：
+
+| token | `text` / `len` 范围 | `offset` / `width` |
+|---|---|---|
+| 标识符、关键字、数字、运算符、标点 | 完整词法单元 | 完整词法单元 |
+| 字符串 `STRING` | 去掉外层双引号后的原始字节 | 包含两个引号 |
+| `@include` / `@import` | 不含 `@` 的指令名 | 包含 `@` |
+| 配置引用 `CONFIG_REF` | `{` 与 `}` 之间的路径原文 | 包含 `@{` 与 `}` |
+| `EOF` | `NULL` / 0 | 源码末尾；`width` 为 0 |
 
 ## 5. 语法
 
@@ -217,7 +241,9 @@ discard         := "_" ;
 - `assignment` 的左值目前只允许变量名与 `_`；列表元素、目标引用不是可赋值对象；
 - `for` 只有 `for-in` 形式，没有 C 的三段式 `for`；
 - 顶层 `if` 只用于选择声明；语义层限制其分支内容，语法层允许普通语句；
-- 目标体使用普通 `block`，语义层限制为四个字段的 `list<T>` 声明。
+- 目标体使用普通 `block`，语义层限制为四个字段的 `list<T>` 声明；
+- `{}` 的双重含义由 Parser 按上下文判断：Lexer 只产生 `LBRACE` / `RBRACE`，不区分代码块与列表字面量；M2 采用明确的递归下降解析，不在 Lexer 阶段消除歧义；
+- Lexer 与 Parser 都保持首错终止；M2 初期不引入多错误恢复或局部重同步，等 AST 与语义分析稳定后再评估是否需要恢复机制。
 
 ## 6. 优先级与结合性
 
@@ -260,18 +286,31 @@ M1 已落地：
 
 | 文件 | 职责 |
 |---|---|
-| `src/cmk/cmk_source.c/h` | 源码缓冲区、路径与内容的成对创建/释放、源码位置 |
-| `src/cmk/cmk_token.h` | token 类型、token 结构与类型名称 |
+| `src/cmk/cmk_source.c/h` | 源码缓冲区、路径与内容的成对创建/释放、源码位置；拒绝超出 `size_t` 的尺寸 |
+| `src/cmk/cmk_token.h` | token 类型、token 结构（含 `offset` / `width`）与类型名称 |
 | `src/cmk/cmk_diagnostic.c/h` | 诊断对象：级别、文件、行号、列号、动态消息、输出 |
-| `src/cmk/cmk_lexer.c/h` | 词法分析器：空白、注释、标识符、关键字、数字、字符串、指令、配置引用、运算符 |
+| `src/cmk/cmk_lexer.c/h` | 词法分析器：空白、注释、标识符、关键字、数字、字符串、指令、配置引用、运算符；初始化契约与位置溢出检查 |
 
 测试：
 
 | 套件 | 用例 | 覆盖 |
 |---|---|---|
-| `CMK` | `CMK-001` 至 `CMK-018` | token 序列与位置、关键字全表、运算符、注释、字符串转义、数字、指令、配置引用、`@include`/`@import` 语句、NUL、CRLF、EOF、诊断输出、源码缓冲区所有权 |
+| `CMK` | `CMK-001` 至 `CMK-027` | token 序列、位置与 `offset`/`width` 边界、关键字全表、运算符、注释与 EOF 边界、字符串转义与解码缓冲生命周期、空字符串、连续转义、数字与指数错误位置、指令名称边界、超长指令、配置引用、`@include`/`@import` 语句、NUL、CRLF、EOF、诊断输出、源码缓冲区所有权与尺寸边界、非法初始化参数、行号/列号表示上限、确定性随机字节输入健壮性 |
 
 构建脚本递归收集 `src/**/*.c`；`scripts/build_test.bat` 显式加入 `tests\cmk`，`scripts/build_test.sh` 已按目录规则收集全部测试源码。
+
+`CMK-027` 是确定性的随机字节输入测试，固定种子、固定轮数，用于保证 Lexer 在各种字节组合下不崩溃、不越界；后续可以在同一入口接 libFuzzer 做长时间覆盖引导测试。
+
+### 8.1 Lexer 输入契约
+
+| 参数 | 规则 |
+|---|---|
+| `file` | 借用；可为 NULL，表示匿名源码，诊断显示 `(.cmk)` |
+| `data` | 借用；`size == 0` 时可为 NULL，否则必须指向至少 `size` 字节的有效内存 |
+| `size` | 必须能用 `size_t` 表示；NUL 检测、长度统计与位置推进都基于该值 |
+| 生命周期 | Lexer 不复制源码；调用方保证 `file` / `data` 在 Lexer 清理前有效 |
+| 初始化失败 | 返回 `CCFALSE`，Lexer 进入可预测的失败状态：仍可 `cmk_lexer_clear`，`cmk_lexer_next` 持续返回 `CCFALSE` |
+| 常规入口 | `cmk_lexer_init_source`；裸指针入口只用于测试与特殊场景 |
 
 ## 9. 诊断
 
@@ -285,4 +324,6 @@ M1 已落地：
 - 无位置信息时只输出消息；
 - 诊断消息动态分配，不设固定长度上限；
 - Lexer 只记录诊断，由调用方决定何时输出，便于后续 Parser 在单次错误中统一打印；
-- token 数量、标识符长度、字符串长度不设语言层配额；`CCUINT32` 字段的表示上限在越界时给出明确诊断。
+- token 数量、标识符长度、字符串长度不设语言层配额；`CCUINT32` 字段的表示上限在越界时给出明确诊断；
+- 行号或列号超过 `CCUINT32` 表示范围时，诊断分别为“行号超出表示上限”“列号超出表示上限”，不允许位置回绕；
+- 源码尺寸超过 `size_t` 可表示范围时，`cmk_source_set` 返回失败，不进行分配或复制。

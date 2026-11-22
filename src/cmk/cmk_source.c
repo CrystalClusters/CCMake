@@ -11,6 +11,7 @@
 
 #include <ccalloc.h>
 
+#include <stdint.h>
 #include <string.h>
 
 #define CMK_SOURCE_COMMENT CC_DBG_REL_TAG(".cmk 源码缓冲区", NULL)
@@ -50,8 +51,8 @@ CCBOOL cmk_source_set(
 {
     if (!source || !path || (!data && size > 0))
         return CCFALSE;
-    // 结尾 0 需要额外一个字节，拒绝无法表示的尺寸
-    if (size == (CCUINT64)-1)
+    // 结尾 0 需要额外一个字节；size 必须能用 size_t 表示
+    if (size > (CCUINT64)SIZE_MAX - 1)
         return CCFALSE;
 
     char *path_copy = source_copy_string(path);
