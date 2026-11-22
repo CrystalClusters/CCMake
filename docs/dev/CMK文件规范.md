@@ -4,6 +4,8 @@
 
 `.cmk` 文件是 CCM 语言的**逻辑执行层**，用于组织构建流程——可以定义变量、编写控制流、封装函数，以及执行外部命令。语法**类似 C 语言**，无隐式行为。
 
+> 构建目标、IR、Scheduler 与 Executor 的架构见 [CMK实现细则](CMK实现细则.md)。Configure 阶段不执行外部命令，平台与工具链信息可由 `.ccm` 配置变量传入，也可通过只读内建查询；目标模式使用 `target` 声明，默认目标为 `main()`。
+
 与 `.ccm`（数据层）的关系：
 
 ```
@@ -31,23 +33,26 @@ Build Context       Build Procedure
 
 ## 快速入门
 
-最小可用的 `.cmk`：
+最小目标模式的 `.cmk`：
 
 ```c
 @include "config/project.ccm";
 
-func build() {
-    string output = @{output};
-    int ret = exec(@{cc} @{cflags} -o @{output} @{sources});
-    if (ret != 0) error("编译失败");
+target main() {
+    list depends_on = {app};
 }
 
-entry build;
+target app() {
+    list outputs = {"hello"};
+    list actions = {
+        command(@{cc}, {@{cflags}, "-o", "hello"} + @{sources})
+    };
+}
 ```
 
 搭配 `.ccm` 配置：
 
-```
+```text
 "cc": "gcc";
 "cflags": "-O2";
 "output": "./hello";
@@ -57,9 +62,11 @@ entry build;
 执行：
 
 ```bash
-ccmake -c project.ccm -f build.cmk        # 执行 entry 函数
-ccmake -c project.ccm -f build.cmk -t clean  # 执行 clean 函数
+ccmake -c project.ccm -f build.cmk        # 构建默认目标 main
+ccmake -c project.ccm -f build.cmk -t app # 构建指定目标 app
 ```
+
+> 上面的 `command(@{cc}, {...})` 中，`@{cc}` 是单值配置读取；`@{sources}` 是列表。`command` 的参数列表使用 C 风格花括号。
 
 ---
 
@@ -95,11 +102,12 @@ int y = 2;
 | | | | |
 |---|---|---|---|
 | `string` | `int` | `bool` | `float` |
-| `list` | `file_stat` | `const` | `if` |
-| `else` | `for` | `in` | `while` |
-| `break` | `continue` | `func` | `return` |
-| `entry` | `@include` | `@import` | `from` |
-| `as` | `true` | `false` | `_` |
+| `list` | `action` | `target` | |
+| `const` | `if` | `else` | `for` |
+| `in` | `while` | `break` | `continue` |
+| `func` | `return` | `@include` | `@import` |
+| `from` | `as` | `true` | `false` |
+| `_` | | | |
 
 ---
 
@@ -113,8 +121,8 @@ int y = 2;
 | `int` | 有符号整数 | `42` |
 | `float` | 浮点数 | `3.14` |
 | `bool` | 布尔值 | `true` / `false` |
-| `list` | 有序值列表 | `["a", "b", "c"]` |
-| `file_stat` | 文件状态（由 `stat()` 返回） | `stat("main.c")` |
+| `list` | 有序值列表 | `{"a", "b", "c"}` |
+| `action` | 目标动作 | `command("cc", {...})` |
 
 ### 变量声明
 
@@ -123,7 +131,7 @@ string  compiler = "gcc";
 int     jobs     = 8;
 bool    verbose  = false;
 float   scale    = 2.5;
-list    files    = ["main.c", "util.c"];
+list    files    = {"main.c", "util.c"};
 ```
 
 ### 从 CCM 取值
@@ -179,10 +187,10 @@ string first   = @{defines[0]};             // "CC_USE_VULKAN"
 ### 列表操作
 
 ```c
-list sources = ["a.c", "b.c"];
+list sources = {"a.c", "b.c"};
 
 // 追加
-sources += "c.c";                    // ["a.c", "b.c", "c.c"]
+sources += "c.c";                    // {"a.c", "b.c", "c.c"}
 
 // 索引访问
 string first = sources[0];           // "a.c"
@@ -268,17 +276,15 @@ for (string src in files) {
 ### while 循环
 
 ```c
-int retry = 3;
-while (retry > 0) {
-    int ret = exec(make test);
-    if (ret == 0) break;
-    retry = retry - 1;
+int remaining = 3;
+while (remaining > 0) {
+    remaining = remaining - 1;
 }
 ```
 
 ---
 
-## 函数与入口
+## 函数
 
 ### 函数定义
 
@@ -291,125 +297,29 @@ func 函数名(参数列表) -> 返回类型 {
 ### 参数与返回值
 
 ```c
-// 带返回值的函数
-func compile(string src) -> string {
-    string obj = subst(src, ".c", ".o");
-    int ret = exec(@{cc} @{cflags} -c @{src} -o @{obj});
-    if (ret != 0) error("编译失败: %s", src);
-    return obj;
+func object_name(string src) -> string {
+    return subst(src, ".c", ".o");
 }
 
-// 无返回值函数
-func clean() {
-    _ = exec(rm -rf ./build);
+func release_flags() -> list {
+    return {"-O2", "-DNDEBUG"};
 }
 ```
 
 ### 调用
 
 ```c
-string obj = compile("main.c");
-clean();
+string obj = object_name("main.c");
+list flags = release_flags();
 ```
 
 ### 作用域
 
 函数内部声明的变量为局部变量，外部不可见。函数可以访问全局变量和 `@{...}` 配置值。
 
-### 入口声明
+### 入口
 
-`entry` 声明当命令行未通过 `-t` 指定目标时，默认执行的函数：
-
-```c
-func build() {
-    // 主构建逻辑
-}
-
-func clean() {
-    _ = exec(rm -rf ./build);
-}
-
-entry build;   // 默认入口
-```
-
-命令行使用：
-
-```bash
-ccmake -c config.ccm -f build.cmk           # 执行 entry 函数（build）
-ccmake -c config.ccm -f build.cmk -t clean  # 执行 clean 函数
-```
-
-每个 `.cmk` 最多有一个 `entry` 声明。如果 `-t` 指定了目标但 `.cmk` 中不存在同名函数，CCMake 报错退出。
-
----
-
-## 文件状态与增量构建
-
-### stat() 函数
-
-`stat(path)` 返回一个 `file_stat` 对象，用于显式判断文件状态。CCMake 内部维护文件元信息，不依赖系统时间戳的可靠性问题。
-
-```c
-file_stat s = stat("main.c");
-```
-
-### file_stat 类型字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `.exists` | `bool` | 文件是否存在 |
-| `.size` | `int` | 文件大小（字节） |
-| `.mtime` | `int` | 最后修改时间（Unix 时间戳） |
-| `.hash` | `string` | 文件内容哈希（CCMake 维护，用于精确变更检测） |
-| `.is_newer_than(file_stat other)` | `bool` | 当前文件是否比 other 更新（比较 hash，hash 相同时退化为 mtime） |
-
-### 显式增量构建
-
-由用户自己编写判断逻辑，增量行为完全透明：
-
-```c
-func build() {
-    list objs = [];
-    for (string src in @{sources}) {
-        string obj = subst(src, ".c", ".o");
-
-        file_stat s = stat(src);
-        file_stat o = stat(obj);
-
-        // 显式判断是否需要重新编译
-        if (!o.exists || s.is_newer_than(o)) {
-            int ret = exec(@{cc} @{cflags} -c @{src} -o @{obj});
-            if (ret != 0) error("编译失败: %s", src);
-        } else {
-            info("跳过: %s (未变更)", src);
-        }
-
-        objs += obj;
-    }
-    int ret = exec(@{linker} @{objs} -o @{output});
-    if (ret != 0) error("链接失败");
-}
-```
-
-### 构建缓存
-
-`cache_get(key)` 和 `cache_set(key, val)` 使用 CCMake 维护的持久化键值缓存，跨次运行保留状态：
-
-```c
-// 记录上次构建的提交哈希
-string last_commit = cache_get("last_commit");
-string current = exec_capture(git rev-parse HEAD);
-
-if (last_commit != current) {
-    info("检测到新提交，全量重建");
-    full_rebuild();
-    cache_set("last_commit", current);
-} else {
-    incremental_build();
-}
-```
-
-缓存由 CCMake 自动持久化到构建目录下的 `.ccmake_cache` 文件中。
+构建模式默认选择目标 `main()`。`-t name` 选择其他目标并构建其依赖闭包。目标声明与选择规则见 [CMK实现细则](CMK实现细则.md)。
 
 ---
 
@@ -417,49 +327,77 @@ if (last_commit != current) {
 
 **所有有返回值的函数调用，其返回值必须显式赋给变量，否则用 `_` 丢弃。编译器对未处理的返回值报错。**
 
-这适用于所有返回非 void 的函数——无论是内置函数、外部命令还是用户自定义函数：
+这适用于所有返回非 void 的函数——包括内置函数和用户自定义函数：
 
 ```c
-int ret = exec(gcc -c main.c);        // ✅ 赋值给变量
-_ = exec(mkdir -p ./build);           // ✅ 显式丢弃
-exec(gcc -c main.c);                  // ❌ 编译错误：返回值未处理
-
 int n = len(sources);                 // ✅ 内置函数返回值必须处理
 len(sources);                         // ❌ 编译错误：返回值未处理
 
-string obj = compile("main.c");       // ✅ 用户函数返回值必须处理
-compile("main.c");                    // ❌ 编译错误：返回值未处理
+string obj = object_name("main.c");   // ✅ 用户函数返回值必须处理
+object_name("main.c");                // ❌ 编译错误：返回值未处理
 ```
 
-> 唯一例外：`info`、`warn`、`error`、`cache_set` 无返回值，可不赋值直接调用。
+> 唯一例外：`info`、`warn`、`error` 无返回值，可不赋值直接调用。
 
 ---
 
-## 外部命令执行
+## 命令执行边界
 
-### exec — 执行命令，返回退出码
+Configure 阶段**不执行外部命令**。平台、工具链、架构、编译器等信息可以通过 `.ccm` 配置变量传入，也可以由只读内建 `host_info` 查询：
+
+```text
+"platform": "windows";
+"toolchain": {
+    "c": "cl"
+};
+```
 
 ```c
-int ret = exec(gcc -c main.c -o main.o);
-if (ret != 0) {
-    error("编译失败，退出码: %d", ret);
+string platform = @{platform};
+string cc       = @{toolchain.c};
+string os       = host_info("os");
+```
+
+### 目标动作
+
+外部命令只能作为目标动作，在 Build 阶段由 Executor 执行：
+
+```c
+target app() {
+    list actions = {
+        mkdir("build"),
+        command("cc", {"-O2", "-c", "main.c", "-o", "main.o"}),
+        copy("main.o", "build/main.o")
+    };
 }
 ```
 
-stdout 和 stderr 正常输出到终端。
-
-### exec_capture — 捕获 stdout
-
-```c
-string ver = exec_capture(gcc --version);
-info("编译器版本: %s", ver);
-```
-
-stderr 正常输出到终端。
+- `command` 接收 program + args 列表，不经过 shell；
+- `args` 使用 C 风格花括号列表；
+- `mkdir` / `copy` / `move` / `remove` 执行文件动作；
+- 动作参数在 Configure 阶段求值，执行发生在 Build 阶段；
+- 需要 Shell 语义时显式调用 `sh -c` / `cmd /c`，由脚本自行承担风险。
 
 ---
 
 ## 内置函数库
+
+内建函数与用户函数使用相同的调用语法；统一签名、注册和扩展接口见 [CMK实现细则](CMK实现细则.md)。
+
+### 文件与系统查询
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `find_files` | `find_files(pattern, roots) -> list` | 在只读根目录中搜索匹配文件 |
+| `host_info` | `host_info(key) -> string` | 查询只读系统信息：`os`、`arch`、`cpu_count`、`path_separator` |
+
+```c
+list sources = find_files("*.c", {"src", "tests"});
+string os = host_info("os");
+string cpus = host_info("cpu_count");
+```
+
+`find_files` 只读、结果去重并排序；`host_info` 不接受任意键，不创建进程。
 
 ### 字符串操作
 
@@ -473,29 +411,10 @@ stderr 正常输出到终端。
 
 ```c
 string obj  = subst("src/main.c", ".c", ".o");   // "src/main.o"
-string name = basename("/path/to/file.c");        // "file.c"
-string dir  = dirname("/path/to/file.c");         // "/path/to"
-string all  = join(["a", "b", "c"], ", ");        // "a, b, c"
-int    n    = len(sources);                        // 3
-```
-
-### 文件系统
-
-| 函数 | 签名 | 说明 |
-|------|------|------|
-| `stat` | `stat(path) -> file_stat` | 获取文件状态对象 |
-| `cache_get` | `cache_get(key) -> string` | 从构建缓存读取值 |
-| `cache_set` | `cache_set(key, val)` | 写入构建缓存 |
-
-### 环境
-
-| 函数 | 签名 | 说明 |
-|------|------|------|
-| `env` | `env(name) -> string` | 读取系统环境变量 |
-
-```c
-string home = env("HOME");
-string path = env("PATH");
+string name = basename("/path/to/file.c");       // "file.c"
+string dir  = dirname("/path/to/file.c");        // "/path/to"
+string all  = join({"a", "b", "c"}, ", ");       // "a, b, c"
+int    n    = len(sources);                      // 3
 ```
 
 ### 日志
@@ -521,9 +440,12 @@ error("配置文件缺失: %s", config_path);
 **project.ccm**
 
 ```
-"cc": "gcc";
-"cflags": "-O2 -Wall";
-"output": "./build/hello";
+"platform": "windows";
+"toolchain": {
+    "c": "cl"
+};
+"cflags": {"-O2", "-W4"};
+"output": "./build/hello.exe";
 "sources": ${find ./src -include *.c};
 ```
 
@@ -532,155 +454,121 @@ error("配置文件缺失: %s", config_path);
 ```c
 @include "project.ccm";
 
-func compile(string src) -> string {
-    string obj = subst(src, ".c", ".o");
-
-    file_stat s = stat(src);
-    file_stat o = stat(obj);
-
-    if (!o.exists || s.is_newer_than(o)) {
-        info("编译: %s -> %s", src, obj);
-        int ret = exec(@{cc} @{cflags} -c @{src} -o @{obj});
-        if (ret != 0) error("编译失败: %s", src);
-    } else {
-        info("跳过: %s (未变更)", src);
-    }
-
-    return obj;
+func object_of(string src) -> string {
+    return subst(src, ".c", ".obj");
 }
 
-func build() {
-    list objs = [];
+func compile_actions() -> list {
+    list actions = {mkdir("build")};
     for (string src in @{sources}) {
-        objs += compile(src);
+        actions += command(@{toolchain.c}, {@{cflags}, "/c", src, "/Fo" + object_of(src)});
     }
-
-    int ret = exec(@{cc} @{objs} -o @{output});
-    if (ret != 0) error("链接失败");
-
-    info("构建完成: %s", @{output});
+    return actions;
 }
 
-func clean() {
-    _ = exec(rm -rf ./build);
+func link_actions() -> list {
+    list args = {};
+    for (string src in @{sources}) {
+        args += object_of(src);
+    }
+    args += {"/Fe" + @{output}};
+    return {command(@{toolchain.c}, args)};
 }
 
-entry build;
+target main() {
+    list depends_on = {app};
+}
+
+target app() {
+    list outputs = {@{output}};
+    list actions = compile_actions() + link_actions();
+}
 ```
 
-### 示例 2：多平台项目 + 构建缓存
+### 示例 2：多平台目标
 
-**rules/compile.cmk**（可复用编译逻辑）
+**project.ccm**
 
-```c
-func compile_c(string src, string obj) -> bool {
-    file_stat s = stat(src);
-    file_stat o = stat(obj);
-
-    if (!o.exists || s.is_newer_than(o)) {
-        info("编译: %s", src);
-        int ret = exec(@{toolchain.cc} @{cflags} -c @{src} -o @{obj});
-        if (ret != 0) {
-            error("编译失败: %s", src);
-            return false;
-        }
-        return true;
-    }
-
-    info("跳过: %s (未变更)", src);
-    return true;
-}
-
-func obj_path(string src) -> string {
-    return @{build_dir} + "/" + basename(subst(src, ".", "_")) + ".o";
-}
+```
+"platform": "linux";
+"toolchain": {
+    "c": "cc",
+    "linker": "cc"
+};
+"cflags": {"-O2", "-Wall"};
 ```
 
 **build.cmk**
 
 ```c
-@include "config/linux.ccm";
+@include "project.ccm";
 
-@import func compile_c from "rules/compile.cmk";
-@import func obj_path  from "rules/compile.cmk";
-
-string build_dir = "./build";
-
-func build() {
-    // 确保输出目录存在
-    _ = exec(mkdir -p @{build_dir});
-
-    list objs = [];
-    for (string src in @{sources}) {
-        string obj = obj_path(src);
-        if (compile_c(src, obj)) {
-            objs += obj;
-        }
-    }
-
-    int ret = exec(@{toolchain.linker} @{objs} -o @{build_dir}/@{project} -l@{libs});
-    if (ret != 0) error("链接失败");
-
-    info("构建成功: %s/%s", @{build_dir}, @{project});
-}
-
-func clean() {
-    _ = exec(rm -rf @{build_dir});
-    info("清理完成");
-}
-
-// 结合构建缓存的全量/增量开关
-func smart_build() {
-    string last_hash = cache_get("src_hash");
-
-    // 简单哈希判断（用户可自定义更精细的策略）
-    string current_hash = exec_capture(cat @{sources} | md5sum);
-
-    if (last_hash != current_hash) {
-        clean();
-        build();
-        cache_set("src_hash", current_hash);
+func cflags() -> list {
+    list flags = @{cflags};
+    if (@{platform} == "windows") {
+        flags += "/W4";
     } else {
-        info("源码未变更，跳过构建");
+        flags += "-Wextra";
     }
+    return flags;
 }
 
-entry smart_build;
+target main() {
+    list depends_on = {app};
+}
+
+target app() {
+    list outputs = {"build/app"};
+    list actions = {
+        mkdir("build"),
+        command(@{toolchain.c}, cflags() + {"-c", "src/main.c", "-o", "build/main.o"}),
+        command(@{toolchain.linker}, {"build/main.o", "-o", "build/app"})
+    };
+}
 ```
 
-### 示例 3：自定义自动化任务
+条件只影响动作和参数，不改变目标身份。
+
+### 示例 3：聚合目标
 
 ```c
-@include "config/release.ccm";
-
-func package() {
-    _ = exec(mkdir -p @{package_dir});
-
-    for (string asset in @{assets}) {
-        string dest = @{package_dir} + "/" + basename(asset);
-        int ret = exec(cp @{asset} @{dest});
-        if (ret != 0) warn("打包失败: %s", asset);
-    }
-
-    int ret = exec(tar -czf @{package_name}.tar.gz -C @{package_dir} .);
-    if (ret != 0) error("打包失败");
-    info("打包完成: %s.tar.gz", @{package_name});
+target main() {
+    list depends_on = {app, assets};
 }
 
-func deploy() {
-    int ret = exec(scp @{package_name}.tar.gz user@server:/deploy/);
-    if (ret != 0) error("上传失败");
-
-    ret = exec(ssh user@server "cd /deploy && tar -xzf @{package_name}.tar.gz");
-    if (ret != 0) error("部署失败");
-
-    info("部署完成");
+target app() {
+    list depends_on = {core, main_obj};
+    list outputs = {"build/app"};
+    list actions = {
+        mkdir("build"),
+        command(@{toolchain.linker}, {"build/main.o", "build/core.o", "-o", "build/app"})
+    };
 }
 
-entry package;
+target main_obj() {
+    list outputs = {"build/main.o"};
+    list actions = {
+        mkdir("build"),
+        command(@{toolchain.c}, {@{cflags}, "-c", "src/main.c", "-o", "build/main.o"})
+    };
+}
+
+target core() {
+    list outputs = {"build/core.o"};
+    list actions = {
+        mkdir("build"),
+        command(@{toolchain.c}, {@{cflags}, "-c", "src/core.c", "-o", "build/core.o"})
+    };
+}
+
+target assets() {
+    list outputs = {"build/assets.stamp"};
+    list actions = {
+        mkdir("build"),
+        copy("assets/logo.png", "build/logo.png")
+    };
+}
 ```
-
----
 
 ## 附录
 
@@ -696,8 +584,7 @@ entry package;
 | 注释 | `//` + `/* */` | `//` + `/* */` |
 | 类型 | 自动推断 | 显式声明 |
 | 控制流 | 无 | `if` / `for` / `while` |
-| 外部命令 | 不可用 | `exec` / `exec_capture`（返回值必须处理） |
-| 增量构建 | — | `stat()` + `if` 显式判断 |
+| 外部命令 | 不可用 | `command` 目标动作（Build 阶段执行） |
 
 ### 关键字速查
 
@@ -708,14 +595,14 @@ entry package;
 | `bool` | 布尔类型 |
 | `float` | 浮点数类型 |
 | `list` | 列表类型 |
-| `file_stat` | 文件状态类型（`stat()` 返回值） |
+| `action` | 目标动作类型 |
+| `target` | 构建目标声明 |
 | `const` | 常量修饰 |
 | `if` / `else` | 条件分支 |
 | `for` / `in` | 遍历循环 |
 | `while` | 条件循环 |
 | `break` / `continue` | 循环控制 |
 | `func` / `return` | 函数定义与返回 |
-| `entry` | 默认入口函数声明 |
 | `@include` | 导入 CCM 数据 |
 | `@import` | 导入 CMK 函数接口 |
 | `from` / `as` | 导入修饰子句 |
@@ -730,11 +617,7 @@ entry package;
 
 **Q：增量构建怎么做？**
 
-使用 `stat()` 获取源文件和目标文件的状态，通过 `if` 显式判断是否需要重新编译。也可以用 `cache_get/set` 实现更复杂的增量策略。
-
-**Q：`file_stat.is_newer_than()` 比较的是什么？**
-
-优先比较内容哈希（CCMake 内部维护），哈希相同时退化为比较 `mtime`。这比单纯依赖文件系统时间戳更可靠。
+由 Build 引擎的增量模块负责。脚本声明目标的 `inputs`、`outputs` 和 `actions`，引擎根据输入、输出、命令、配置和依赖结果计算签名；脚本不自行判断是否需要重新编译。
 
 **Q：怎样复用其他 `.cmk` 中的函数？**
 
