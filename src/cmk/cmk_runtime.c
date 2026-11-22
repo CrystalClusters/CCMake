@@ -2145,6 +2145,35 @@ static CCBOOL rt_eval_block(
 }
 #endif
 
+static CCBOOL rt_var_decl_apply(
+    CMKRuntime *runtime, CMKASTNodeId id, CMKEnv *env,
+    CMKValue *value
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node || node->kind != CMK_AST_VAR_DECL)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "内部错误：变量声明");
+    }
+
+    CCUINT32 name_len = 0;
+    const char *name = cmk_ast_string(
+        runtime->semantic->ast, node->as.var_decl.name, &name_len
+    );
+    CCBOOL ok = name && env_define(
+        runtime, env, name, name_len, value,
+        node->as.var_decl.is_const, id
+    );
+    if (!ok && !name)
+        ok = rt_error(runtime, id, "变量名无效");
+    if (!ok && name && !cmk_diagnostic_has(runtime->diagnostic))
+        ok = rt_error(runtime, id, "变量 %s 初始化失败", name);
+    cmk_value_clear(value);
+    return ok;
+}
+
 static CCBOOL rt_eval_var_decl(
     CMKRuntime *runtime, CMKASTNodeId id, CMKEnv *env
 )
@@ -2172,19 +2201,96 @@ static CCBOOL rt_eval_var_decl(
         return CCFALSE;
     }
 
+    return rt_var_decl_apply(runtime, id, env, &value);
+}
+
+static CCBOOL rt_assign_apply(
+    CMKRuntime *runtime, CMKASTNodeId id, CMKEnv *env,
+    CMKValue *value
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node || node->kind != CMK_AST_ASSIGN)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "内部错误：赋值语句");
+    }
+    CMKASTNodeId target_id = node->first_child;
+    const CMKASTNode *target =
+        cmk_ast_node(runtime->semantic->ast, target_id);
+    if (!target)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "赋值目标缺失");
+    }
+    if (target->kind == CMK_AST_DISCARD)
+    {
+        cmk_value_clear(value);
+        return CCTRUE;
+    }
+    if (target->kind != CMK_AST_IDENT)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "赋值目标非法");
+    }
+
     CCUINT32 name_len = 0;
     const char *name = cmk_ast_string(
-        runtime->semantic->ast, node->as.var_decl.name, &name_len
+        runtime->semantic->ast, target->as.ident.name, &name_len
     );
-    CCBOOL ok = name && env_define(
-        runtime, env, name, name_len, &value,
-        node->as.var_decl.is_const, id
-    );
-    if (!ok && !name)
-        ok = rt_error(runtime, id, "变量名无效");
-    if (!ok && name && !cmk_diagnostic_has(runtime->diagnostic))
-        ok = rt_error(runtime, id, "变量 %s 初始化失败", name);
-    cmk_value_clear(&value);
+    if (!name)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "变量名无效");
+    }
+    CMKEnvVar *slot = env_slot(env, name, name_len);
+    if (!slot)
+    {
+        cmk_value_clear(value);
+        return rt_error(runtime, id, "未定义的变量：%.*s", (int)name_len, name);
+    }
+    if (slot->is_const)
+    {
+        cmk_value_clear(value);
+        return rt_error(
+            runtime, id, "const 变量不能重新赋值：%.*s",
+            (int)name_len, name
+        );
+    }
+
+    CCBOOL ok = CCFALSE;
+    if (node->as.assign.op == CMK_ASSIGN_SET)
+    {
+        ok = cmk_value_copy(&slot->value, value);
+        if (!ok)
+            ok = rt_error(runtime, id, "值复制失败");
+    }
+    else if (slot->value.type == CMK_VALUE_LIST)
+    {
+        if (value->type != slot->value.as.list->element_type)
+            ok = rt_error(runtime, id, "list += 元素类型不匹配");
+        else
+            ok = cmk_list_append(slot->value.as.list, value)
+                ? CCTRUE : rt_error(runtime, id, "list += 追加失败");
+    }
+    else if (slot->value.type == CMK_VALUE_INT && value->type == CMK_VALUE_INT)
+    {
+        CCINT64 sum = 0;
+        if (!int_add(slot->value.as.integer, value->as.integer, &sum))
+            ok = rt_error(runtime, id, "整数 += 溢出");
+        else
+            ok = cmk_value_set_int(&slot->value, sum);
+    }
+    else if (slot->value.type == CMK_VALUE_FLOAT &&
+             value->type == CMK_VALUE_FLOAT)
+        ok = cmk_value_set_float(
+            &slot->value, slot->value.as.floating + value->as.floating
+        );
+    else
+        ok = rt_error(runtime, id, "+= 类型不受支持");
+
+    cmk_value_clear(value);
     return ok;
 }
 
@@ -2212,74 +2318,7 @@ static CCBOOL rt_eval_assign(
         return CCFALSE;
     }
 
-    if (target->kind == CMK_AST_DISCARD)
-    {
-        cmk_value_clear(&value);
-        return CCTRUE;
-    }
-    if (target->kind != CMK_AST_IDENT)
-    {
-        cmk_value_clear(&value);
-        return rt_error(runtime, id, "赋值目标非法");
-    }
-
-    CCUINT32 name_len = 0;
-    const char *name = cmk_ast_string(
-        runtime->semantic->ast, target->as.ident.name, &name_len
-    );
-    if (!name)
-    {
-        cmk_value_clear(&value);
-        return rt_error(runtime, id, "变量名无效");
-    }
-    CMKEnvVar *slot = env_slot(env, name, name_len);
-    if (!slot)
-    {
-        cmk_value_clear(&value);
-        return rt_error(runtime, id, "未定义的变量：%.*s", (int)name_len, name);
-    }
-    if (slot->is_const)
-    {
-        cmk_value_clear(&value);
-        return rt_error(
-            runtime, id, "const 变量不能重新赋值：%.*s",
-            (int)name_len, name
-        );
-    }
-
-    CCBOOL ok = CCFALSE;
-    if (node->as.assign.op == CMK_ASSIGN_SET)
-    {
-        ok = cmk_value_copy(&slot->value, &value);
-        if (!ok)
-            ok = rt_error(runtime, id, "值复制失败");
-    }
-    else if (slot->value.type == CMK_VALUE_LIST)
-    {
-        if (value.type != slot->value.as.list->element_type)
-            ok = rt_error(runtime, id, "list += 元素类型不匹配");
-        else
-            ok = cmk_list_append(slot->value.as.list, &value)
-                ? CCTRUE : rt_error(runtime, id, "list += 追加失败");
-    }
-    else if (slot->value.type == CMK_VALUE_INT && value.type == CMK_VALUE_INT)
-    {
-        CCINT64 sum = 0;
-        if (!int_add(slot->value.as.integer, value.as.integer, &sum))
-            ok = rt_error(runtime, id, "整数 += 溢出");
-        else
-            ok = cmk_value_set_int(&slot->value, sum);
-    }
-    else if (slot->value.type == CMK_VALUE_FLOAT &&
-             value.type == CMK_VALUE_FLOAT)
-        ok = cmk_value_set_float(
-            &slot->value, slot->value.as.floating + value.as.floating
-        );
-    else
-        ok = rt_error(runtime, id, "+= 类型不受支持");
-
-    cmk_value_clear(&value);
-    return ok;
+    return rt_assign_apply(runtime, id, env, &value);
 }
 
 typedef enum cmk_rt_frame_kind {
@@ -4227,7 +4266,1589 @@ static CCBOOL rt_call_activation(
     return CCTRUE;
 }
 
-static CCBOOL cmk_runtime_call_function_inner(
+#if 0
+static CCBOOL rt_ast_has_loop(
+    CMKRuntime *runtime, CMKASTNodeId root, CCBOOL *has_loop
+)
+{
+    *has_loop = CCFALSE;
+    CCDyn stack;
+    memset(&stack, 0, sizeof(stack));
+    if (!cmk_dyn_push(
+            &stack, (CCUINT32)sizeof(CMKASTNodeId),
+            (CCINT32)sizeof(CMKASTNodeId), &root
+        ))
+        return rt_error(runtime, root, "内存分配失败");
+
+    while (stack.size >= (CCUINT32)sizeof(CMKASTNodeId))
+    {
+        CMKASTNodeId id = CMK_AST_NODE_NIL;
+        if (cc_dyn_core_pop(
+                &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                (CCINT32)sizeof(CMKASTNodeId), &id
+            ) != 0)
+            break;
+        const CMKASTNode *node =
+            cmk_ast_node(runtime->semantic->ast, id);
+        if (!node)
+            continue;
+        if (node->kind == CMK_AST_WHILE || node->kind == CMK_AST_FOR_IN)
+        {
+            *has_loop = CCTRUE;
+            if (stack.array)
+                ccalloc(stack.array, 0, NULL);
+            return CCTRUE;
+        }
+        for (CMKASTNodeId child = node->first_child;
+             child != CMK_AST_NODE_NIL;)
+        {
+            if (!cmk_dyn_push(
+                    &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                    (CCINT32)sizeof(CMKASTNodeId), &child
+                ))
+            {
+                if (stack.array)
+                    ccalloc(stack.array, 0, NULL);
+                return rt_error(runtime, child, "内存分配失败");
+            }
+            const CMKASTNode *child_node =
+                cmk_ast_node(runtime->semantic->ast, child);
+            child = child_node
+                ? child_node->next_sibling : CMK_AST_NODE_NIL;
+        }
+    }
+    if (stack.array)
+        ccalloc(stack.array, 0, NULL);
+    return CCTRUE;
+}
+
+#endif
+
+typedef enum cmk_script_frame_kind {
+    CMK_SCRIPT_BLOCK = 0,
+    CMK_SCRIPT_IF,
+    CMK_SCRIPT_WHILE,
+    CMK_SCRIPT_FOR,
+    CMK_SCRIPT_SIMPLE
+} CMKScriptFrameKind;
+
+typedef enum cmk_script_flow {
+    CMK_SCRIPT_FLOW_NORMAL = 0,
+    CMK_SCRIPT_FLOW_BREAK,
+    CMK_SCRIPT_FLOW_CONTINUE
+} CMKScriptFlow;
+
+typedef struct cmk_script_frame {
+    CMKScriptFrameKind kind;
+    CMKASTNodeId id;
+    CMKEnv *env;
+    CCBOOL owns_env;
+    CMKEnv *loop_env;
+    CMKASTNodeId next;
+    CCUINT32 stage;
+    CMKASTNodeId body;
+    CMKValue iterable;
+    const char *name;
+    CCUINT32 name_len;
+    CCUINT32 index;
+    CCUINT32 count;
+} CMKScriptFrame;
+
+typedef struct cmk_script {
+    CMKRuntime *runtime;
+    const CMKFunctionInfo *function;
+    CMKEnv *env;
+    CCDyn frames;
+    CMKExecResult result;
+    CMKExprProgram *pending;
+    const CMKFunctionInfo *call_function;
+    CMKValue *call_args;
+    CCUINT32 call_argc;
+    CMKScriptFlow flow;
+    CCBOOL done;
+} CMKScript;
+
+static CMKScriptFrame *rt_script_top(CMKScript *script)
+{
+    if (!script || script->frames.size < (CCUINT32)sizeof(CMKScriptFrame))
+        return NULL;
+    return &((CMKScriptFrame *)script->frames.array)
+        [script->frames.size / (CCUINT32)sizeof(CMKScriptFrame) - 1];
+}
+
+static void rt_script_frame_clear(CMKScriptFrame *frame)
+{
+    if (!frame)
+        return;
+    cmk_value_clear(&frame->iterable);
+    if (frame->loop_env)
+        env_destroy(frame->loop_env);
+    if (frame->owns_env && frame->env)
+        env_destroy(frame->env);
+    memset(frame, 0, sizeof(*frame));
+}
+
+static void rt_script_clear(CMKScript *script)
+{
+    if (!script)
+        return;
+    CMKScriptFrame *frames = (CMKScriptFrame *)script->frames.array;
+    CCUINT32 count = script->frames.size /
+        (CCUINT32)sizeof(CMKScriptFrame);
+    for (CCUINT32 i = 0; i < count; i++)
+        rt_script_frame_clear(&frames[i]);
+    if (script->frames.array)
+        ccalloc(script->frames.array, 0, NULL);
+    if (script->pending)
+    {
+        rt_expr_program_clear(script->pending);
+        ccalloc(script->pending, 0, NULL);
+        script->pending = NULL;
+    }
+    rt_call_args_clear(script->call_args, script->call_argc);
+    script->call_args = NULL;
+    script->call_argc = 0;
+    exec_result_clear(&script->result);
+    if (script->env)
+        env_destroy(script->env);
+    memset(script, 0, sizeof(*script));
+}
+
+static CCBOOL rt_script_push_frame(
+    CMKRuntime *runtime, CMKScript *script,
+    CMKScriptFrameKind kind, CMKASTNodeId id,
+    CMKEnv *env, CCBOOL owns_env, CMKASTNodeId next
+)
+{
+    CMKScriptFrame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.kind = kind;
+    frame.id = id;
+    frame.env = env;
+    frame.owns_env = owns_env;
+    frame.next = next;
+    if (!cmk_dyn_push(
+            &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+            (CCINT32)sizeof(CMKScriptFrame), &frame
+        ))
+        return rt_error(runtime, id, "内存分配失败");
+    return CCTRUE;
+}
+
+typedef enum cmk_script_status {
+    CMK_SCRIPT_RUN = 0,
+    CMK_SCRIPT_WAIT,
+    CMK_SCRIPT_DONE,
+    CMK_SCRIPT_ERROR
+} CMKScriptStatus;
+
+static CMKASTNodeId rt_script_child(
+    CMKRuntime *runtime, CMKASTNodeId id, CCUINT32 index
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node)
+        return CMK_AST_NODE_NIL;
+    CMKASTNodeId child = node->first_child;
+    for (CCUINT32 i = 0; i < index && child != CMK_AST_NODE_NIL; i++)
+    {
+        const CMKASTNode *child_node =
+            cmk_ast_node(runtime->semantic->ast, child);
+        child = child_node ? child_node->next_sibling : CMK_AST_NODE_NIL;
+    }
+    return child;
+}
+
+static CMKASTNodeId rt_script_var_init(
+    CMKRuntime *runtime, CMKASTNodeId id
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node)
+        return CMK_AST_NODE_NIL;
+    CMKASTNodeId child = node->first_child;
+    for (CCUINT32 i = 0; i < 1 && child != CMK_AST_NODE_NIL; i++)
+    {
+        const CMKASTNode *child_node =
+            cmk_ast_node(runtime->semantic->ast, child);
+        child = child_node ? child_node->next_sibling : CMK_AST_NODE_NIL;
+    }
+    return child;
+}
+
+static CMKASTNodeId rt_script_assign_value(
+    CMKRuntime *runtime, CMKASTNodeId id
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node)
+        return CMK_AST_NODE_NIL;
+    CMKASTNodeId target = node->first_child;
+    const CMKASTNode *target_node =
+        cmk_ast_node(runtime->semantic->ast, target);
+    return target_node ? target_node->next_sibling : CMK_AST_NODE_NIL;
+}
+
+static CCBOOL rt_script_push_statement(
+    CMKRuntime *runtime, CMKScript *script,
+    CMKASTNodeId id, CMKEnv *env
+);
+
+static CMKScriptStatus rt_script_start_expr(
+    CMKScript *script, CMKASTNodeId expr_id,
+    CMKEnv *env, CMKValue *out
+)
+{
+    if (expr_id == CMK_AST_NODE_NIL)
+    {
+        cmk_value_init(out);
+        return CMK_SCRIPT_RUN;
+    }
+
+    CCBOOL has_call = CCFALSE;
+    if (!rt_expr_scan_user_call(script->runtime, expr_id, &has_call))
+        return CMK_SCRIPT_ERROR;
+    if (!has_call)
+    {
+        cmk_value_init(out);
+        return rt_eval_expr(
+            script->runtime, expr_id, env, out
+        ) ? CMK_SCRIPT_RUN : CMK_SCRIPT_ERROR;
+    }
+
+    CMKExprProgram *program = ccalloc(
+        NULL, sizeof(CMKExprProgram), CMK_RT_COMMENT
+    );
+    if (!program)
+    {
+        (void)rt_error(
+            script->runtime, expr_id, "内存分配失败"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    memset(program, 0, sizeof(*program));
+    program->env = env;
+    if (!rt_compile_expr(script->runtime, expr_id, &program->insns))
+    {
+        rt_expr_program_clear(program);
+        ccalloc(program, 0, NULL);
+        return CMK_SCRIPT_ERROR;
+    }
+
+    const CMKFunctionInfo *call_function = NULL;
+    CMKValue *call_args = NULL;
+    CCUINT32 call_argc = 0;
+    CCBOOL suspended = CCFALSE;
+    cmk_value_init(out);
+    if (!rt_expr_program_run(
+            script->runtime, program, NULL, &call_function,
+            &call_args, &call_argc, out, &suspended
+        ))
+    {
+        rt_expr_program_clear(program);
+        ccalloc(program, 0, NULL);
+        return CMK_SCRIPT_ERROR;
+    }
+    if (suspended)
+    {
+        script->pending = program;
+        script->call_function = call_function;
+        script->call_args = call_args;
+        script->call_argc = call_argc;
+        return CMK_SCRIPT_WAIT;
+    }
+    rt_expr_program_clear(program);
+    ccalloc(program, 0, NULL);
+    return CMK_SCRIPT_RUN;
+}
+
+static CMKScriptStatus rt_script_resume_expr(
+    CMKScript *script, CMKValue *value, CMKValue *out
+)
+{
+    if (!script->pending)
+        return CMK_SCRIPT_ERROR;
+    const CMKFunctionInfo *call_function = NULL;
+    CMKValue *call_args = NULL;
+    CCUINT32 call_argc = 0;
+    CCBOOL suspended = CCFALSE;
+    cmk_value_init(out);
+    if (!rt_expr_program_run(
+            script->runtime, script->pending, value,
+            &call_function, &call_args, &call_argc, out, &suspended
+        ))
+        return CMK_SCRIPT_ERROR;
+    if (suspended)
+    {
+        script->call_function = call_function;
+        script->call_args = call_args;
+        script->call_argc = call_argc;
+        return CMK_SCRIPT_WAIT;
+    }
+    rt_expr_program_clear(script->pending);
+    ccalloc(script->pending, 0, NULL);
+    script->pending = NULL;
+    return CMK_SCRIPT_RUN;
+}
+
+static CMKScriptStatus rt_script_apply_if(
+    CMKScript *script, CMKValue *value
+)
+{
+    if (value->type != CMK_VALUE_BOOL)
+    {
+        cmk_value_clear(value);
+        (void)rt_error(
+            script->runtime, rt_script_top(script)->id,
+            "if 条件必须是 bool"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    CCBOOL choose_then = value->as.boolean;
+    cmk_value_clear(value);
+
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+        return CMK_SCRIPT_ERROR;
+    CMKASTNodeId condition = rt_script_child(
+        script->runtime, frame->id, 0
+    );
+    CMKASTNodeId then_id = CMK_AST_NODE_NIL;
+    CMKASTNodeId else_id = CMK_AST_NODE_NIL;
+    const CMKASTNode *condition_node =
+        cmk_ast_node(script->runtime->semantic->ast, condition);
+    if (condition_node)
+    {
+        then_id = condition_node->next_sibling;
+        const CMKASTNode *then_node =
+            cmk_ast_node(script->runtime->semantic->ast, then_id);
+        else_id = then_node ? then_node->next_sibling : CMK_AST_NODE_NIL;
+    }
+    CMKASTNodeId branch = choose_then ? then_id : else_id;
+    frame->stage = 1;
+    if (branch == CMK_AST_NODE_NIL)
+    {
+        CMKScriptFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (cc_dyn_core_pop(
+                &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+                (CCINT32)sizeof(CMKScriptFrame), &popped
+            ) != 0)
+            return CMK_SCRIPT_ERROR;
+        rt_script_frame_clear(&popped);
+        return CMK_SCRIPT_RUN;
+    }
+    return rt_script_push_statement(
+        script->runtime, script, branch, frame->env
+    ) ? CMK_SCRIPT_RUN : CMK_SCRIPT_ERROR;
+}
+
+static CMKScriptStatus rt_script_apply_simple(
+    CMKScript *script, CMKValue *value
+)
+{
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+    {
+        cmk_value_clear(value);
+        return CMK_SCRIPT_ERROR;
+    }
+    const CMKASTNode *node = cmk_ast_node(
+        script->runtime->semantic->ast, frame->id
+    );
+    if (!node)
+    {
+        cmk_value_clear(value);
+        return CMK_SCRIPT_ERROR;
+    }
+
+    CCBOOL ok = CCTRUE;
+    if (node->kind == CMK_AST_VAR_DECL)
+        ok = rt_var_decl_apply(
+            script->runtime, frame->id, frame->env, value
+        );
+    else if (node->kind == CMK_AST_ASSIGN)
+        ok = rt_assign_apply(
+            script->runtime, frame->id, frame->env, value
+        );
+    else if (node->kind == CMK_AST_EXPR_STMT)
+        cmk_value_clear(value);
+    else if (node->kind == CMK_AST_RETURN)
+    {
+        script->result.kind = CMK_EXEC_RETURN;
+        script->result.value = *value;
+        cmk_value_init(value);
+        script->done = CCTRUE;
+    }
+    else
+    {
+        cmk_value_clear(value);
+        ok = rt_error(
+            script->runtime, frame->id, "不支持的语句节点"
+        );
+    }
+    if (!ok)
+        return CMK_SCRIPT_ERROR;
+
+    if (!script->done)
+    {
+        CMKScriptFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (cc_dyn_core_pop(
+                &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+                (CCINT32)sizeof(CMKScriptFrame), &popped
+            ) != 0)
+            return CMK_SCRIPT_ERROR;
+        rt_script_frame_clear(&popped);
+    }
+    return CMK_SCRIPT_RUN;
+}
+
+static CMKScriptStatus rt_script_start_simple(CMKScript *script)
+{
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+        return CMK_SCRIPT_ERROR;
+    const CMKASTNode *node = cmk_ast_node(
+        script->runtime->semantic->ast, frame->id
+    );
+    if (!node)
+        return CMK_SCRIPT_ERROR;
+
+    if (node->kind == CMK_AST_BREAK ||
+        node->kind == CMK_AST_CONTINUE)
+    {
+        script->flow = (node->kind == CMK_AST_BREAK)
+            ? CMK_SCRIPT_FLOW_BREAK : CMK_SCRIPT_FLOW_CONTINUE;
+        CMKScriptFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (cc_dyn_core_pop(
+                &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+                (CCINT32)sizeof(CMKScriptFrame), &popped
+            ) != 0)
+            return CMK_SCRIPT_ERROR;
+        rt_script_frame_clear(&popped);
+        return CMK_SCRIPT_RUN;
+    }
+
+    CMKASTNodeId expr_id = CMK_AST_NODE_NIL;
+    if (node->kind == CMK_AST_VAR_DECL)
+        expr_id = rt_script_var_init(script->runtime, frame->id);
+    else if (node->kind == CMK_AST_ASSIGN)
+        expr_id = rt_script_assign_value(script->runtime, frame->id);
+    else if (node->kind == CMK_AST_EXPR_STMT ||
+             node->kind == CMK_AST_RETURN)
+        expr_id = frame->id == CMK_AST_NODE_NIL
+            ? CMK_AST_NODE_NIL : node->first_child;
+
+    if (node->kind == CMK_AST_RETURN && expr_id == CMK_AST_NODE_NIL)
+    {
+        CMKScriptFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (cc_dyn_core_pop(
+                &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+                (CCINT32)sizeof(CMKScriptFrame), &popped
+            ) != 0)
+            return CMK_SCRIPT_ERROR;
+        rt_script_frame_clear(&popped);
+        script->result.kind = CMK_EXEC_NORMAL;
+        script->done = CCTRUE;
+        return CMK_SCRIPT_RUN;
+    }
+
+    if (expr_id == CMK_AST_NODE_NIL)
+    {
+        (void)rt_error(
+            script->runtime, frame->id, "语句表达式缺失"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+
+    CCBOOL has_call = CCFALSE;
+    if (!rt_expr_scan_user_call(
+            script->runtime, expr_id, &has_call
+        ))
+        return CMK_SCRIPT_ERROR;
+    if (!has_call)
+    {
+        CCBOOL ok = CCTRUE;
+        if (node->kind == CMK_AST_VAR_DECL)
+            ok = rt_eval_var_decl(
+                script->runtime, frame->id, frame->env
+            );
+        else if (node->kind == CMK_AST_ASSIGN)
+            ok = rt_eval_assign(
+                script->runtime, frame->id, frame->env
+            );
+        else if (node->kind == CMK_AST_EXPR_STMT)
+        {
+            CMKValue value;
+            cmk_value_init(&value);
+            ok = rt_eval_expr(
+                script->runtime, expr_id, frame->env, &value
+            );
+            cmk_value_clear(&value);
+        }
+        else if (node->kind == CMK_AST_RETURN)
+        {
+            CMKValue value;
+            cmk_value_init(&value);
+            ok = rt_eval_expr(
+                script->runtime, expr_id, frame->env, &value
+            );
+            if (ok)
+            {
+                script->result.kind = CMK_EXEC_RETURN;
+                script->result.value = value;
+                cmk_value_init(&value);
+                script->done = CCTRUE;
+            }
+            cmk_value_clear(&value);
+        }
+        if (!ok)
+            return CMK_SCRIPT_ERROR;
+        if (!script->done)
+        {
+            CMKScriptFrame popped;
+            memset(&popped, 0, sizeof(popped));
+            if (cc_dyn_core_pop(
+                    &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+                    (CCINT32)sizeof(CMKScriptFrame), &popped
+                ) != 0)
+                return CMK_SCRIPT_ERROR;
+            rt_script_frame_clear(&popped);
+        }
+        return CMK_SCRIPT_RUN;
+    }
+
+    frame->stage = 1;
+    CMKValue value;
+    CMKScriptStatus status = rt_script_start_expr(
+        script, expr_id, frame->env, &value
+    );
+    if (status != CMK_SCRIPT_RUN)
+        return status;
+    return rt_script_apply_simple(script, &value);
+}
+
+static CMKScriptStatus rt_script_pop_top(CMKScript *script)
+{
+    CMKScriptFrame popped;
+    memset(&popped, 0, sizeof(popped));
+    if (cc_dyn_core_pop(
+            &script->frames, (CCUINT32)sizeof(CMKScriptFrame),
+            (CCINT32)sizeof(CMKScriptFrame), &popped
+        ) != 0)
+        return CMK_SCRIPT_ERROR;
+    rt_script_frame_clear(&popped);
+    return CMK_SCRIPT_RUN;
+}
+
+static CMKScriptStatus rt_script_apply_while(
+    CMKScript *script, CMKValue *value
+)
+{
+    if (value->type != CMK_VALUE_BOOL)
+    {
+        cmk_value_clear(value);
+        (void)rt_error(
+            script->runtime, rt_script_top(script)->id,
+            "while 条件必须是 bool"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    CCBOOL run = value->as.boolean;
+    cmk_value_clear(value);
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+        return CMK_SCRIPT_ERROR;
+    if (!run)
+        return rt_script_pop_top(script);
+    if (frame->body == CMK_AST_NODE_NIL)
+    {
+        (void)rt_error(
+            script->runtime, frame->id, "while 循环体缺失"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    frame->stage = 1;
+    CMKASTNodeId body = frame->body;
+    CMKEnv *env = frame->env;
+    return rt_script_push_statement(
+        script->runtime, script, body, env
+    ) ? CMK_SCRIPT_RUN : CMK_SCRIPT_ERROR;
+}
+
+static CMKScriptStatus rt_script_for_next(CMKScript *script)
+{
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame || frame->kind != CMK_SCRIPT_FOR)
+        return CMK_SCRIPT_ERROR;
+    if (frame->index >= frame->count)
+        return rt_script_pop_top(script);
+
+    const CMKValue *item = cmk_list_at(
+        frame->iterable.as.list, frame->index
+    );
+    if (!item)
+    {
+        (void)rt_error(
+            script->runtime, frame->id, "for-in 元素缺失"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    CMKEnvVar *slot = env_slot(
+        frame->loop_env, frame->name, frame->name_len
+    );
+    if (!slot)
+    {
+        if (!env_define(
+                script->runtime, frame->loop_env,
+                frame->name, frame->name_len, item,
+                CCFALSE, frame->id
+            ))
+            return CMK_SCRIPT_ERROR;
+    }
+    else if (!cmk_value_copy(&slot->value, item))
+    {
+        (void)rt_error(
+            script->runtime, frame->id, "循环变量赋值失败"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    if (frame->body == CMK_AST_NODE_NIL)
+    {
+        (void)rt_error(
+            script->runtime, frame->id, "for-in 循环体缺失"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    frame->stage = 2;
+    CMKASTNodeId body = frame->body;
+    CMKEnv *env = frame->loop_env;
+    return rt_script_push_statement(
+        script->runtime, script, body, env
+    ) ? CMK_SCRIPT_RUN : CMK_SCRIPT_ERROR;
+}
+
+static CMKScriptStatus rt_script_apply_for(
+    CMKScript *script, CMKValue *value
+)
+{
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+    {
+        cmk_value_clear(value);
+        return CMK_SCRIPT_ERROR;
+    }
+    const CMKASTNode *node = cmk_ast_node(
+        script->runtime->semantic->ast, frame->id
+    );
+    if (!node)
+    {
+        cmk_value_clear(value);
+        return CMK_SCRIPT_ERROR;
+    }
+    if (value->type != CMK_VALUE_LIST)
+    {
+        cmk_value_clear(value);
+        (void)rt_error(
+            script->runtime, frame->id, "for-in 需要 list"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    CCUINT32 name_len = 0;
+    const char *name = cmk_ast_string(
+        script->runtime->semantic->ast,
+        node->as.for_in.name, &name_len
+    );
+    if (!name)
+    {
+        cmk_value_clear(value);
+        (void)rt_error(
+            script->runtime, frame->id, "for-in 变量名无效"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    frame->loop_env = env_create(frame->env);
+    if (!frame->loop_env)
+    {
+        cmk_value_clear(value);
+        (void)rt_error(
+            script->runtime, frame->id, "内存分配失败"
+        );
+        return CMK_SCRIPT_ERROR;
+    }
+    frame->iterable = *value;
+    cmk_value_init(value);
+    frame->name = name;
+    frame->name_len = name_len;
+    frame->count = cmk_list_count(frame->iterable.as.list);
+    frame->index = 0;
+    frame->stage = 1;
+
+    CMKASTNodeId type_id = node->first_child;
+    const CMKASTNode *type_node =
+        cmk_ast_node(script->runtime->semantic->ast, type_id);
+    CMKASTNodeId iterable_id = type_node
+        ? type_node->next_sibling : CMK_AST_NODE_NIL;
+    const CMKASTNode *iterable_node =
+        cmk_ast_node(script->runtime->semantic->ast, iterable_id);
+    frame->body = iterable_node
+        ? iterable_node->next_sibling : CMK_AST_NODE_NIL;
+    return rt_script_for_next(script);
+}
+
+static CMKScriptStatus rt_script_apply_value(
+    CMKScript *script, CMKValue *value
+)
+{
+    CMKScriptFrame *frame = rt_script_top(script);
+    if (!frame)
+    {
+        cmk_value_clear(value);
+        return CMK_SCRIPT_ERROR;
+    }
+    if (frame->kind == CMK_SCRIPT_IF)
+        return rt_script_apply_if(script, value);
+    if (frame->kind == CMK_SCRIPT_WHILE)
+        return rt_script_apply_while(script, value);
+    if (frame->kind == CMK_SCRIPT_FOR)
+        return rt_script_apply_for(script, value);
+    if (frame->kind == CMK_SCRIPT_SIMPLE)
+        return rt_script_apply_simple(script, value);
+    cmk_value_clear(value);
+    (void)rt_error(
+        script->runtime, frame->id, "脚本帧类型错误"
+    );
+    return CMK_SCRIPT_ERROR;
+}
+
+static CCBOOL rt_script_push_statement(
+    CMKRuntime *runtime, CMKScript *script,
+    CMKASTNodeId id, CMKEnv *env
+)
+{
+    const CMKASTNode *node =
+        cmk_ast_node(runtime->semantic->ast, id);
+    if (!node)
+        return rt_error(runtime, id, "语句节点缺失");
+    if (node->kind == CMK_AST_BLOCK)
+    {
+        CMKEnv *block_env = env_create(env);
+        if (!block_env)
+            return rt_error(runtime, id, "内存分配失败");
+        return rt_script_push_frame(
+            runtime, script, CMK_SCRIPT_BLOCK, id,
+            block_env, CCTRUE, node->first_child
+        );
+    }
+    if (node->kind == CMK_AST_IF)
+        return rt_script_push_frame(
+            runtime, script, CMK_SCRIPT_IF, id,
+            env, CCFALSE, CMK_AST_NODE_NIL
+        );
+    if (node->kind == CMK_AST_WHILE)
+    {
+        CMKASTNodeId condition = node->first_child;
+        const CMKASTNode *condition_node =
+            cmk_ast_node(runtime->semantic->ast, condition);
+        CMKASTNodeId body = condition_node
+            ? condition_node->next_sibling : CMK_AST_NODE_NIL;
+        if (!rt_script_push_frame(
+                runtime, script, CMK_SCRIPT_WHILE, id,
+                env, CCFALSE, CMK_AST_NODE_NIL
+            ))
+            return CCFALSE;
+        CMKScriptFrame *frame = rt_script_top(script);
+        if (!frame)
+            return rt_error(runtime, id, "脚本帧缺失");
+        frame->body = body;
+        return CCTRUE;
+    }
+    if (node->kind == CMK_AST_FOR_IN)
+        return rt_script_push_frame(
+            runtime, script, CMK_SCRIPT_FOR, id,
+            env, CCFALSE, CMK_AST_NODE_NIL
+        );
+    if (node->kind == CMK_AST_VAR_DECL ||
+        node->kind == CMK_AST_ASSIGN ||
+        node->kind == CMK_AST_EXPR_STMT ||
+        node->kind == CMK_AST_RETURN ||
+        node->kind == CMK_AST_BREAK ||
+        node->kind == CMK_AST_CONTINUE)
+        return rt_script_push_frame(
+            runtime, script, CMK_SCRIPT_SIMPLE, id,
+            env, CCFALSE, CMK_AST_NODE_NIL
+        );
+    return rt_error(runtime, id, "不支持的语句节点");
+}
+
+static CMKScriptStatus rt_script_run(CMKScript *script, CMKValue *input)
+{
+    if (script->done)
+        return CMK_SCRIPT_DONE;
+    if (script->pending)
+    {
+        if (!input)
+        {
+            (void)rt_error(
+                script->runtime, script->function->decl,
+                "脚本缺少恢复值：%s", script->function->name.data
+            );
+            return CMK_SCRIPT_ERROR;
+        }
+        CMKValue value;
+        CMKScriptStatus status = rt_script_resume_expr(
+            script, input, &value
+        );
+        if (status != CMK_SCRIPT_RUN)
+            return status;
+        status = rt_script_apply_value(script, &value);
+        if (status != CMK_SCRIPT_RUN)
+            return status;
+    }
+
+    for (;;)
+    {
+        if (script->done)
+            return CMK_SCRIPT_DONE;
+        CMKScriptFrame *frame = rt_script_top(script);
+        if (!frame)
+        {
+            script->result.kind = CMK_EXEC_NORMAL;
+            script->done = CCTRUE;
+            return CMK_SCRIPT_DONE;
+        }
+
+        if (script->flow != CMK_SCRIPT_FLOW_NORMAL)
+        {
+            while (frame && frame->kind != CMK_SCRIPT_WHILE &&
+                   frame->kind != CMK_SCRIPT_FOR)
+            {
+                if (rt_script_pop_top(script) != CMK_SCRIPT_RUN)
+                    return CMK_SCRIPT_ERROR;
+                frame = rt_script_top(script);
+            }
+            if (!frame)
+            {
+                (void)rt_error(
+                    script->runtime, script->function->decl,
+                    "break/continue 不在循环内"
+                );
+                return CMK_SCRIPT_ERROR;
+            }
+            if (script->flow == CMK_SCRIPT_FLOW_BREAK)
+            {
+                script->flow = CMK_SCRIPT_FLOW_NORMAL;
+                if (rt_script_pop_top(script) != CMK_SCRIPT_RUN)
+                    return CMK_SCRIPT_ERROR;
+                continue;
+            }
+            frame->stage = (frame->kind == CMK_SCRIPT_WHILE) ? 0 : 2;
+            script->flow = CMK_SCRIPT_FLOW_NORMAL;
+            continue;
+        }
+
+        if (frame->kind == CMK_SCRIPT_BLOCK)
+        {
+            if (frame->next == CMK_AST_NODE_NIL)
+            {
+                CMKScriptFrame popped;
+                memset(&popped, 0, sizeof(popped));
+                if (cc_dyn_core_pop(
+                        &script->frames,
+                        (CCUINT32)sizeof(CMKScriptFrame),
+                        (CCINT32)sizeof(CMKScriptFrame), &popped
+                    ) != 0)
+                    return CMK_SCRIPT_ERROR;
+                rt_script_frame_clear(&popped);
+                continue;
+            }
+            CMKASTNodeId child = frame->next;
+            const CMKASTNode *child_node = cmk_ast_node(
+                script->runtime->semantic->ast, child
+            );
+            frame->next = child_node
+                ? child_node->next_sibling : CMK_AST_NODE_NIL;
+            if (!rt_script_push_statement(
+                    script->runtime, script, child, frame->env
+                ))
+                return CMK_SCRIPT_ERROR;
+            continue;
+        }
+
+        if (frame->kind == CMK_SCRIPT_WHILE)
+        {
+            if (frame->stage == 1)
+            {
+                frame->stage = 0;
+                continue;
+            }
+            CMKASTNodeId condition = rt_script_child(
+                script->runtime, frame->id, 0
+            );
+            CMKValue value;
+            CMKScriptStatus status = rt_script_start_expr(
+                script, condition, frame->env, &value
+            );
+            if (status != CMK_SCRIPT_RUN)
+                return status;
+            status = rt_script_apply_while(script, &value);
+            if (status != CMK_SCRIPT_RUN)
+                return status;
+            continue;
+        }
+
+        if (frame->kind == CMK_SCRIPT_FOR)
+        {
+            if (frame->stage == 2)
+            {
+                frame->index++;
+                frame->stage = 1;
+                continue;
+            }
+            if (frame->stage == 1)
+            {
+                CMKScriptStatus status = rt_script_for_next(script);
+                if (status != CMK_SCRIPT_RUN)
+                    return status;
+                continue;
+            }
+            CMKASTNodeId type_id = rt_script_child(
+                script->runtime, frame->id, 0
+            );
+            CMKASTNodeId iterable_id = rt_script_child(
+                script->runtime, frame->id, 1
+            );
+            (void)type_id;
+            CMKValue value;
+            CMKScriptStatus status = rt_script_start_expr(
+                script, iterable_id, frame->env, &value
+            );
+            if (status != CMK_SCRIPT_RUN)
+                return status;
+            status = rt_script_apply_for(script, &value);
+            if (status != CMK_SCRIPT_RUN)
+                return status;
+            continue;
+        }
+
+        if (frame->kind == CMK_SCRIPT_IF)
+        {
+            if (frame->stage == 1)
+            {
+                CMKScriptFrame popped;
+                memset(&popped, 0, sizeof(popped));
+                if (cc_dyn_core_pop(
+                        &script->frames,
+                        (CCUINT32)sizeof(CMKScriptFrame),
+                        (CCINT32)sizeof(CMKScriptFrame), &popped
+                    ) != 0)
+                    return CMK_SCRIPT_ERROR;
+                rt_script_frame_clear(&popped);
+                continue;
+            }
+            CMKASTNodeId condition = rt_script_child(
+                script->runtime, frame->id, 0
+            );
+            CMKValue value;
+            CMKScriptStatus status = rt_script_start_expr(
+                script, condition, frame->env, &value
+            );
+            if (status != CMK_SCRIPT_RUN)
+            {
+                if (status == CMK_SCRIPT_WAIT)
+                    frame->stage = 1;
+                return status;
+            }
+            status = rt_script_apply_if(script, &value);
+            if (status != CMK_SCRIPT_RUN)
+                return status;
+            continue;
+        }
+
+        CMKScriptStatus status = rt_script_start_simple(script);
+        if (status != CMK_SCRIPT_RUN)
+            return status;
+    }
+}
+
+static CMKScript *rt_script_create(
+    CMKRuntime *runtime, const CMKFunctionInfo *function,
+    const CMKValue *args, CCUINT32 argc
+)
+{
+    if (argc != function->param_count)
+    {
+        (void)rt_error(
+            runtime, function->decl, "函数 %s 参数数量错误",
+            function->name.data
+        );
+        return NULL;
+    }
+
+    CMKScript *script = ccalloc(
+        NULL, sizeof(CMKScript), CMK_RT_COMMENT
+    );
+    if (!script)
+    {
+        (void)rt_error(runtime, function->decl, "内存分配失败");
+        return NULL;
+    }
+    memset(script, 0, sizeof(*script));
+    script->runtime = runtime;
+    script->function = function;
+    exec_result_init(&script->result);
+
+    script->env = env_create(runtime->module_env);
+    if (!script->env)
+    {
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        (void)rt_error(runtime, function->decl, "内存分配失败");
+        return NULL;
+    }
+
+    const CMKASTNode *decl =
+        cmk_ast_node(runtime->semantic->ast, function->decl);
+    if (!decl)
+    {
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        (void)rt_error(runtime, function->decl, "函数声明缺失");
+        return NULL;
+    }
+
+    CMKASTNodeId param = decl->first_child;
+    const CMKASTNode *param_type =
+        cmk_ast_node(runtime->semantic->ast, param);
+    param = param_type ? param_type->next_sibling : CMK_AST_NODE_NIL;
+    for (CCUINT32 i = 0; i < argc; i++)
+    {
+        const CMKASTNode *param_node =
+            cmk_ast_node(runtime->semantic->ast, param);
+        if (!param_node || param_node->kind != CMK_AST_PARAM)
+        {
+            rt_script_clear(script);
+            ccalloc(script, 0, NULL);
+            (void)rt_error(
+                runtime, function->decl,
+                "函数参数缺失：%s", function->name.data
+            );
+            return NULL;
+        }
+        if (!rt_expect_value(
+                runtime, param, &args[i], &function->params[i]
+            ))
+        {
+            rt_script_clear(script);
+            ccalloc(script, 0, NULL);
+            return NULL;
+        }
+        CCUINT32 name_len = 0;
+        const char *name = cmk_ast_string(
+            runtime->semantic->ast, param_node->as.param.name,
+            &name_len
+        );
+        if (!name || !env_define(
+                runtime, script->env, name, name_len,
+                &args[i], CCFALSE, param
+            ))
+        {
+            rt_script_clear(script);
+            ccalloc(script, 0, NULL);
+            return NULL;
+        }
+        const CMKASTNode *next = cmk_ast_node(
+            runtime->semantic->ast, param_node->next_sibling
+        );
+        param = next ? param_node->next_sibling : CMK_AST_NODE_NIL;
+    }
+
+    CMKASTNodeId body = CMK_AST_NODE_NIL;
+    CMKASTNodeId child = decl->first_child;
+    for (CCUINT32 i = 0; i < function->param_count + 1; i++)
+    {
+        const CMKASTNode *child_node =
+            cmk_ast_node(runtime->semantic->ast, child);
+        child = child_node ? child_node->next_sibling : CMK_AST_NODE_NIL;
+    }
+    body = child;
+    const CMKASTNode *body_node =
+        cmk_ast_node(runtime->semantic->ast, body);
+    if (!body_node)
+    {
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        (void)rt_error(
+            runtime, body, "函数体缺失：%s", function->name.data
+        );
+        return NULL;
+    }
+    if (!rt_script_push_frame(
+            runtime, script, CMK_SCRIPT_BLOCK, body,
+            script->env, CCFALSE, body_node->first_child
+        ))
+    {
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        return NULL;
+    }
+    return script;
+}
+
+#if 0
+static CCBOOL rt_function_has_loop(
+    CMKRuntime *runtime, const CMKFunctionInfo *function,
+    CCBOOL *has_loop
+)
+{
+    *has_loop = CCFALSE;
+    const CMKASTNode *decl =
+        cmk_ast_node(runtime->semantic->ast, function->decl);
+    if (!decl)
+        return rt_error(runtime, function->decl, "函数声明缺失");
+    CMKASTNodeId body = decl->first_child;
+    for (CCUINT32 i = 0; i < function->param_count + 1; i++)
+    {
+        const CMKASTNode *child =
+            cmk_ast_node(runtime->semantic->ast, body);
+        body = child ? child->next_sibling : CMK_AST_NODE_NIL;
+    }
+    return rt_ast_has_loop(runtime, body, has_loop);
+}
+#endif
+
+#if 0
+static CCBOOL rt_script_execute(
+    CMKRuntime *runtime, const CMKFunctionInfo *function,
+    const CMKValue *args, CCUINT32 argc, CMKValue *out
+)
+{
+    CCDyn scripts;
+    memset(&scripts, 0, sizeof(scripts));
+    CMKScript *root = rt_script_create(
+        runtime, function, args, argc
+    );
+    if (!root)
+        return CCFALSE;
+    if (!cmk_dyn_push(
+            &scripts, (CCUINT32)sizeof(CMKScript *),
+            (CCINT32)sizeof(CMKScript *), &root
+        ))
+    {
+        rt_script_clear(root);
+        ccalloc(root, 0, NULL);
+        return rt_error(runtime, function->decl, "内存分配失败");
+    }
+
+    CCBOOL ok = CCFALSE;
+    for (;;)
+    {
+        CCUINT32 count = scripts.size /
+            (CCUINT32)sizeof(CMKScript *);
+        CMKScript **items = (CMKScript **)scripts.array;
+        CMKScript *script = items[count - 1];
+        CMKScriptStatus status = rt_script_run(script);
+
+        if (status == CMK_SCRIPT_ERROR)
+            goto Finished;
+
+        if (status == CMK_SCRIPT_WAIT)
+        {
+            const CMKFunctionInfo *callee = script->call_function;
+            CMKValue *call_args = script->call_args;
+            CCUINT32 call_argc = script->call_argc;
+            script->call_args = NULL;
+            script->call_argc = 0;
+
+            if (!callee)
+            {
+                rt_call_args_clear(call_args, call_argc);
+                (void)rt_error(
+                    runtime, script->function->decl,
+                    "调用目标缺失"
+                );
+                goto Finished;
+            }
+            if (runtime->policy.max_recursion_depth != 0 &&
+                runtime->call_depth >=
+                    runtime->policy.max_recursion_depth)
+            {
+                rt_call_args_clear(call_args, call_argc);
+                (void)rt_error(
+                    runtime, callee->decl,
+                    "函数递归深度超过限制（%u）",
+                    runtime->policy.max_recursion_depth
+                );
+                goto Finished;
+            }
+
+            CMKScript *child = NULL;
+            if (callee->module != runtime->semantic)
+            {
+                CMKRuntime *target = runtime->module_resolver
+                    ? runtime->module_resolver(runtime, callee->module)
+                    : NULL;
+                if (!target || target == runtime)
+                {
+                    rt_call_args_clear(call_args, call_argc);
+                    (void)rt_error(
+                        runtime, callee->decl,
+                        "跨模块函数调用缺少运行时"
+                    );
+                    goto Finished;
+                }
+                if (!cmk_runtime_init_globals(target))
+                {
+                    rt_call_args_clear(call_args, call_argc);
+                    goto Finished;
+                }
+                CMKValue value;
+                cmk_value_init(&value);
+                runtime->call_depth++;
+                CCBOOL called = cmk_runtime_call_function(
+                    target, callee, call_args, call_argc, &value
+                );
+                runtime->call_depth--;
+                rt_call_args_clear(call_args, call_argc);
+                if (!called)
+                {
+                    cmk_value_clear(&value);
+                    goto Finished;
+                }
+                CMKScriptStatus resumed = rt_script_run(script, &value);
+                if (resumed == CMK_SCRIPT_ERROR)
+                {
+                    cmk_value_clear(&value);
+                    goto Finished;
+                }
+                continue;
+            }
+
+            child = rt_script_create(
+                runtime, callee, call_args, call_argc
+            );
+            rt_call_args_clear(call_args, call_argc);
+            if (!child)
+                goto Finished;
+            runtime->call_depth++;
+            if (!cmk_dyn_push(
+                    &scripts, (CCUINT32)sizeof(CMKScript *),
+                    (CCINT32)sizeof(CMKScript *), &child
+                ))
+            {
+                runtime->call_depth--;
+                rt_script_clear(child);
+                ccalloc(child, 0, NULL);
+                (void)rt_error(
+                    runtime, callee->decl, "内存分配失败"
+                );
+                goto Finished;
+            }
+            continue;
+        }
+
+        /* DONE */
+        CMKValue value;
+        cmk_value_init(&value);
+        if (script->result.kind == CMK_EXEC_RETURN)
+        {
+            if (!rt_expect_value(
+                    runtime, script->function->decl,
+                    &script->result.value,
+                    &script->function->return_type
+                ))
+            {
+                cmk_value_clear(&value);
+                goto Finished;
+            }
+            value = script->result.value;
+            cmk_value_init(&script->result.value);
+        }
+        else if (script->result.kind == CMK_EXEC_NORMAL)
+        {
+            if (script->function->return_type.kind != CMK_VALUE_VOID)
+            {
+                cmk_value_clear(&value);
+                (void)rt_error(
+                    runtime, script->function->decl,
+                    "非 void 函数 %s 没有返回值",
+                    script->function->name.data
+                );
+                goto Finished;
+            }
+            (void)cmk_value_set_void(&value);
+        }
+        else
+        {
+            cmk_value_clear(&value);
+            (void)rt_error(
+                runtime, script->function->decl,
+                "函数 %s 控制流异常",
+                script->function->name.data
+            );
+            goto Finished;
+        }
+
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        scripts.size -= (CCUINT32)sizeof(CMKScript *);
+        runtime->call_depth--;
+
+        count = scripts.size / (CCUINT32)sizeof(CMKScript *);
+        if (count == 0)
+        {
+            *out = value;
+            ok = CCTRUE;
+            goto Finished;
+        }
+        /* 恢复调用者挂起的表达式 */
+        items = (CMKScript **)scripts.array;
+        CMKScript *caller = items[count - 1];
+        CMKValue input = value;
+        cmk_value_init(&value);
+        CMKScriptStatus resumed = rt_script_run_caller(
+            caller, &input
+        );
+        if (resumed == CMK_SCRIPT_ERROR)
+        {
+            cmk_value_clear(&input);
+            goto Finished;
+        }
+        if (resumed == CMK_SCRIPT_WAIT)
+        {
+            /* 调用者又发起调用，继续主循环 */
+            continue;
+        }
+    }
+
+Finished:
+    {
+        CCUINT32 count = scripts.size / (CCUINT32)sizeof(CMKScript *);
+        CMKScript **items = (CMKScript **)scripts.array;
+        for (CCUINT32 i = 0; i < count; i++)
+        {
+            rt_script_clear(items[i]);
+            ccalloc(items[i], 0, NULL);
+        }
+        if (scripts.array)
+            ccalloc(scripts.array, 0, NULL);
+    }
+    return ok;
+}
+#endif
+
+static CCBOOL rt_script_execute(
+    CMKRuntime *runtime, const CMKFunctionInfo *function,
+    const CMKValue *args, CCUINT32 argc, CMKValue *out
+)
+{
+    CCDyn scripts;
+    memset(&scripts, 0, sizeof(scripts));
+    CMKScript *root = rt_script_create(
+        runtime, function, args, argc
+    );
+    if (!root)
+        return CCFALSE;
+    if (!cmk_dyn_push(
+            &scripts, (CCUINT32)sizeof(CMKScript *),
+            (CCINT32)sizeof(CMKScript *), &root
+        ))
+    {
+        rt_script_clear(root);
+        ccalloc(root, 0, NULL);
+        return rt_error(runtime, function->decl, "内存分配失败");
+    }
+
+    CCBOOL ok = CCFALSE;
+    CCBOOL have_value = CCFALSE;
+    CMKValue value;
+    cmk_value_init(&value);
+
+    for (;;)
+    {
+        CCUINT32 count = scripts.size /
+            (CCUINT32)sizeof(CMKScript *);
+        CMKScript **items = (CMKScript **)scripts.array;
+        CMKScript *script = items[count - 1];
+
+        /* 有挂起的调用请求：创建子脚本或走受控 C 调用 */
+        if (script->call_args)
+        {
+            const CMKFunctionInfo *callee = script->call_function;
+            CMKValue *call_args = script->call_args;
+            CCUINT32 call_argc = script->call_argc;
+            script->call_args = NULL;
+            script->call_argc = 0;
+
+            if (!callee)
+            {
+                rt_call_args_clear(call_args, call_argc);
+                (void)rt_error(
+                    runtime, script->function->decl,
+                    "调用目标缺失"
+                );
+                goto Finished;
+            }
+            CMKRuntime *target = runtime;
+            if (callee->module != runtime->semantic)
+            {
+                target = runtime->module_resolver
+                    ? runtime->module_resolver(
+                        runtime, callee->module
+                    )
+                    : NULL;
+                if (!target || target == runtime)
+                {
+                    rt_call_args_clear(call_args, call_argc);
+                    (void)rt_error(
+                        runtime, callee->decl,
+                        "跨模块函数调用缺少运行时"
+                    );
+                    goto Finished;
+                }
+                if (!cmk_runtime_init_globals(target))
+                {
+                    rt_call_args_clear(call_args, call_argc);
+                    goto Finished;
+                }
+            }
+
+            if (target->policy.max_recursion_depth != 0 &&
+                target->call_depth >=
+                    target->policy.max_recursion_depth)
+            {
+                rt_call_args_clear(call_args, call_argc);
+                (void)rt_error(
+                    target, callee->decl,
+                    "函数递归深度超过限制（%u）",
+                    target->policy.max_recursion_depth
+                );
+                goto Finished;
+            }
+
+            CMKScript *child = rt_script_create(
+                target, callee, call_args, call_argc
+            );
+            rt_call_args_clear(call_args, call_argc);
+            if (!child)
+                goto Finished;
+            target->call_depth++;
+            if (!cmk_dyn_push(
+                    &scripts, (CCUINT32)sizeof(CMKScript *),
+                    (CCINT32)sizeof(CMKScript *), &child
+                ))
+            {
+                target->call_depth--;
+                rt_script_clear(child);
+                ccalloc(child, 0, NULL);
+                (void)rt_error(
+                    runtime, callee->decl, "内存分配失败"
+                );
+                goto Finished;
+            }
+            continue;
+        }
+
+        CMKScriptStatus status = rt_script_run(script, NULL);
+        if (status == CMK_SCRIPT_ERROR)
+        {
+            if (!cmk_diagnostic_has(runtime->diagnostic))
+                (void)rt_error(
+                    runtime, script->function->decl,
+                    "脚本执行失败：%s",
+                    script->function->name.data
+                );
+            goto Finished;
+        }
+        if (status == CMK_SCRIPT_WAIT)
+            continue;
+
+        /* 脚本完成：校验收敛并回传调用者 */
+        if (script->result.kind == CMK_EXEC_RETURN)
+        {
+            if (!rt_expect_value(
+                    runtime, script->function->decl,
+                    &script->result.value,
+                    &script->function->return_type
+                ))
+                goto Finished;
+            cmk_value_clear(&value);
+            value = script->result.value;
+            cmk_value_init(&script->result.value);
+        }
+        else if (script->result.kind == CMK_EXEC_NORMAL)
+        {
+            if (script->function->return_type.kind != CMK_VALUE_VOID)
+            {
+                (void)rt_error(
+                    runtime, script->function->decl,
+                    "非 void 函数 %s 没有返回值",
+                    script->function->name.data
+                );
+                goto Finished;
+            }
+            cmk_value_clear(&value);
+            (void)cmk_value_set_void(&value);
+        }
+        else
+        {
+            (void)rt_error(
+                runtime, script->function->decl,
+                "函数 %s 控制流异常",
+                script->function->name.data
+            );
+            goto Finished;
+        }
+        have_value = CCTRUE;
+
+        CMKRuntime *script_runtime = script->runtime;
+        rt_script_clear(script);
+        ccalloc(script, 0, NULL);
+        scripts.size -= (CCUINT32)sizeof(CMKScript *);
+        script_runtime->call_depth--;
+
+        count = scripts.size / (CCUINT32)sizeof(CMKScript *);
+        if (count == 0)
+        {
+            *out = value;
+            cmk_value_init(&value);
+            ok = CCTRUE;
+            goto Finished;
+        }
+
+        CMKScript *caller = ((CMKScript **)scripts.array)[count - 1];
+        CMKValue input = value;
+        cmk_value_init(&value);
+        status = rt_script_run(caller, &input);
+        if (status == CMK_SCRIPT_ERROR)
+            goto Finished;
+        have_value = CCFALSE;
+    }
+
+Finished:
+    {
+        CCUINT32 count = scripts.size / (CCUINT32)sizeof(CMKScript *);
+        CMKScript **items = (CMKScript **)scripts.array;
+        for (CCUINT32 i = 0; i < count; i++)
+        {
+            rt_script_clear(items[i]);
+            ccalloc(items[i], 0, NULL);
+        }
+        if (scripts.array)
+            ccalloc(scripts.array, 0, NULL);
+    }
+    cmk_value_clear(&value);
+    (void)have_value;
+    return ok;
+}
+
+static CCBOOL cmk_runtime_call_function_legacy(
     CMKRuntime *runtime,
     const CMKFunctionInfo *function,
     const CMKValue *args, CCUINT32 argc,
@@ -4967,6 +6588,37 @@ CCBOOL cmk_runtime_init_globals(CMKRuntime *runtime)
 
     runtime->globals_initialized = CCTRUE;
     return CCTRUE;
+}
+
+static CCBOOL cmk_runtime_call_function_inner(
+    CMKRuntime *runtime,
+    const CMKFunctionInfo *function,
+    const CMKValue *args, CCUINT32 argc,
+    CMKValue *out
+)
+{
+    if (function->module != runtime->semantic)
+    {
+        CMKRuntime *target = runtime->module_resolver
+            ? runtime->module_resolver(runtime, function->module)
+            : NULL;
+        if (!target || target == runtime)
+            return rt_error(
+                runtime, function->decl,
+                "跨模块函数调用缺少运行时：%s",
+                function->name.data
+            );
+        if (!cmk_runtime_init_globals(target))
+            return CCFALSE;
+        return cmk_runtime_call_function(
+            target, function, args, argc, out
+        );
+    }
+    if (0)
+        return cmk_runtime_call_function_legacy(
+            runtime, function, args, argc, out
+        );
+    return rt_script_execute(runtime, function, args, argc, out);
 }
 
 static CCBOOL cmk_runtime_configure_body(CMKRuntime *runtime)

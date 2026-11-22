@@ -100,7 +100,7 @@ bash test.sh CMKPROGRAM
 - CMK Value：类型、字符串所有权、列表深复制、目标引用、动作与文本化；
 - CMK Builtin：注册表、纯计算、host_info、动作构造、find_files、error 格式与参数错误；
 - CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、target 字段、配置引用、控制流返回检查、5000 层显式语句/表达式/顶层 if 栈；
-- CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误、`CMKExecutionPolicy`（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归；
+- CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误、`CMKExecutionPolicy`（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、通用语句上下文 VM、5000 层非 return 深递归与循环内递归；
 - CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入、导入错误、Program 执行策略、环境变量策略、`-j` 并发继承、进程/捕获策略与非法环境变量回退。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse` / CMK Program API，不经过 `main`；命令行用例不受 `.ccm`/`.cmk` 解析影响。

@@ -993,7 +993,7 @@ static void test_runtime_deep_statements(void)
     }
     CC_CASE_END();
 
-    CC_CASE("RT-023", "非 return 深递归托管栈");
+    CC_CASE("RT-023", "非 return 深递归语句 VM");
     {
         const char *source =
             "func f(int n) -> int {\n"
@@ -1017,6 +1017,39 @@ static void test_runtime_deep_statements(void)
             value.type == CMK_VALUE_INT &&
             value.as.integer == 5000,
             "深递归赋值返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-024", "循环内非 return 递归语句 VM");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    int x = 0;\n"
+            "    while (n > 0) {\n"
+            "        x = f(n - 1) + 1;\n"
+            "        break;\n"
+            "    }\n"
+            "    return x;\n"
+            "}\n"
+            "int g = f(100);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "循环递归语义");
+        CC_CHECK(
+            cmk_test_context_configure(&ctx),
+            "循环递归 Configure"
+        );
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "读取循环递归结果");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 100,
+            "循环递归返回值"
         );
         cmk_value_clear(&value);
         cmk_test_context_clear(&ctx);

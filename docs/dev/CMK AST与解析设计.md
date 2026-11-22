@@ -1040,7 +1040,7 @@ M3/M4 状态：已完成。语义与运行时边界见 [CMK 语义与运行时�
 | `CMKVALUE` | `VAL-001` 至 `VAL-006` | 类型、字符串/列表/动作所有权、目标引用、文本化、尺寸运算与动态追加边界 |
 | `CMKBUILTIN` | `BLT-001` 至 `BLT-005` | 注册表、纯计算、host_info、动作构造、find_files、错误格式 |
 | `CMKSEMANTIC` | `SEM-001` 至 `SEM-009` | 作用域、类型、函数、内建、target、配置、控制流、5000 层显式语句/表达式/顶层 if 栈 |
-| `CMKRUNTIME` | `RT-001` 至 `RT-023` | 表达式、函数/递归、while/for、内建、target draft、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归 |
+| `CMKRUNTIME` | `RT-001` 至 `RT-024` | 表达式、函数/递归、while/for、内建、target draft、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、通用语句上下文 VM、5000 层非 return 深递归、循环内递归 |
 | `CMKPROGRAM` | `PRG-001` 至 `PRG-010` | 模块加载、导入函数/target、通配/别名、@include、循环导入、Program 执行策略、环境变量策略、并发策略继承、进程/捕获策略、非法环境变量回退 |
 
 现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS`、`CMKVALUE`、`CMKBUILTIN`、`CMKSEMANTIC`、`CMKRUNTIME`、`CMKPROGRAM` 套件入口。
