@@ -86,7 +86,8 @@ static CCBOOL parse_run_limits(
         return CCFALSE;
     if (!ccvar_global_init())
         return CCFALSE;
-    ccvar_clear(ccvar_global());
+    if (ccvar_clear(ccvar_global()) != CC_VAR_OK)
+        return CCFALSE;
     return ccm_parse(ctx);
 }
 
@@ -114,7 +115,8 @@ static CCBOOL parse_run_include_limits(
         return CCFALSE;
     if (!ccvar_global_init())
         return CCFALSE;
-    ccvar_clear(ccvar_global());
+    if (ccvar_clear(ccvar_global()) != CC_VAR_OK)
+        return CCFALSE;
     return ccm_parse(ctx);
 }
 
@@ -130,7 +132,8 @@ static CCBOOL parse_run_find_limit(
         return CCFALSE;
     if (!ccvar_global_init())
         return CCFALSE;
-    ccvar_clear(ccvar_global());
+    if (ccvar_clear(ccvar_global()) != CC_VAR_OK)
+        return CCFALSE;
     return ccm_parse(ctx);
 }
 
@@ -538,6 +541,16 @@ static void test_find_result_limit(void)
     CC_CHECK(!parse_run_find_limit("tests/data/ccm/parse/find.ccm",
                                    &ctx, 1),
              "结果数量超限拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(parse_run_find_limit("tests/data/ccm/parse/find_dup.ccm",
+                                  &ctx, 1),
+             "去重后的重复结果不触发上限");
+    CCVarValue v;
+    CC_CHECK_EQ_I64("读取 sources", CC_VAR_OK,
+                    ccvar_get(ccvar_global(), "sources", &v));
+    CC_CHECK(v.type == CC_VAR_STRING, "结果为字符串");
+    CC_CHECK(v.as.string.len > 0, "结果非空");
     parse_cleanup(&ctx);
 
     CC_CASE_END();

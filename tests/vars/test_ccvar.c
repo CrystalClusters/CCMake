@@ -294,7 +294,8 @@ static void test_clear(void)
     CC_CASE("VARS-007", "清空与复用");
     CCVarTree *tree = ccvar_create();
     CC_CHECK_EQ_I64("写值", CC_VAR_OK, set_int(tree, "a", 1));
-    CC_CHECK_EQ_I64("清空后无值", CC_VAR_NONE, (ccvar_clear(tree), ccvar_type(tree, "a")));
+    CC_CHECK_EQ_I64("清空结果", CC_VAR_OK, ccvar_clear(tree));
+    CC_CHECK_EQ_I64("清空后无值", CC_VAR_NONE, ccvar_type(tree, "a"));
     CC_CHECK_EQ_I64("清空后可写", CC_VAR_OK, set_int(tree, "b", 2));
     CCVarValue v;
     CC_CHECK_EQ_I64("读新值", CC_VAR_OK, ccvar_get(tree, "b", &v));

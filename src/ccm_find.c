@@ -453,12 +453,6 @@ static CCBOOL find_scan_entry(
         ))
         goto Succeeded;
 
-    if (scan->results->size / (CCUINT32)sizeof(char *) >=
-        scan->limits->max_find_results)
-    {
-        ccm_parse_failf(scan->file, scan->line, "${find} 结果数量超过限制");
-        goto FailedPaths;
-    }
     char *joined = find_join_output(scan->dir_prefix, cr);
     if (!joined)
     {

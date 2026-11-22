@@ -72,7 +72,7 @@ CCBOOL ccvar_key_valid(const char *key, CCUINT32 len);
 /* 生命周期 */
 CCVarTree *ccvar_create(void);
 void ccvar_destroy(CCVarTree *tree);
-void ccvar_clear(CCVarTree *tree);
+CCVarResult ccvar_clear(CCVarTree *tree);
 
 /*
  * 写入一个值。

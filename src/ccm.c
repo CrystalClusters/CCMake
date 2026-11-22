@@ -40,6 +40,12 @@ CCBOOL parse_ccm()
 
     ccm_context_clear(&ctx);
     if (!ok)
-        ccvar_clear(vars);
+    {
+        if (ccvar_clear(vars) != CC_VAR_OK)
+            color_print(
+                CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
+                "配置文件解析失败：全局变量树回滚失败\n"
+            );
+    }
     return ok;
 }

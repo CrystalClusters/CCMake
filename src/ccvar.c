@@ -1703,12 +1703,12 @@ static void var_free_all(CCVarTree *tree)
     tree->rbt_owner = CC_VAR_NIL;
 }
 
-void ccvar_clear(CCVarTree *tree)
+CCVarResult ccvar_clear(CCVarTree *tree)
 {
     if (!tree)
-        return;
+        return CC_VAR_ERR_PARAM;
     var_free_all(tree);
-    (void)var_init_root(tree);
+    return var_init_root(tree);
 }
 
 void ccvar_destroy(CCVarTree *tree)
