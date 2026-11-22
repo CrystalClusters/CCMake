@@ -24,6 +24,11 @@ tests/
   cmk/test_cmk_semantic.c CMK Semantic 用例
   cmk/test_cmk_runtime.c  CMK Configure 运行时用例
   cmk/test_cmk_program.c  CMK 模块加载与 Program 用例
+  cmk/test_cmk_ir.c       CMK 构建计划 IR（M5）
+  cmk/test_cmk_scheduler.c CMK Scheduler（M6）
+  cmk/test_cmk_process.c  CMK Process（M7）
+  cmk/test_cmk_executor.c CMK Executor（M7）
+  cmk/test_cmk_cache.c    CMK 增量缓存（M8）
   cmk/cmk_parser_test_util.c/.h Parser 测试辅助
   cmk/cmk_test_context.c/.h Semantic/Runtime 测试辅助
   vars/test_ccvar.c       全局变量树用例
@@ -53,6 +58,11 @@ test.bat CMKVALUE
 test.bat CMKBUILTIN
 test.bat CMKSEMANTIC
 test.bat CMKRUNTIME
+test.bat CMKIR
+test.bat CMKSCHED
+test.bat CMKPROC
+test.bat CMKEXEC
+test.bat CMKCACHE
 test.bat CMKPROGRAM
 ```
 
@@ -101,7 +111,12 @@ bash test.sh CMKPROGRAM
 - CMK Builtin：注册表、纯计算、host_info、动作构造、find_files、error 格式与参数错误；
 - CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、target 字段、配置引用、控制流返回检查、5000 层显式语句/表达式/顶层 if 栈；
 - CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误、`CMKExecutionPolicy`（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、通用语句上下文 VM、5000 层非 return 深递归与循环内递归；
-- CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入、导入错误、Program 执行策略、环境变量策略、`-j` 并发继承、进程/捕获策略与非法环境变量回退。
+- CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入、导入错误、Program 执行策略、环境变量策略、`-j` 并发继承、进程/捕获策略与非法环境变量回退；
+- CMK IR：目标/动作复制、依赖解析、拓扑序、缺失依赖诊断；
+- CMK Scheduler：依赖成功、聚合目标、fail-fast、keep-going、BLOCKED/CANCELLED、并发 READY 批次；
+- CMK Process：进程输出、退出码、捕获上限；
+- CMK Executor：mkdir/copy/move/remove 与 exec 动作；
+- CMK Cache：签名命中、输入变化失效、输出缺失失效、`-B` 绕过。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse` / CMK Program API，不经过 `main`；命令行用例不受 `.ccm`/`.cmk` 解析影响。
 

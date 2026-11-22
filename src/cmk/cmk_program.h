@@ -11,6 +11,7 @@
 #define _INCLUDE_CMK_PROGRAM_H_
 
 #include "cmk_config.h"
+#include "cmk_ir.h"
 #include "cmk_runtime.h"
 
 typedef struct cmk_program CMKProgram;
@@ -27,6 +28,14 @@ CCBOOL cmk_program_load(
 );
 /* 初始化各模块全局变量，并求值根模块的 target 声明 */
 CCBOOL cmk_program_configure(CMKProgram *program);
+/* 选择 Configure 后要冻结的根目标；默认 main */
+void cmk_program_set_target_name(
+    CMKProgram *program, const char *name
+);
+/* 显式 Lowering；Configure 默认按目标名自动调用 */
+CCBOOL cmk_program_lower(CMKProgram *program, const char *target_name);
+const CMKPlan *cmk_program_plan(const CMKProgram *program);
+CMKPlan *cmk_program_plan_mut(CMKProgram *program);
 /* 设置 Configure 执行策略；应在 cmk_program_configure 前调用 */
 void cmk_program_set_policy(
     CMKProgram *program, const CMKExecutionPolicy *policy

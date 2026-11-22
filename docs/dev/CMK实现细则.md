@@ -813,11 +813,11 @@ Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算�
 | M2 | AST / Parser（见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)） | AST 所有权与校验、表达式优先级、完整样例 AST golden test |
 | M3 | Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
 | M4 | Value / Configure 求值 | 表达式、函数、内建调用、while 可运行；不执行外部命令（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
-| M5 | Lowering / IR / Plan Validation | 生成可冻结计划，AST 可释放 |
-| M6 | 单线程 Scheduler + fake Executor | 依赖、失败、BLOCKED、-k 正确 |
-| M7 | Process / Executor | 真实命令、文件动作、取消、回收 |
-| M8 | 增量缓存 | 签名、缺失输出、-B |
-| M9 | 并发调度 | `-j`、状态一致、日志确定 |
+| M5 | Lowering / IR / Plan Validation | 已完成：目标/动作 IR、冻结验证、拓扑序 |
+| M6 | 单线程 Scheduler + fake Executor | 已完成：依赖、失败、BLOCKED、-k 正确 |
+| M7 | Process / Executor | 已完成：真实命令、文件动作、捕获上限 |
+| M8 | 增量缓存 | 已完成：签名、缺失输出、-B |
+| M9 | 并发调度 | 已完成：`-j` READY 批次并发、状态一致、独立任务测试 |
 
 每个阶段先写独立测试，再实现功能；不得跨阶段合并。
 

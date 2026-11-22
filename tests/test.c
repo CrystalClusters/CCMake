@@ -13,8 +13,7 @@ typedef struct test_suite {
     void (*run)(void);
 } test_suite;
 
-static const test_suite g_suites[] = {
-    { "CMD", "命令行解析", test_cmd },
+static const test_suite g_suites[] = {    { "CMD", "命令行解析", test_cmd },
     { "CCM", "CCM 文件检查与定位", test_ccm_locate },
     { "PARSE", "CCM 内容解析", test_ccm_parse },
     { "VARS", "全局变量树", test_ccvar },
@@ -29,6 +28,11 @@ static const test_suite g_suites[] = {
     { "CMKBUILTIN", "CMK 内建函数", test_cmk_builtin },
     { "CMKSEMANTIC", "CMK 语义分析", test_cmk_semantic },
     { "CMKRUNTIME", "CMK Configure 运行时", test_cmk_runtime },
+    { "CMKIR", "CMK 构建计划 IR（M5）", test_cmk_ir },
+    { "CMKSCHED", "CMK Scheduler（M6）", test_cmk_scheduler },
+    { "CMKPROC", "CMK Process（M7）", test_cmk_process },
+    { "CMKEXEC", "CMK Executor（M7）", test_cmk_executor },
+    { "CMKCACHE", "CMK 增量缓存（M8）", test_cmk_cache },
     { "CMKPROGRAM", "CMK 模块与 Configure 入口", test_cmk_program }
 };
 

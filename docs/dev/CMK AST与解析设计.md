@@ -1023,7 +1023,7 @@ tests/cmk/
 M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（10 个用例）已落地。
 M2.1 状态：已完成。`cmk_parser.h`、`cmk_parser_internal.h`、`cmk_parser.c` 与 `CMKPARSER` 套件（11 个用例）已落地。
 M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/确定性随机输入测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。
-M3/M4 状态：已完成。语义与运行时边界见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)；下一步进入 M5。
+M3/M4 状态：已完成。M5-M8 的 IR、Scheduler、Process/Executor、Cache 已落地；M9 并发调度与 CLI 串接进行中。语义与运行时边界见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)，计划/执行见 [CMK 构建计划与执行](CMK构建计划与执行.md)。
 
 ## 9. 测试计划
 

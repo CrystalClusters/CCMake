@@ -2,7 +2,7 @@
 
 本文冻结 M3（Scope / Semantic）与 M4（Value / Configure 求值）的模块边界、数据模型、求值规则与验收范围。M3 只回答“名字和类型是否合法”，M4 只回答“合法的 Configure 程序如何求值”；两者都不生成 Build Plan，不执行外部命令。
 
-M3/M4 状态：已完成。实现文件为 `cmk_value.*`、`cmk_config.*`、`cmk_builtin.*`、`cmk_builtin_std.c`、`cmk_semantic.*`、`cmk_runtime.*`、`cmk_program.*`；下一步进入 M5（Lowering / IR / Plan Validation）。
+M3/M4 状态：已完成。M5-M9 已落地（IR/Plan、Scheduler、Process/Executor、Cache、并发调度），CLI 已串接 Configure → Lower → Scheduler → Executor。实现文件为 `cmk_value.*`、`cmk_config.*`、`cmk_builtin.*`、`cmk_builtin_std.c`、`cmk_semantic.*`、`cmk_runtime.*`、`cmk_program.*`，以及 `cmk_target.*`、`cmk_ir.*`、`cmk_scheduler.*`、`cmk_process.*`、`cmk_executor.*`、`cmk_cache.*`。
 
 ## 1. 阶段目标与非目标
 

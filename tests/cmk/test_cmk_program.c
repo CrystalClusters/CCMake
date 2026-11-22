@@ -384,4 +384,42 @@ void test_cmk_program(void)
 #endif
     }
     CC_CASE_END();
+
+    CC_CASE("PRG-011", "Program Lowering");
+    {
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/root.cmk"),
+            "加载 Lowering 根模块"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure Lowering");
+        CC_CHECK(
+            cmk_program_lower(ctx.program, "main"),
+            "生成冻结计划"
+        );
+        const CMKPlan *plan = cmk_program_plan(ctx.program);
+        CC_CHECK(plan != NULL, "Program 持有计划");
+        CC_CHECK(plan && cmk_plan_is_frozen(plan), "计划已冻结");
+        CC_CHECK_EQ_I64(
+            "计划目标数", 2,
+            (CCINT64)(plan ? cmk_plan_target_count(plan) : 0)
+        );
+        if (plan)
+        {
+            CC_CHECK_EQ_I64(
+                "计划根目标", 0, (CCINT64)cmk_plan_root(plan)
+            );
+            CC_CHECK_EQ_I64(
+                "计划拓扑序 core", 1,
+                (CCINT64)cmk_plan_order_at(plan, 0)
+            );
+            CC_CHECK_EQ_I64(
+                "计划拓扑序 main", 0,
+                (CCINT64)cmk_plan_order_at(plan, 1)
+            );
+        }
+        program_test_clear(&ctx);
+    }
+    CC_CASE_END();
 }

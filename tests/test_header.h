@@ -27,5 +27,10 @@ void test_cmk_builtin(void);
 void test_cmk_semantic(void);
 void test_cmk_runtime(void);
 void test_cmk_program(void);
+void test_cmk_ir(void);
+void test_cmk_scheduler(void);
+void test_cmk_process(void);
+void test_cmk_executor(void);
+void test_cmk_cache(void);
 
 #endif

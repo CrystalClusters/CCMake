@@ -8,7 +8,9 @@
  */
 
 #include "cmk_program.h"
+#include "cmk_executor.h"
 #include "cmk_safe.h"
+#include "cmk_scheduler.h"
 
 #include "ccmake_header.h"
 #include "ccm/ccm_internal.h"
@@ -57,6 +59,8 @@ struct cmk_program {
     CMKProgramModule *root;
     char *work_dir;
     CMKExecutionPolicy policy;
+    CMKPlan *plan;
+    char *target_name;
     CCBOOL loaded;
     CCBOOL configured;
     CCBOOL failed;
@@ -975,12 +979,139 @@ CCBOOL cmk_program_configure(CMKProgram *program)
     if (!program_init_module_globals(program, program->root))
         return CCFALSE;
 
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        CMKProgramModule *module = modules[i];
+        if (!module || module == program->root ||
+            module->state != CMK_MODULE_LOADED ||
+            !module->runtime)
+            continue;
+        if (!cmk_runtime_configure(module->runtime))
+        {
+            program->failed = CCTRUE;
+            return CCFALSE;
+        }
+    }
+
     if (!cmk_runtime_configure(program->root->runtime))
     {
         program->failed = CCTRUE;
         return CCFALSE;
     }
     return CCTRUE;
+}
+
+void cmk_program_set_target_name(
+    CMKProgram *program, const char *name
+)
+{
+    if (!program || program->configured)
+        return;
+    if (program->target_name)
+    {
+        ccalloc(program->target_name, 0, NULL);
+        program->target_name = NULL;
+    }
+    if (!name)
+        return;
+    size_t len = strlen(name);
+    program->target_name = ccalloc(
+        NULL, (CCUINT64)len + 1, CMK_PROGRAM_COMMENT
+    );
+    if (program->target_name)
+        memcpy(program->target_name, name, len + 1);
+}
+
+static CCUINT32 program_module_path_len(const char *path)
+{
+    if (!path)
+        return 0;
+    CCUINT32 len = (CCUINT32)strlen(path);
+    while (len > 1 &&
+           (path[len - 1] == '/' || path[len - 1] == '\\'))
+        len--;
+    return len;
+}
+
+CCBOOL cmk_program_lower(
+    CMKProgram *program, const char *target_name
+)
+{
+    if (!program || !program->configured || program->failed)
+        return CCFALSE;
+    if (program->plan)
+    {
+        cmk_plan_destroy(program->plan);
+        program->plan = NULL;
+    }
+    CMKPlan *plan = cmk_plan_create();
+    if (!plan)
+        return program_error(
+            program, program->root, CMK_AST_NODE_NIL,
+            "构建计划分配失败"
+        );
+
+    CMKProgramModule **modules =
+        (CMKProgramModule **)program->modules.array;
+    CCUINT32 count =
+        program->modules.size / (CCUINT32)sizeof(CMKProgramModule *);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        CMKProgramModule *module = modules[i];
+        if (!module || module->state != CMK_MODULE_LOADED ||
+            !module->runtime || !module->semantic)
+            continue;
+        CCUINT32 targets = cmk_runtime_target_count(module->runtime);
+        for (CCUINT32 t = 0; t < targets; t++)
+        {
+            const CMKTargetDraft *draft =
+                cmk_runtime_target_at(module->runtime, t);
+            if (!draft)
+                continue;
+            const char *path = module->semantic->path;
+            if (draft->info && draft->info->module &&
+                draft->info->module->path)
+                path = draft->info->module->path;
+            if (!cmk_plan_add_draft(
+                    plan, path, program_module_path_len(path),
+                    draft, program->diagnostic
+                ))
+            {
+                cmk_plan_destroy(plan);
+                return CCFALSE;
+            }
+        }
+    }
+
+    const char *root_path = program->root->semantic->path;
+    const char *root_name = target_name ? target_name : "main";
+    const CMKTargetInfo *root_info = cmk_semantic_find_target(
+        program->root->semantic, root_name,
+        (CCUINT32)strlen(root_name)
+    );
+    if (root_info && root_info->module && root_info->module->path)
+        root_path = root_info->module->path;
+    if (!cmk_plan_freeze(
+            plan, root_path, program_module_path_len(root_path),
+            root_name, (CCUINT32)strlen(root_name),
+            program->diagnostic
+        ))
+    {
+        cmk_plan_destroy(plan);
+        return CCFALSE;
+    }
+    program->plan = plan;
+    return CCTRUE;
+}
+
+const CMKPlan *cmk_program_plan(const CMKProgram *program)
+{
+    return program ? program->plan : NULL;
+}
+
+CMKPlan *cmk_program_plan_mut(CMKProgram *program)
+{
+    return program ? program->plan : NULL;
 }
 
 /* ============================================================================
@@ -1050,6 +1181,10 @@ void cmk_program_destroy(CMKProgram *program)
 {
     if (!program)
         return;
+    if (program->plan)
+        cmk_plan_destroy(program->plan);
+    if (program->target_name)
+        ccalloc(program->target_name, 0, NULL);
     CMKProgramModule **modules =
         (CMKProgramModule **)program->modules.array;
     CCUINT32 count =
@@ -1244,6 +1379,10 @@ CCBOOL parse_cmk(void)
         return CCFALSE;
     }
 
+    if (ccmake_global_var.target)
+        cmk_program_set_target_name(
+            program, ccmake_global_var.target
+        );
     CCBOOL ok = cmk_program_load(
         program, ccmake_global_var.cmk_path,
         ccmake_global_var.work_dir
@@ -1257,23 +1396,70 @@ CCBOOL parse_cmk(void)
         cmk_diagnostic_clear(&diagnostic);
         return CCFALSE;
     }
+    if (!cmk_program_lower(
+            program,
+            ccmake_global_var.target
+                ? ccmake_global_var.target : "main"
+        ))
+    {
+        cmk_diagnostic_print(&diagnostic, "构建计划");
+        cmk_program_destroy(program);
+        cmk_diagnostic_clear(&diagnostic);
+        return CCFALSE;
+    }
 
     if (ccmake_global_var.action == CC_CMD_ACTION_LIST_TARGETS)
     {
         color_print("可用目标：\n");
-        CCUINT32 count = cmk_program_target_count(program);
+        const CMKPlan *plan = cmk_program_plan(program);
+        CCUINT32 count = plan ? cmk_plan_target_count(plan) : 0;
         for (CCUINT32 i = 0; i < count; i++)
         {
-            const CMKTargetDraft *target =
-                cmk_program_target_at(program, i);
-            if (target && target->info)
-                color_print(
-                    "  %s\n", target->info->name.data
-                );
+            const CMKPlanTarget *target = cmk_plan_target_at(plan, i);
+            if (target)
+                color_print("  %s\n", target->key.name.data);
         }
+        cmk_program_destroy(program);
+        cmk_diagnostic_clear(&diagnostic);
+        return CCTRUE;
     }
+
+    CMKExecutionPolicy policy;
+    cmk_program_get_policy(program, &policy);
+    CMKExecutor *executor = cmk_executor_create(
+        &policy, &diagnostic
+    );
+    if (!executor)
+    {
+        cmk_program_destroy(program);
+        cmk_diagnostic_clear(&diagnostic);
+        return CCFALSE;
+    }
+    CMKScheduler *scheduler = cmk_scheduler_create(
+        cmk_program_plan_mut(program),
+        cmk_executor_ops(), executor, &diagnostic
+    );
+    if (!scheduler)
+    {
+        cmk_executor_destroy(executor);
+        cmk_program_destroy(program);
+        cmk_diagnostic_clear(&diagnostic);
+        return CCFALSE;
+    }
+    cmk_scheduler_set_jobs(
+        scheduler,
+        policy.max_processes != 0
+            ? policy.max_processes : ccmake_global_var.jobs
+    );
+    ok = cmk_scheduler_run(
+        scheduler, ccmake_global_var.keep_going
+    );
+    if (!ok)
+        cmk_diagnostic_print(&diagnostic, "构建");
+    cmk_scheduler_destroy(scheduler);
+    cmk_executor_destroy(executor);
 
     cmk_program_destroy(program);
     cmk_diagnostic_clear(&diagnostic);
-    return CCTRUE;
+    return ok;
 }
