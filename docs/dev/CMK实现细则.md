@@ -755,7 +755,7 @@ signature = Hash(
 
 ```text
 src/cmk/
-  cmk_program.c/h       源码、AST arena、IR arena、诊断
+  cmk_program.c/h       模块加载、导入图、Configure 入口（M3/M4）
   cmk_source.c/h        源码缓冲区和位置
   cmk_token.h
   cmk_lexer.c/h
@@ -768,23 +768,24 @@ src/cmk/
   cmk_parser_stmt.c      语句解析
   cmk_parser_decl.c      声明、导入、target 解析
   cmk_diagnostic.c/h
-  cmk_semantic.c/h
-  cmk_scope.c/h
-  cmk_value.c/h
+  cmk_value.c/h          值、类型、列表、动作、目标引用
+  cmk_config.c/h         .ccm 变量树适配
   cmk_builtin.c/h        注册表、签名、调用上下文
   cmk_builtin_std.c      标准内建与动作构造器
-  cmk_ir.c/h
-  cmk_target.c/h
-  cmk_scheduler.c/h
-  cmk_process.c/h
-  cmk_executor.c/h
-  cmk_cache.c/h
+  cmk_semantic.c/h       作用域、类型、函数、导入、target
+  cmk_runtime.c/h        Configure 求值、函数帧、target draft
+  cmk_ir.c/h             M5
+  cmk_target.c/h         M5
+  cmk_scheduler.c/h      M6
+  cmk_process.c/h        M7
+  cmk_executor.c/h       M6/M7
+  cmk_cache.c/h          M8
 ```
 
 - 构建脚本递归编译 `src/`，`src/cmk/` 无需修改构建入口；
 - 测试放 `tests/cmk/`，并加入 `scripts/build_test.*` 的测试目录；
 - 不一次性创建所有文件，按里程碑逐步落地；
-- `cmk_program` 或 `cmk_context` 是源码、AST、IR、诊断、值 arena 的根所有者；
+- `cmk_program` 是源码、AST、Semantic、Runtime、诊断与模块表的根所有者；M5 加入 IR 所有权；
 - M2 的 AST 数据模型、Parser 拆分、所有权与预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)。
 
 ## 10. 资源与失败
@@ -809,8 +810,8 @@ Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算�
 | M0 | 语言规范、EBNF、样例、诊断、所有权表、内建 ABI | 语法、目标模型和内建接口冻结 |
 | M1 | Lexer | Token 序列、位置、长度和错误测试 |
 | M2 | AST / Parser（见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)） | AST 所有权与校验、表达式优先级、完整样例 AST golden test |
-| M3 | Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误 |
-| M4 | Value / Configure 求值 | 表达式、函数、内建调用、while 可运行；不执行外部命令 |
+| M3 | Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
+| M4 | Value / Configure 求值 | 表达式、函数、内建调用、while 可运行；不执行外部命令（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
 | M5 | Lowering / IR / Plan Validation | 生成可冻结计划，AST 可释放 |
 | M6 | 单线程 Scheduler + fake Executor | 依赖、失败、BLOCKED、-k 正确 |
 | M7 | Process / Executor | 真实命令、文件动作、取消、回收 |

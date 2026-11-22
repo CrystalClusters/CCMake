@@ -90,5 +90,7 @@ void clear_global_var(void);
 
 // 提供配置文件解析
 CCBOOL parse_ccm();
+// 提供构建脚本解析与 Configure 求值
+CCBOOL parse_cmk();
 
 #endif

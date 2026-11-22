@@ -1,0 +1,5 @@
+@import target missing_target from "lib.cmk" as common;
+
+target app() {
+    list<string> outputs = {"a.out"};
+}

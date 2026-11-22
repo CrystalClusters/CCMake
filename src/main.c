@@ -32,6 +32,9 @@ int main(int argc, char **argv)
     // 步骤四，配置文件解析
     if (!parse_ccm())
         goto FailedtoParseConfig;
+    // 步骤五，构建脚本解析与 Configure 求值
+    if (!parse_cmk())
+        goto FailedtoParseConfig;
 
 Done:
     clear_global_var();

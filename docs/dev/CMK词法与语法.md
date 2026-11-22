@@ -339,7 +339,7 @@ M1 已落地：
 
 `CMK-027` 是确定性的随机字节输入测试，固定种子、固定轮数，用于保证 Lexer 在各种字节组合下不崩溃、不越界。
 
-M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶层声明和完整模块解析均已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`cmk_parser*.c/h`）。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
+M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶层声明和完整模块解析均已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`cmk_parser*.c/h`）。M3/M4 已完成：Value、Builtin、Semantic、Runtime 与 Program 已落地，详见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
 
 | 套件 | 用例 | 覆盖 |
 |---|---|---|
@@ -349,6 +349,11 @@ M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶
 | `CMKSTMT` | `STMT-001` 至 `STMT-007` | 变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误 |
 | `CMKDECL` | `DECL-001` 至 `DECL-006` | include/import、变量/函数、target 字段、顶层 if、完整模块、声明错误 |
 | `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、随机字节输入 |
+| `CMKVALUE` | `VAL-001` 至 `VAL-005` | 类型、字符串/列表/动作所有权、目标引用、文本化 |
+| `CMKBUILTIN` | `BLT-001` 至 `BLT-005` | 注册表、纯计算、host_info、动作构造、find_files、错误格式 |
+| `CMKSEMANTIC` | `SEM-001` 至 `SEM-006` | 作用域、类型、函数、内建、target、配置、控制流 |
+| `CMKRUNTIME` | `RT-001` 至 `RT-007` | 表达式、函数/递归、while/for、内建、target draft、运行时错误 |
+| `CMKPROGRAM` | `PRG-001` 至 `PRG-005` | 模块加载、导入、通配/别名、@include、循环导入 |
 
 ### 8.1 Lexer 输入契约
 

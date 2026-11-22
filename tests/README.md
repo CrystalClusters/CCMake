@@ -19,9 +19,16 @@ tests/
   cmk/test_cmk_parser_stmt.c CMK 语句解析用例
   cmk/test_cmk_parser_decl.c CMK 声明解析用例
   cmk/test_cmk_parser_stress.c CMK Parser 压力与随机输入用例
+  cmk/test_cmk_value.c    CMK Value 模型用例
+  cmk/test_cmk_builtin.c  CMK Builtin 注册表与标准内建用例
+  cmk/test_cmk_semantic.c CMK Semantic 用例
+  cmk/test_cmk_runtime.c  CMK Configure 运行时用例
+  cmk/test_cmk_program.c  CMK 模块加载与 Program 用例
   cmk/cmk_parser_test_util.c/.h Parser 测试辅助
+  cmk/cmk_test_context.c/.h Semantic/Runtime 测试辅助
   vars/test_ccvar.c       全局变量树用例
   data/ccm/               CCM 用例 fixture（不参与测试程序编译）
+  data/cmk/program/       CMK Program 用例 fixture（不参与测试程序编译）
 ```
 
 产物：`out/<平台>_bin/ccmake_test(.exe)`。
@@ -42,6 +49,11 @@ test.bat CMKEXPR
 test.bat CMKSTMT
 test.bat CMKDECL
 test.bat CMKSTRESS
+test.bat CMKVALUE
+test.bat CMKBUILTIN
+test.bat CMKSEMANTIC
+test.bat CMKRUNTIME
+test.bat CMKPROGRAM
 ```
 
 ```bash
@@ -58,6 +70,11 @@ bash test.sh CMKEXPR
 bash test.sh CMKSTMT
 bash test.sh CMKDECL
 bash test.sh CMKSTRESS
+bash test.sh CMKVALUE
+bash test.sh CMKBUILTIN
+bash test.sh CMKSEMANTIC
+bash test.sh CMKRUNTIME
+bash test.sh CMKPROGRAM
 ```
 
 `test.bat` / `test.sh` 只检查产物是否存在并运行，不负责编译。
@@ -79,9 +96,14 @@ bash test.sh CMKSTRESS
 - CMK 表达式：字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界与 INT64_MIN、复杂表达式结构、一元与丢弃符、赋值语句化；
 - CMK 语句：变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误；
 - CMK 声明：include/import、变量/函数、target 字段、顶层 if、完整模块与声明错误；
-- CMK Parser 压力：语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、确定性随机字节输入。
+- CMK Parser 压力：语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、确定性随机字节输入；
+- CMK Value：类型、字符串所有权、列表深复制、目标引用、动作与文本化；
+- CMK Builtin：注册表、纯计算、host_info、动作构造、find_files、error 格式与参数错误；
+- CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、target 字段、配置引用、控制流返回检查；
+- CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误；
+- CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入与导入错误。
 
-测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
+测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse` / CMK Program API，不经过 `main`；命令行用例不受 `.ccm`/`.cmk` 解析影响。
 
 ## 断言方式
 

@@ -1,0 +1,7 @@
+@import func double_it as twice from "lib.cmk";
+
+int value = twice(4);
+
+target main() {
+    list<string> outputs = {"alias.out"};
+}

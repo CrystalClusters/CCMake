@@ -1048,13 +1048,12 @@ static CCBOOL parser_parse_file(
     return CCTRUE;
 }
 
-CCBOOL ccm_parse(CCMakeCCMContext *ctx)
+CCBOOL ccm_parse_into(
+    CCMakeCCMContext *ctx, CCVarTree *tree, CCBOOL apply_defines
+)
 {
-    if (!ctx)
-        return CCFALSE;
-    CCVarTree *tree = ccvar_global();
-    if (!tree)
-        return ccm_parse_failf("(.ccm)", 0, "全局变量树未初始化");
+    if (!ctx || !tree)
+        return ccm_parse_failf("(.ccm)", 0, "解析上下文或变量树未初始化");
 
     CCUINT32 count = ctx->order.size / (CCUINT32)sizeof(CCUINT32);
     for (CCUINT32 i = 0; i < count; i++)
@@ -1072,6 +1071,8 @@ CCBOOL ccm_parse(CCMakeCCMContext *ctx)
     }
 
     /* -D 覆盖：全部文件之后应用，优先级最高；键按路径段解释 */
+    if (!apply_defines)
+        return CCTRUE;
     CCUINT32 def_count =
         ccmake_global_var.defines.size / (CCUINT32)sizeof(CCMakeDefine);
     for (CCUINT32 i = 0; i < def_count; i++)
@@ -1101,4 +1102,14 @@ CCBOOL ccm_parse(CCMakeCCMContext *ctx)
             return ccm_parse_failf("(.ccm)", 0, "-D 参数应用失败：%s", def.key);
     }
     return CCTRUE;
+}
+
+CCBOOL ccm_parse(CCMakeCCMContext *ctx)
+{
+    if (!ctx)
+        return CCFALSE;
+    CCVarTree *tree = ccvar_global();
+    if (!tree)
+        return ccm_parse_failf("(.ccm)", 0, "全局变量树未初始化");
+    return ccm_parse_into(ctx, tree, CCTRUE);
 }

@@ -150,6 +150,14 @@ CCBOOL ccm_scan_includes(
 
 CCBOOL ccm_parse(CCMakeCCMContext *ctx);
 
+/*
+ * 按 ctx->order 把字段写入指定变量树。
+ * apply_defines 为 TRUE 时应用命令行 -D 覆盖；供 .cmk @include 复用时传 FALSE。
+ */
+CCBOOL ccm_parse_into(
+    CCMakeCCMContext *ctx, CCVarTree *tree, CCBOOL apply_defines
+);
+
 /* 第二阶段诊断；返回 CCFALSE，便于 return 传播 */
 CCBOOL ccm_parse_failf(
     const char *file,

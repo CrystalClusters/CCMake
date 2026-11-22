@@ -1021,7 +1021,8 @@ tests/cmk/
 
 M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（10 个用例）已落地。
 M2.1 状态：已完成。`cmk_parser.h`、`cmk_parser_internal.h`、`cmk_parser.c` 与 `CMKPARSER` 套件（11 个用例）已落地。
-M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/确定性随机输入测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。下一步进入 M3。
+M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/确定性随机输入测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。
+M3/M4 状态：已完成。语义与运行时边界见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)；下一步进入 M5。
 
 ## 9. 测试计划
 
@@ -1035,8 +1036,13 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 | `CMKSTMT` | `STMT-001` 至 `STMT-007` | 语句、控制流、悬空 else、赋值 |
 | `CMKDECL` | `DECL-001` 至 `DECL-006` | 导入/包含、函数、target、顶层 if、完整模块 |
 | `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式/类型深度、预算、大量声明、失败复用、确定性随机输入 |
+| `CMKVALUE` | `VAL-001` 至 `VAL-005` | 类型、字符串/列表/动作所有权、目标引用、文本化 |
+| `CMKBUILTIN` | `BLT-001` 至 `BLT-005` | 注册表、纯计算、host_info、动作构造、find_files、错误格式 |
+| `CMKSEMANTIC` | `SEM-001` 至 `SEM-006` | 作用域、类型、函数、内建、target、配置、控制流 |
+| `CMKRUNTIME` | `RT-001` 至 `RT-007` | 表达式、函数/递归、while/for、内建、target draft、运行时错误 |
+| `CMKPROGRAM` | `PRG-001` 至 `PRG-005` | 模块加载、导入函数/target、通配/别名、@include、循环导入 |
 
-现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件入口。
+现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS`、`CMKVALUE`、`CMKBUILTIN`、`CMKSEMANTIC`、`CMKRUNTIME`、`CMKPROGRAM` 套件入口。
 
 ### 9.2 AST 测试
 
@@ -1090,4 +1096,5 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 - [开发手册](开发手册.md)：挂接本文链接；
 - M2.0 的 `cmk_ast`、`cmk_limits` 与 `CMKAST` 测试已按本文落地；
 - M2.1 的 Parser 基础设施与 `CMKPARSER` 测试已落地；
-- M2.2–M2.5 的表达式、语句、声明、预算/压力/确定性随机输入测试已落地；M2 完成，下一步进入 M3。
+- M2.2–M2.5 的表达式、语句、声明、预算/压力/确定性随机输入测试已落地；M2 完成；
+- M3/M4 的 Value、Builtin、Semantic、Runtime、Program 测试已落地；下一步进入 M5。

@@ -1,0 +1,7 @@
+@include "config.ccm";
+
+string name = @{name};
+
+target main() {
+    list<string> outputs = {name};
+}

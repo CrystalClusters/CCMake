@@ -1,0 +1,5 @@
+@import func f from "does_not_exist.cmk";
+
+target app() {
+    list<string> outputs = {"a.out"};
+}

@@ -1,0 +1,9 @@
+@import func g from "cycle_a.cmk";
+
+func f(int n) -> int {
+    return n;
+}
+
+target other() {
+    list<string> outputs = {"b.out"};
+}

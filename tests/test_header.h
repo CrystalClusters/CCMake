@@ -22,5 +22,10 @@ void test_cmk_parser_expr(void);
 void test_cmk_parser_stmt(void);
 void test_cmk_parser_decl(void);
 void test_cmk_parser_stress(void);
+void test_cmk_value(void);
+void test_cmk_builtin(void);
+void test_cmk_semantic(void);
+void test_cmk_runtime(void);
+void test_cmk_program(void);
 
 #endif
