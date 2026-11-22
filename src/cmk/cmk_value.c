@@ -8,6 +8,7 @@
  */
 
 #include "cmk_value.h"
+#include "cmk_safe.h"
 
 #include <ccalloc.h>
 
@@ -267,12 +268,12 @@ CCBOOL cmk_list_append(CMKList *list, const CMKValue *value)
     cmk_value_init(&copy);
     if (!cmk_value_copy(&copy, value))
         return CCFALSE;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &list->elements,
             (CCUINT32)sizeof(CMKValue),
             (CCINT32)sizeof(CMKValue),
             &copy
-        ) != 0)
+        ))
     {
         cmk_value_clear(&copy);
         return CCFALSE;

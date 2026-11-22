@@ -6,8 +6,10 @@
 #include "test_harness.h"
 
 #include "ccvar.h"
+#include "ccmake_header.h"
 #include "cmk/cmk_program.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct cmk_program_test {
@@ -227,6 +229,159 @@ void test_cmk_program(void)
         CC_CHECK(value.as.integer == 8, "函数别名结果");
         cmk_value_clear(&value);
         program_test_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * PRG-006 Program 执行策略
+     * ---------------------------------------------------------------- */
+    CC_CASE("PRG-006", "Program 执行策略");
+    {
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(
+                &ctx, "tests/data/cmk/program/policy.cmk"
+            ),
+            "加载策略用例"
+        );
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_steps = 2;
+        cmk_program_set_policy(ctx.program, &policy);
+        CC_CHECK(!cmk_program_configure(ctx.program), "Program 步数预算触发");
+        CC_CHECK(
+            ctx.diagnostic.message &&
+            strstr(ctx.diagnostic.message, "执行步数") != NULL,
+            "Program 策略诊断"
+        );
+        program_test_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * PRG-007 环境变量执行策略
+     * ---------------------------------------------------------------- */
+    CC_CASE("PRG-007", "环境变量执行策略");
+    {
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_STEPS=2");
+#else
+        setenv("CCMAKE_CMK_MAX_STEPS", "2", 1);
+#endif
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(
+                &ctx, "tests/data/cmk/program/policy.cmk"
+            ),
+            "加载环境策略用例"
+        );
+        CC_CHECK(
+            !cmk_program_configure(ctx.program),
+            "环境变量步数预算触发"
+        );
+        CC_CHECK(
+            ctx.diagnostic.message &&
+            strstr(ctx.diagnostic.message, "执行步数") != NULL,
+            "环境变量策略诊断"
+        );
+        program_test_clear(&ctx);
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_STEPS=");
+#else
+        unsetenv("CCMAKE_CMK_MAX_STEPS");
+#endif
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * PRG-008 并发策略继承 -j
+     * ---------------------------------------------------------------- */
+    CC_CASE("PRG-008", "并发策略继承");
+    {
+        CCUINT32 saved_jobs = ccmake_global_var.jobs;
+        ccmake_global_var.jobs = 4;
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CMKExecutionPolicy policy;
+        cmk_program_get_policy(ctx.program, &policy);
+        CC_CHECK_EQ_I64(
+            "max_processes 继承 -j",
+            4, (CCINT64)policy.max_processes
+        );
+        program_test_clear(&ctx);
+        ccmake_global_var.jobs = saved_jobs;
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * PRG-009 并发/捕获策略环境变量
+     * ---------------------------------------------------------------- */
+    CC_CASE("PRG-009", "并发/捕获策略环境变量");
+    {
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_PROCESSES=7");
+        _putenv("CCMAKE_CMK_MAX_OUTPUT_CAPTURE=4096");
+#else
+        setenv("CCMAKE_CMK_MAX_PROCESSES", "7", 1);
+        setenv("CCMAKE_CMK_MAX_OUTPUT_CAPTURE", "4096", 1);
+#endif
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CMKExecutionPolicy policy;
+        cmk_program_get_policy(ctx.program, &policy);
+        CC_CHECK_EQ_I64(
+            "max_processes 环境变量",
+            7, (CCINT64)policy.max_processes
+        );
+        CC_CHECK_EQ_I64(
+            "max_output_capture 环境变量",
+            4096, (CCINT64)policy.max_output_capture
+        );
+        program_test_clear(&ctx);
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_PROCESSES=");
+        _putenv("CCMAKE_CMK_MAX_OUTPUT_CAPTURE=");
+#else
+        unsetenv("CCMAKE_CMK_MAX_PROCESSES");
+        unsetenv("CCMAKE_CMK_MAX_OUTPUT_CAPTURE");
+#endif
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * PRG-010 非法环境变量回退
+     * ---------------------------------------------------------------- */
+    CC_CASE("PRG-010", "非法环境变量回退");
+    {
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_RECURSION_DEPTH=not-a-number");
+        _putenv("CCMAKE_CMK_MAX_FIND_DEPTH=99999999999999999999");
+#else
+        setenv("CCMAKE_CMK_MAX_RECURSION_DEPTH", "not-a-number", 1);
+        setenv("CCMAKE_CMK_MAX_FIND_DEPTH", "99999999999999999999", 1);
+#endif
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CMKExecutionPolicy policy;
+        cmk_program_get_policy(ctx.program, &policy);
+        CC_CHECK_EQ_I64(
+            "非法递归深度回退 0",
+            0, (CCINT64)policy.max_recursion_depth
+        );
+        CC_CHECK_EQ_I64(
+            "超范围 find 深度回退 0",
+            0, (CCINT64)policy.max_find_depth
+        );
+        program_test_clear(&ctx);
+#if defined(_WIN32)
+        _putenv("CCMAKE_CMK_MAX_RECURSION_DEPTH=");
+        _putenv("CCMAKE_CMK_MAX_FIND_DEPTH=");
+#else
+        unsetenv("CCMAKE_CMK_MAX_RECURSION_DEPTH");
+        unsetenv("CCMAKE_CMK_MAX_FIND_DEPTH");
+#endif
     }
     CC_CASE_END();
 }

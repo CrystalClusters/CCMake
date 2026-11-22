@@ -8,6 +8,7 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_safe.h"
 #include "ccm_scan_util.h"
 
 #include <cc_wildcard.h>
@@ -66,7 +67,8 @@ static CCBOOL find_tokenize(
         if (i >= len)
             break;
 
-        if (out->tokens.size / (CCUINT32)sizeof(char *) >= max_tokens)
+        if (max_tokens != 0 &&
+            out->tokens.size / (CCUINT32)sizeof(char *) >= max_tokens)
         {
             find_tokens_free(out);
             return ccm_parse_failf(file, line, "${find} 参数数量超过限制");
@@ -117,11 +119,10 @@ static CCBOOL find_tokenize(
             text[n] = '\0';
         }
 
-        if (cc_dyn_core_push(
+        if (!ccm_dyn_push(
                 &out->tokens, (CCUINT32)sizeof(char *),
                 (CCINT32)sizeof(char *), &text
-            ) != 0
-        )
+            ))
         {
             ccalloc(text, 0, NULL);
             find_tokens_free(out);
@@ -135,7 +136,7 @@ static CCBOOL find_buf_put(CCDyn *buf, const char *text, CCUINT32 len)
 {
     for (CCUINT32 i = 0; i < len; i++)
     {
-        if (cc_dyn_core_push(buf, 1, 1, (void *)&text[i]) != 0)
+        if (!ccm_dyn_push(buf, 1, 1, (void *)&text[i]))
             return CCFALSE;
     }
     return CCTRUE;
@@ -150,11 +151,10 @@ static CCBOOL find_push_str(CCDyn *dyn, const char *text)
     if (!copy)
         return CCFALSE;
     memcpy(copy, text, strlen(text) + 1);
-    if (cc_dyn_core_push(
+    if (!ccm_dyn_push(
             dyn, (CCUINT32)sizeof(char *),
             (CCINT32)sizeof(char *), &copy
-        ) != 0
-    )
+        ))
     {
         ccalloc(copy, 0, NULL);
         return CCFALSE;
@@ -171,7 +171,7 @@ static CCINT32 find_add_result(CCDyn *results, const char *path, CCUINT32 max_re
         if (strcmp(items[i], path) == 0)
             return 0;
     }
-    if (count >= max_results)
+    if (max_results != 0 && count >= max_results)
         return -1;
     return find_push_str(results, path) ? 1 : -2;
 }
@@ -225,11 +225,10 @@ static CCINT32 find_list_callback(void *data, void *user)
         return 1;
     memcpy(item.name, entry->name, n + 1);
     item.type = entry->type;
-    if (cc_dyn_core_push(
+    if (!ccm_dyn_push(
             &ctx->entries, (CCUINT32)sizeof(CCMFindEntry),
             (CCINT32)sizeof(CCMFindEntry), &item
-        ) != 0
-    )
+        ))
     {
         ccalloc(item.name, 0, NULL);
         return 1;
@@ -248,6 +247,8 @@ static char *find_join_output(const char *dir, const char *rel)
 #endif
     size_t rl = strlen(rel);
     CCBOOL has_slash = (dl > 0 && dir[dl - 1] == '/') ? CCTRUE : CCFALSE;
+    if (dl > (size_t)-1 - rl - 2)
+        return NULL;
     size_t need = dl + (has_slash ? 0 : 1) + rl + 1;
     char *out = ccalloc(NULL, need, CC_DBG_REL_TAG(".ccm find 结果", NULL));
     if (!out)
@@ -414,6 +415,7 @@ static CCBOOL find_scan_entry(
     if (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "..") == 0)
         return CCTRUE;
     if (entry->type == CC_FS_TYPE_DIR &&
+        scan->limits->max_find_depth != 0 &&
         dir->depth >= scan->limits->max_find_depth)
     {
         ccm_parse_failf(scan->file, scan->line, "${find} 目录深度超过限制");
@@ -435,11 +437,10 @@ static CCBOOL find_scan_entry(
         child.vpath = cv;
         child.rel = cr;
         child.depth = dir->depth + 1;
-        if (cc_dyn_core_push(
+        if (!ccm_dyn_push(
                 &scan->stack, (CCUINT32)sizeof(CCMFindStackItem),
                 (CCINT32)sizeof(CCMFindStackItem), &child
-            ) != 0
-        )
+            ))
         {
             ccm_parse_failf(scan->file, scan->line, "内存分配失败");
             goto FailedPaths;
@@ -547,11 +548,10 @@ static CCBOOL find_scan_dir(CCMFindScan *scan, const char *vpath)
         ccm_parse_failf(scan->file, scan->line, "内存分配失败");
         return CCFALSE;
     }
-    if (cc_dyn_core_push(
+    if (!ccm_dyn_push(
             &scan->stack, (CCUINT32)sizeof(CCMFindStackItem),
             (CCINT32)sizeof(CCMFindStackItem), &root
-        ) != 0
-    )
+        ))
     {
         ccm_parse_failf(scan->file, scan->line, "内存分配失败");
         find_stack_item_free(&root);
@@ -733,7 +733,7 @@ CCBOOL ccm_find_eval(
             if (i > 0)
             {
                 char sp = ' ';
-                if (cc_dyn_core_push(&buf, 1, 1, &sp) != 0)
+                if (!ccm_dyn_push(&buf, 1, 1, &sp))
                 {
                     ccm_parse_failf(file, line, "内存分配失败");
                     goto Finished;
@@ -746,7 +746,7 @@ CCBOOL ccm_find_eval(
             }
         }
         char zero = '\0';
-        if (cc_dyn_core_push(&buf, 1, 1, &zero) != 0)
+        if (!ccm_dyn_push(&buf, 1, 1, &zero))
         {
             ccm_parse_failf(file, line, "内存分配失败");
             goto Finished;

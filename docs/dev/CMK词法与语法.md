@@ -349,11 +349,11 @@ M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶
 | `CMKSTMT` | `STMT-001` 至 `STMT-007` | 变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误 |
 | `CMKDECL` | `DECL-001` 至 `DECL-006` | include/import、变量/函数、target 字段、顶层 if、完整模块、声明错误 |
 | `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、随机字节输入 |
-| `CMKVALUE` | `VAL-001` 至 `VAL-005` | 类型、字符串/列表/动作所有权、目标引用、文本化 |
+| `CMKVALUE` | `VAL-001` 至 `VAL-006` | 类型、字符串/列表/动作所有权、目标引用、文本化、尺寸运算与动态追加边界 |
 | `CMKBUILTIN` | `BLT-001` 至 `BLT-005` | 注册表、纯计算、host_info、动作构造、find_files、错误格式 |
-| `CMKSEMANTIC` | `SEM-001` 至 `SEM-006` | 作用域、类型、函数、内建、target、配置、控制流 |
-| `CMKRUNTIME` | `RT-001` 至 `RT-007` | 表达式、函数/递归、while/for、内建、target draft、运行时错误 |
-| `CMKPROGRAM` | `PRG-001` 至 `PRG-005` | 模块加载、导入、通配/别名、@include、循环导入 |
+| `CMKSEMANTIC` | `SEM-001` 至 `SEM-009` | 作用域、类型、函数、内建、target、配置、控制流、5000 层显式语句/表达式/顶层 if 栈 |
+| `CMKRUNTIME` | `RT-001` 至 `RT-023` | 表达式、函数/递归、while/for、内建、target draft、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归 |
+| `CMKPROGRAM` | `PRG-001` 至 `PRG-010` | 模块加载、导入、通配/别名、@include、循环导入、Program 执行策略、环境变量策略、并发策略继承、进程/捕获策略、非法环境变量回退 |
 
 ### 8.1 Lexer 输入契约
 

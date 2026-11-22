@@ -8,6 +8,7 @@
  */
 
 #include "cmk_program.h"
+#include "cmk_safe.h"
 
 #include "ccmake_header.h"
 #include "ccm/ccm_internal.h"
@@ -21,6 +22,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CMK_PROGRAM_COMMENT CC_DBG_REL_TAG(".cmk 模块", NULL)
@@ -54,10 +56,19 @@ struct cmk_program {
     CCDyn modules;          /* CMKProgramModule*[] */
     CMKProgramModule *root;
     char *work_dir;
+    CMKExecutionPolicy policy;
     CCBOOL loaded;
     CCBOOL configured;
     CCBOOL failed;
 };
+
+typedef struct cmk_program_load_frame {
+    CMKProgramModule *module;
+    CMKASTNodeId root;
+    CMKASTNodeId next_child;
+    char *dir;
+    CCBOOL finalize;
+} CMKProgramLoadFrame;
 
 /* ============================================================================
  * 诊断与路径
@@ -178,6 +189,14 @@ static CCBOOL program_read_file(
         return program_error(
             program, module, CMK_AST_NODE_NIL,
             "无法回到 .cmk 文件开头：%s", module->path
+        );
+    }
+    if ((CCUINT64)length > (CCUINT64)(~(size_t)0) - 1)
+    {
+        fclose(file);
+        return program_error(
+            program, module, CMK_AST_NODE_NIL,
+            "文件长度超出宿主可表示范围：%s", module->path
         );
     }
 
@@ -450,11 +469,11 @@ static CMKProgramModule *program_new_module(
     memcpy(module->path, path, len + 1);
     module->state = CMK_MODULE_LOADING;
 
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &program->modules,
             (CCUINT32)sizeof(CMKProgramModule *),
             (CCINT32)sizeof(CMKProgramModule *), &module
-        ) != 0)
+        ))
     {
         ccalloc(module->path, 0, NULL);
         ccalloc(module, 0, NULL);
@@ -517,37 +536,30 @@ static CCBOOL program_apply_includes(
     return CCTRUE;
 }
 
-static CMKProgramModule *program_load_module(
-    CMKProgram *program, const char *path, const char *base
+static CCBOOL program_add_import_link(
+    CMKProgram *program, CMKProgramModule *module,
+    CMKASTNodeId decl, CMKProgramModule *imported
 )
 {
-    if (!program || !path)
-        return NULL;
-    char *normalized = program_normalize(program, path, base);
-    if (!normalized)
-        return NULL;
+    CMKProgramImport link;
+    memset(&link, 0, sizeof(link));
+    link.decl = decl;
+    link.module = imported;
+    if (!cmk_dyn_push(
+            &module->imports, (CCUINT32)sizeof(CMKProgramImport),
+            (CCINT32)sizeof(CMKProgramImport), &link
+        ))
+        return program_error(
+            program, module, decl, "导入记录内存分配失败"
+        );
+    return CCTRUE;
+}
 
-    CMKProgramModule *existing =
-        program_find_module(program, normalized);
-    if (existing)
-    {
-        ccalloc(normalized, 0, NULL);
-        if (existing->state == CMK_MODULE_LOADED)
-            return existing;
-        if (existing->state == CMK_MODULE_LOADING)
-        {
-            (void)program_error(
-                program, existing, CMK_AST_NODE_NIL,
-                "检测到循环导入：%s", existing->path
-            );
-            return NULL;
-        }
-        return NULL;
-    }
-
-    CMKProgramModule *module =
-        program_new_module(program, normalized);
-    ccalloc(normalized, 0, NULL);
+static CMKProgramModule *program_create_module(
+    CMKProgram *program, const char *path
+)
+{
+    CMKProgramModule *module = program_new_module(program, path);
     if (!module)
         return NULL;
 
@@ -586,110 +598,280 @@ static CMKProgramModule *program_load_module(
         );
         return NULL;
     }
-
-    if (!program_apply_includes(program, module, root_node, dir))
+    CCBOOL ok = program_apply_includes(
+        program, module, root_node, dir
+    );
+    ccalloc(dir, 0, NULL);
+    if (!ok)
     {
-        ccalloc(dir, 0, NULL);
         module->state = CMK_MODULE_FAILED;
         return NULL;
     }
+    return module;
+}
 
-    for (CMKASTNodeId child = root_node->first_child;
-         child != CMK_AST_NODE_NIL;)
+static CMKProgramModule *program_load_module(
+    CMKProgram *program, const char *path, const char *base
+)
+{
+    if (!program || !path)
+        return NULL;
+    char *normalized = program_normalize(program, path, base);
+    if (!normalized)
+        return NULL;
+
+    CMKProgramModule *existing =
+        program_find_module(program, normalized);
+    if (existing)
     {
-        const CMKASTNode *child_node =
-            cmk_ast_node(module->ast, child);
-        if (!child_node)
-        {
-            ccalloc(dir, 0, NULL);
-            module->state = CMK_MODULE_FAILED;
+        ccalloc(normalized, 0, NULL);
+        if (existing->state == CMK_MODULE_LOADED)
+            return existing;
+        if (existing->state == CMK_MODULE_LOADING)
             (void)program_error(
-                program, module, child, "模块节点缺失"
+                program, existing, CMK_AST_NODE_NIL,
+                "检测到循环导入：%s", existing->path
             );
-            return NULL;
-        }
-        CMKASTNodeId next = child_node->next_sibling;
-        if (child_node->kind == CMK_AST_IMPORT_DECL)
+        return NULL;
+    }
+
+    CMKProgramModule *root_module =
+        program_create_module(program, normalized);
+    ccalloc(normalized, 0, NULL);
+    if (!root_module)
+        return NULL;
+
+    CCDyn frames;
+    memset(&frames, 0, sizeof(frames));
+    CMKProgramLoadFrame first;
+    memset(&first, 0, sizeof(first));
+    first.module = root_module;
+    first.root = cmk_ast_root(root_module->ast);
+    const CMKASTNode *root_node =
+        cmk_ast_node(root_module->ast, first.root);
+    first.next_child = root_node ? root_node->first_child : CMK_AST_NODE_NIL;
+    first.dir = program_module_dir(root_module);
+    first.finalize = CCFALSE;
+    if (!first.dir ||
+        !cmk_dyn_push(
+            &frames, (CCUINT32)sizeof(CMKProgramLoadFrame),
+            (CCINT32)sizeof(CMKProgramLoadFrame), &first
+        ))
+    {
+        if (first.dir)
+            ccalloc(first.dir, 0, NULL);
+        (void)program_error(
+            program, root_module, first.root,
+            "模块加载帧分配失败"
+        );
+        goto Failed;
+    }
+
+    while (frames.size >= (CCUINT32)sizeof(CMKProgramLoadFrame))
+    {
+        CMKProgramLoadFrame *frame =
+            &((CMKProgramLoadFrame *)frames.array)
+                [frames.size / (CCUINT32)sizeof(CMKProgramLoadFrame) - 1];
+
+        if (!frame->finalize)
         {
-            CCUINT32 path_len = 0;
-            const char *import_path = cmk_ast_string(
-                module->ast, child_node->as.import_decl.module,
-                &path_len
-            );
-            if (!import_path)
+            CCBOOL pushed = CCFALSE;
+            while (frame->next_child != CMK_AST_NODE_NIL)
             {
-                ccalloc(dir, 0, NULL);
-                module->state = CMK_MODULE_FAILED;
-                (void)program_error(
-                    program, module, child, "导入路径无效"
+                CMKASTNodeId child = frame->next_child;
+                const CMKASTNode *child_node =
+                    cmk_ast_node(frame->module->ast, child);
+                if (!child_node)
+                {
+                    (void)program_error(
+                        program, frame->module, child,
+                        "模块节点缺失"
+                    );
+                    goto Failed;
+                }
+                frame->next_child = child_node->next_sibling;
+
+                if (child_node->kind != CMK_AST_IMPORT_DECL)
+                    continue;
+
+                CCUINT32 path_len = 0;
+                const char *import_path = cmk_ast_string(
+                    frame->module->ast,
+                    child_node->as.import_decl.module, &path_len
                 );
-                return NULL;
+                if (!import_path)
+                {
+                    (void)program_error(
+                        program, frame->module, child,
+                        "导入路径无效"
+                    );
+                    goto Failed;
+                }
+
+                char *child_path = program_normalize(
+                    program, import_path, frame->dir
+                );
+                if (!child_path)
+                    goto Failed;
+
+                CMKProgramModule *imported =
+                    program_find_module(program, child_path);
+                if (imported)
+                {
+                    ccalloc(child_path, 0, NULL);
+                    if (imported->state == CMK_MODULE_LOADING)
+                    {
+                        (void)program_error(
+                            program, frame->module, child,
+                            "检测到循环导入：%s", imported->path
+                        );
+                        goto Failed;
+                    }
+                    if (imported->state == CMK_MODULE_FAILED)
+                        goto Failed;
+                    if (!program_add_import_link(
+                            program, frame->module, child, imported
+                        ))
+                        goto Failed;
+                    continue;
+                }
+
+                imported = program_create_module(program, child_path);
+                ccalloc(child_path, 0, NULL);
+                if (!imported)
+                    goto Failed;
+                if (!program_add_import_link(
+                        program, frame->module, child, imported
+                    ))
+                    goto Failed;
+
+                CMKProgramLoadFrame child_frame;
+                memset(&child_frame, 0, sizeof(child_frame));
+                child_frame.module = imported;
+                child_frame.root = cmk_ast_root(imported->ast);
+                const CMKASTNode *import_root =
+                    cmk_ast_node(imported->ast, child_frame.root);
+                child_frame.next_child = import_root
+                    ? import_root->first_child : CMK_AST_NODE_NIL;
+                child_frame.dir = program_module_dir(imported);
+                child_frame.finalize = CCFALSE;
+                if (!child_frame.dir ||
+                    !cmk_dyn_push(
+                        &frames,
+                        (CCUINT32)sizeof(CMKProgramLoadFrame),
+                        (CCINT32)sizeof(CMKProgramLoadFrame),
+                        &child_frame
+                    ))
+                {
+                    if (child_frame.dir)
+                        ccalloc(child_frame.dir, 0, NULL);
+                    (void)program_error(
+                        program, imported, child_frame.root,
+                        "模块加载帧分配失败"
+                    );
+                    goto Failed;
+                }
+                pushed = CCTRUE;
+                break;
             }
-            CMKProgramModule *imported =
-                program_load_module(program, import_path, dir);
-            if (!imported)
+
+            if (pushed)
+                continue;
+            if (frame->next_child == CMK_AST_NODE_NIL)
+                frame->finalize = CCTRUE;
+            else
+                continue;
+        }
+
+        if (frame->finalize)
+        {
+            CMKProgramModule *module = frame->module;
+            if (!module->semantic)
             {
-                ccalloc(dir, 0, NULL);
-                module->state = CMK_MODULE_FAILED;
-                return NULL;
+                module->semantic = cmk_semantic_module_create(
+                    module->ast, module->path, &program->config,
+                    program->builtins, program->diagnostic
+                );
+                if (!module->semantic)
+                {
+                    module->state = CMK_MODULE_FAILED;
+                    (void)program_error(
+                        program, module, frame->root,
+                        "语义模块分配失败"
+                    );
+                    goto Failed;
+                }
+
+                CMKProgramImport *links =
+                    (CMKProgramImport *)module->imports.array;
+                CCUINT32 link_count =
+                    module->imports.size /
+                    (CCUINT32)sizeof(CMKProgramImport);
+                for (CCUINT32 i = 0; i < link_count; i++)
+                {
+                    if (!program_add_imports(
+                            program, module, links[i].decl,
+                            links[i].module
+                        ))
+                    {
+                        module->state = CMK_MODULE_FAILED;
+                        goto Failed;
+                    }
+                }
+
+                if (!cmk_semantic_analyze(module->semantic))
+                {
+                    module->state = CMK_MODULE_FAILED;
+                    program->failed = CCTRUE;
+                    goto Failed;
+                }
             }
-            CMKProgramImport link;
-            memset(&link, 0, sizeof(link));
-            link.decl = child;
-            link.module = imported;
-            if (cc_dyn_core_push(
-                    &module->imports, (CCUINT32)sizeof(CMKProgramImport),
-                    (CCINT32)sizeof(CMKProgramImport), &link
+            module->state = CMK_MODULE_LOADED;
+            char *dir = frame->dir;
+            CMKProgramLoadFrame popped;
+            memset(&popped, 0, sizeof(popped));
+            if (cc_dyn_core_pop(
+                    &frames, (CCUINT32)sizeof(CMKProgramLoadFrame),
+                    (CCINT32)sizeof(CMKProgramLoadFrame), &popped
                 ) != 0)
             {
-                ccalloc(dir, 0, NULL);
-                module->state = CMK_MODULE_FAILED;
                 (void)program_error(
-                    program, module, child, "导入记录内存分配失败"
+                    program, module, frame->root, "模块加载帧损坏"
                 );
-                return NULL;
+                goto Failed;
             }
+            ccalloc(dir, 0, NULL);
         }
-        child = next;
-    }
-    ccalloc(dir, 0, NULL);
-
-    module->semantic = cmk_semantic_module_create(
-        module->ast, module->path, &program->config,
-        program->builtins, program->diagnostic
-    );
-    if (!module->semantic)
-    {
-        module->state = CMK_MODULE_FAILED;
-        (void)program_error(
-            program, module, root, "语义模块分配失败"
-        );
-        return NULL;
     }
 
-    CMKProgramImport *links = (CMKProgramImport *)module->imports.array;
-    CCUINT32 link_count =
-        module->imports.size / (CCUINT32)sizeof(CMKProgramImport);
-    for (CCUINT32 i = 0; i < link_count; i++)
+    ccalloc(frames.array, 0, NULL);
+    return root_module;
+
+Failed:
     {
-        if (!program_add_imports(
-                program, module, links[i].decl, links[i].module
-            ))
+        CMKProgramLoadFrame *remaining =
+            (CMKProgramLoadFrame *)frames.array;
+        CCUINT32 remaining_count =
+            frames.size / (CCUINT32)sizeof(CMKProgramLoadFrame);
+        for (CCUINT32 i = 0; i < remaining_count; i++)
         {
-            module->state = CMK_MODULE_FAILED;
-            return NULL;
+            if (remaining[i].dir)
+                ccalloc(remaining[i].dir, 0, NULL);
         }
+        if (frames.array)
+            ccalloc(frames.array, 0, NULL);
     }
-
-    if (!cmk_semantic_analyze(module->semantic))
+    CMKProgramModule **modules =
+        (CMKProgramModule **)program->modules.array;
+    CCUINT32 count =
+        program->modules.size / (CCUINT32)sizeof(CMKProgramModule *);
+    for (CCUINT32 i = 0; i < count; i++)
     {
-        module->state = CMK_MODULE_FAILED;
-        program->failed = CCTRUE;
-        return NULL;
+        if (modules[i] && modules[i]->state == CMK_MODULE_LOADING)
+            modules[i]->state = CMK_MODULE_FAILED;
     }
-
-    module->state = CMK_MODULE_LOADED;
-    return module;
+    program->failed = CCTRUE;
+    return NULL;
 }
 
 /* ============================================================================
@@ -784,6 +966,9 @@ CCBOOL cmk_program_configure(CMKProgram *program)
             cmk_runtime_set_work_dir(
                 module->runtime, program->work_dir
             );
+            cmk_runtime_set_policy(
+                module->runtime, &program->policy
+            );
         }
     }
 
@@ -802,6 +987,40 @@ CCBOOL cmk_program_configure(CMKProgram *program)
  * 公共接口
  * ========================================================================== */
 
+static CCUINT64 program_env_u64(const char *name)
+{
+    const char *value = getenv(name);
+    if (!value || !value[0])
+        return 0;
+    return (CCUINT64)strtoull(value, NULL, 10);
+}
+
+static void program_load_env_policy(CMKProgram *program)
+{
+    if (!program)
+        return;
+    program->policy.max_steps =
+        program_env_u64("CCMAKE_CMK_MAX_STEPS");
+    program->policy.max_configure_time_ms =
+        program_env_u64("CCMAKE_CMK_MAX_CONFIGURE_TIME_MS");
+    program->policy.max_output_capture =
+        program_env_u64("CCMAKE_CMK_MAX_OUTPUT_CAPTURE");
+    CCUINT64 value = program_env_u64(
+        "CCMAKE_CMK_MAX_RECURSION_DEPTH"
+    );
+    if (value <= (CCUINT64)(CCUINT32)-1)
+        program->policy.max_recursion_depth = (CCUINT32)value;
+    value = program_env_u64("CCMAKE_CMK_MAX_FIND_DEPTH");
+    if (value <= (CCUINT64)(CCUINT32)-1)
+        program->policy.max_find_depth = (CCUINT32)value;
+    value = program_env_u64("CCMAKE_CMK_MAX_PROCESSES");
+    if (value <= (CCUINT64)(CCUINT32)-1)
+        program->policy.max_processes = (CCUINT32)value;
+    if (program->policy.max_processes == 0 &&
+        ccmake_global_var.jobs != 0)
+        program->policy.max_processes = ccmake_global_var.jobs;
+}
+
 CMKProgram *cmk_program_create(
     CCVarTree *tree, CMKDiagnostic *diagnostic
 )
@@ -814,6 +1033,7 @@ CMKProgram *cmk_program_create(
         return NULL;
     memset(program, 0, sizeof(*program));
     program->tree = tree;
+    program_load_env_policy(program);
     cmk_config_init(&program->config, tree);
     program->diagnostic = diagnostic;
     program->builtins = cmk_builtin_registry_create();
@@ -908,6 +1128,24 @@ CCBOOL cmk_program_load(
         return CCFALSE;
     }
     return CCTRUE;
+}
+
+void cmk_program_set_policy(
+    CMKProgram *program, const CMKExecutionPolicy *policy
+)
+{
+    if (!program || !policy || program->configured)
+        return;
+    program->policy = *policy;
+}
+
+void cmk_program_get_policy(
+    const CMKProgram *program, CMKExecutionPolicy *policy
+)
+{
+    if (!program || !policy)
+        return;
+    *policy = program->policy;
 }
 
 CMKRuntime *cmk_program_root_runtime(const CMKProgram *program)

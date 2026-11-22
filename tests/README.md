@@ -88,7 +88,7 @@ bash test.sh CMKPROGRAM
 - `-D`：一个 `-D` 多个键值对、重复键以后者为准、值中含 `=`；
 - `--list-targets` / `--dump-config` 的动作请求字段；
 - CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理；
-- CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键，以及值深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用；
+- CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键，值深度边界、5000 层显式值帧栈、CCM 动态追加边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用；
 - 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用；
 - CMK 词法：token 序列、位置与 `offset`/`width` 边界、关键字/运算符、注释与 EOF、字符串转义与解码缓冲生命周期、空字符串、数字与指数错误位置、`@include`/`@import` 与 `@{...}` 配置引用、指令名称边界、NUL/CRLF、源码缓冲区所有权与尺寸边界、非法初始化参数、行号/列号表示上限、确定性随机字节输入健壮性；
 - CMK AST：根节点与生命周期、文件路径/字符串复制、节点与字符串 ID 越界、父子/兄弟链接、重复挂接与祖先环拒绝、visitor 先序遍历与中断、post-parse 校验的孤儿/环/子节点类型/字符串引用/类型节点错误、函数/target/导入节点布局、类型分类、顶层上下文约束，以及 `CMKLimits` 默认值；
@@ -96,12 +96,12 @@ bash test.sh CMKPROGRAM
 - CMK 表达式：字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界与 INT64_MIN、复杂表达式结构、一元与丢弃符、赋值语句化；
 - CMK 语句：变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误；
 - CMK 声明：include/import、变量/函数、target 字段、顶层 if、完整模块与声明错误；
-- CMK Parser 压力：语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、确定性随机字节输入；
+- CMK Parser 压力：语法/表达式/类型深度、各类预算、5000 层显式栈类型/一元/嵌套块/嵌套 if/括号/列表/调用/顶层 if、大量声明、失败后复用、确定性随机字节输入；
 - CMK Value：类型、字符串所有权、列表深复制、目标引用、动作与文本化；
 - CMK Builtin：注册表、纯计算、host_info、动作构造、find_files、error 格式与参数错误；
-- CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、target 字段、配置引用、控制流返回检查；
-- CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误；
-- CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入与导入错误。
+- CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、target 字段、配置引用、控制流返回检查、5000 层显式语句/表达式/顶层 if 栈；
+- CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、target draft、for/break/continue、索引/除零/error 运行时错误、`CMKExecutionPolicy`（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归；
+- CMK Program：根模块、跨模块函数、target 导入、通配/别名导入、`@include`、循环导入、导入错误、Program 执行策略、环境变量策略、`-j` 并发继承、进程/捕获策略与非法环境变量回退。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse` / CMK Program API，不经过 `main`；命令行用例不受 `.ccm`/`.cmk` 解析影响。
 

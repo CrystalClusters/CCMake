@@ -242,40 +242,43 @@ targets[2].sources[1]
 
 ### 5.3 值分派
 
-`parser_parse_value` 按当前 token 分派：
+`parser_parse_value` 使用 `CCMValueFrame` 显式栈分派容器：
 
 | Token | 行为 |
 |---|---|
 | 字符串 | `ccvar_set(..., CC_VAR_STRING, ...)`，长度使用 token 的 `len` |
 | 数字 | 解析为 `CCINT64` 或 `double`，再 `ccvar_set` |
 | `true` / `false` | 写入 `CC_VAR_BOOL` |
-| `{` | 写入对象，递归解析成员，消费 `}` |
-| `[` | 写入数组，循环解析元素，消费 `]` |
+| `{` | 写入对象，压入 OBJECT 帧，消费 `}` 后弹出 |
+| `[` | 写入数组，压入 ARRAY 帧，消费 `]` 后弹出 |
 | `${...}` | 调用内建函数，结果按字符串写入 |
 | 其他 | `值格式非法` |
 
-嵌套对象/数组使用 C 调用栈递归解析，深度上限为 `limits.max_value_depth`（默认 128）。
+嵌套对象/数组不再使用 C 调用栈递归；深度只作为可配置策略 `limits.max_value_depth`（默认 0 = 不限）。
 
 ### 5.4 对象
 
-对象成员循环：
+OBJECT 帧循环：
 
 ```text
 while 当前 token != "}":
+    若 after_value：消费分号并计数
     成员名必须是字符串并符合键名规则
-    调用 parser_parse_object_member
+    生成子路径
+    若值是对象/数组：写入容器，压入子帧，父帧标记 after_value
+    否则：写入标量，标记 after_value
 ```
 
-`parser_parse_object_member` 负责拼接子路径、消费冒号、解析值与分号；失败时只经 `Failed` 标签释放一次子路径。顶层字段对象使用 `CC_VAR_WRITE_MERGE`；对象内部的对象成员使用 `CC_VAR_WRITE_REPLACE`。
+顶层字段对象使用 `CC_VAR_WRITE_MERGE`；对象内部的对象成员使用 `CC_VAR_WRITE_REPLACE`。子路径所有权在压栈时转移给子帧，弹出/失败时统一释放。
 
 ### 5.5 数组
 
-数组元素循环：
+ARRAY 帧循环：
 
 - 字符串、数字、布尔直接追加；
-- `{` 调用 `parser_array_object`；
-- `[` 调用 `parser_array_array`；
-- 两个辅助函数各自拼 `[index]` 子路径、递归解析并在 `Failed` 标签释放一次子路径；
+- `{` 追加对象节点并压入 OBJECT 子帧；
+- `[` 追加数组节点并压入 ARRAY 子帧；
+- 子帧路径由父路径 + `[index]` 生成，所有权随帧；
 - 元素之间可用逗号或空白分隔；
 - 允许尾逗号；
 - 数组元素顺序就是 `ccvar_array_push` 的调用顺序。
@@ -480,20 +483,22 @@ typedef struct ccmake_ccm_limits_struct {
 
 | 字段 | 默认值 | 检查位置 |
 |---|---:|---|
-| `max_total_bytes` | 64 MiB | `ccm_load_file`，累加前检查 |
-| `max_file_bytes` | 16 MiB | `ccm_load_file`，分配内容前检查 |
-| `max_files` | 4096 | 根文件与 include 追加前 |
-| `max_include_edges` | 65536 | `ccm_scan_includes` 追加边前 |
-| `max_include_depth` | 128 | include 目标追加前 |
-| `max_token_bytes` | 1 MiB | `lex_next` 生成字符串/数字/内建 token 前 |
-| `max_array_elements` | 65536 | 数组元素追加前 |
-| `max_object_members` | 65536 | 对象成员解析前 |
-| `max_value_depth` | 128 | 值递归入口与数组元素入口 |
-| `max_find_args` | 1024 | `${find}` 参数 token 追加前 |
-| `max_find_results` | 65536 | 匹配文件加入结果前；达到上限时拒绝新结果 |
-| `max_find_depth` | 64 | `${find}` 子目录压栈前 |
+| `max_total_bytes` | 0 | `ccm_load_file`，累加前检查；0 表示不限 |
+| `max_file_bytes` | 0 | `ccm_load_file`，分配内容前检查；0 表示不限 |
+| `max_files` | 0 | 根文件与 include 追加前；0 表示不限 |
+| `max_include_edges` | 0 | `ccm_scan_includes` 追加边前；0 表示不限 |
+| `max_include_depth` | 0 | include 目标追加前；0 表示不限 |
+| `max_token_bytes` | 0 | `lex_next` 生成字符串/数字/内建 token 前；0 表示不限 |
+| `max_array_elements` | 0 | 数组元素追加前；0 表示不限 |
+| `max_object_members` | 0 | 对象成员解析前；0 表示不限 |
+| `max_value_depth` | 0 | 值递归入口与数组元素入口；0 表示不限 |
+| `max_find_args` | 0 | `${find}` 参数 token 追加前；0 表示不限 |
+| `max_find_results` | 0 | 匹配文件加入结果前；0 表示不限 |
+| `max_find_depth` | 0 | `${find}` 子目录压栈前；0 表示不限 |
 
-超过预算时返回可理解的诊断，例如：
+0 表示动态资源路径；只有显式设置非 0 值时才启用对应策略。文件读取仍必须检查宿主可表示长度（`UINT64_MAX`、`SIZE_MAX - 1`），这与用户策略无关。
+
+启用预算时返回可理解的诊断，例如：
 
 ```text
 token 超过长度限制
@@ -544,7 +549,7 @@ while stack:
 
 `order[]` 在此过程中形成后序序列，根文件最后入队。
 
-### 10.2 第二阶段：文件循环 + 嵌套递归
+### 10.2 第二阶段：文件循环 + 值帧栈
 
 第二阶段文件级没有栈：
 
@@ -553,7 +558,7 @@ for i in order[]:
     parser_parse_file(files[order[i]])
 ```
 
-嵌套对象/数组使用 C 调用栈递归，深度上限 128；数组元素本身由循环处理。
+文件内部的值解析使用 `CCDyn` 的 `CCMValueFrame` 栈：容器打开时压栈，闭合时弹栈；标量直接写入。深度只作为 `max_value_depth` 策略，默认 0 表示不限。帧路径在压栈时转移所有权，弹出或失败时释放。
 
 ### 10.3 `${find}`：显式目录栈
 
@@ -629,7 +634,7 @@ main
 | 第一阶段文件 DFS | 显式栈 + 三状态 | O(n + m) 结构操作 |
 | 第二阶段文件遍历 | `order[]` 线性循环 | O(n) |
 | 词法扫描 | 单字节状态机 | O(C) |
-| 对象/数组递归 | C 调用栈 | O(节点数)，深度 ≤ `max_value_depth` |
+| 对象/数组解析 | `CCMValueFrame` 显式栈 | O(节点数)，深度由 `max_value_depth` 策略约束（默认 0） |
 | 资源预算检查 | 计数器 + 上限比较 | 每项 O(1) |
 | 浮点转换 | 十进制累积 + 平方求幂 | O(token 长度) |
 | `ccvar_set` 路径写入 | 路径解析 + 对象红黑树 | O(路径段 × log 同层键数) |
@@ -642,6 +647,6 @@ main
 
 | 套件 | 覆盖 |
 |---|---|
-| `PARSE` | 基本类型、嵌套对象、文件顺序、浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、错误、`${find}`、内嵌 `${ref}`、注释、`-D`、128/129 层深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用 |
+| `PARSE` | 基本类型、嵌套对象、文件顺序、浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、错误、`${find}`、内嵌 `${ref}`、注释、`-D`、128/129 层深度边界、5000 层显式值帧栈、CCM 动态追加边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用 |
 | `VARS` | 路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用 |
 | `CCM` | 第一阶段文件定位、任意后缀、顺序与清理 |

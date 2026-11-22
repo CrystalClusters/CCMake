@@ -8,6 +8,7 @@
  */
 
 #include "cmk_semantic.h"
+#include "cmk_safe.h"
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
@@ -216,10 +217,10 @@ static CMKScopeAddResult scope_add(
     symbol.function = function;
     symbol.target = target;
 
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &scope->symbols, (CCUINT32)sizeof(CMKSymbol),
             (CCINT32)sizeof(CMKSymbol), &symbol
-        ) != 0)
+        ))
     {
         cmk_string_clear(&symbol.name);
         return CMK_SCOPE_ADD_NOMEM;
@@ -470,11 +471,11 @@ CCBOOL cmk_semantic_add_imported_function(
         return CCFALSE;
     }
     record->function = function;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &module->imported_functions,
             (CCUINT32)sizeof(CMKImportedFunction *),
             (CCINT32)sizeof(CMKImportedFunction *), &record
-        ) != 0)
+        ))
     {
         cmk_string_clear(&record->name);
         ccalloc(record, 0, NULL);
@@ -502,11 +503,11 @@ CCBOOL cmk_semantic_add_imported_target(
         return CCFALSE;
     }
     record->target = target;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &module->imported_targets,
             (CCUINT32)sizeof(CMKImportedTarget *),
             (CCINT32)sizeof(CMKImportedTarget *), &record
-        ) != 0)
+        ))
     {
         cmk_string_clear(&record->alias);
         ccalloc(record, 0, NULL);
@@ -657,11 +658,11 @@ static CCBOOL sem_predeclare_function(
         }
     }
 
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &module->functions,
             (CCUINT32)sizeof(CMKFunctionInfo *),
             (CCINT32)sizeof(CMKFunctionInfo *), &function
-        ) != 0)
+        ))
     {
         function_info_destroy(function);
         return sem_error(module, decl, "内存分配失败");
@@ -773,10 +774,10 @@ static CCBOOL sem_collect_target(
         target_info_destroy(target);
         return sem_error(module, decl, "内存分配失败");
     }
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &module->targets, (CCUINT32)sizeof(CMKTargetInfo *),
             (CCINT32)sizeof(CMKTargetInfo *), &target
-        ) != 0)
+        ))
     {
         target_info_destroy(target);
         return sem_error(module, decl, "内存分配失败");
@@ -784,46 +785,105 @@ static CCBOOL sem_collect_target(
     return CCTRUE;
 }
 
+typedef struct cmk_sem_target_work {
+    CMKASTNodeId id;
+    CCBOOL conditional;
+} CMKSemTargetWork;
+
 static CCBOOL sem_collect_targets(
     CMKSemanticModule *module, CMKASTNodeId id, CCBOOL conditional
 )
 {
-    const CMKASTNode *node = sem_node(module, id);
-    if (!node)
-        return sem_error(module, id, "内部错误：节点缺失");
+    CCDyn stack;
+    memset(&stack, 0, sizeof(stack));
+    CMKSemTargetWork root;
+    root.id = id;
+    root.conditional = conditional;
+    if (!cmk_dyn_push(
+            &stack, (CCUINT32)sizeof(CMKSemTargetWork),
+            (CCINT32)sizeof(CMKSemTargetWork), &root
+        ))
+        return sem_error(module, id, "内存分配失败");
 
-    switch (node->kind)
+    while (stack.size >= (CCUINT32)sizeof(CMKSemTargetWork))
     {
-    case CMK_AST_TARGET_DECL:
-        return sem_collect_target(module, id, conditional);
+        CMKSemTargetWork work;
+        memset(&work, 0, sizeof(work));
+        if (cc_dyn_core_pop(
+                &stack, (CCUINT32)sizeof(CMKSemTargetWork),
+                (CCINT32)sizeof(CMKSemTargetWork), &work
+            ) != 0)
+            goto Failed;
 
-    case CMK_AST_IF:
-    {
-        if (!sem_collect_targets(module, sem_child(module, id, 1), CCTRUE))
-            return CCFALSE;
-        if (node->as.if_stmt.has_else)
-            return sem_collect_targets(
-                module, sem_child(module, id, 2), CCTRUE
-            );
-        return CCTRUE;
-    }
-
-    case CMK_AST_BLOCK:
-    {
-        CCUINT32 count = sem_child_count(module, id);
-        for (CCUINT32 i = 0; i < count; i++)
+        const CMKASTNode *node = sem_node(module, work.id);
+        if (!node)
         {
-            if (!sem_collect_targets(
-                    module, sem_child(module, id, i), conditional
-                ))
-                return CCFALSE;
+            (void)sem_error(module, work.id, "内部错误：节点缺失");
+            goto Failed;
         }
-        return CCTRUE;
+
+        if (node->kind == CMK_AST_TARGET_DECL)
+        {
+            if (!sem_collect_target(module, work.id, work.conditional))
+                goto Failed;
+            continue;
+        }
+
+        if (node->kind == CMK_AST_IF)
+        {
+            if (node->as.if_stmt.has_else)
+            {
+                CMKSemTargetWork next;
+                next.id = sem_child(module, work.id, 2);
+                next.conditional = CCTRUE;
+                if (!cmk_dyn_push(
+                        &stack, (CCUINT32)sizeof(CMKSemTargetWork),
+                        (CCINT32)sizeof(CMKSemTargetWork), &next
+                    ))
+                    goto Failed;
+            }
+            CMKSemTargetWork next;
+            next.id = sem_child(module, work.id, 1);
+            next.conditional = CCTRUE;
+            if (!cmk_dyn_push(
+                    &stack, (CCUINT32)sizeof(CMKSemTargetWork),
+                    (CCINT32)sizeof(CMKSemTargetWork), &next
+                ))
+                goto Failed;
+            continue;
+        }
+
+        if (node->kind == CMK_AST_BLOCK)
+        {
+            CCUINT32 count = sem_child_count(module, work.id);
+            for (CCUINT32 i = count; i > 0; i--)
+            {
+                CMKSemTargetWork next;
+                next.id = sem_child(module, work.id, i - 1);
+                next.conditional = work.conditional;
+                if (!cmk_dyn_push(
+                        &stack, (CCUINT32)sizeof(CMKSemTargetWork),
+                        (CCINT32)sizeof(CMKSemTargetWork), &next
+                    ))
+                    goto Failed;
+            }
+            continue;
+        }
+
+        (void)sem_error(
+            module, work.id, "顶层条件分支只能包含 target 声明"
+        );
+        goto Failed;
     }
 
-    default:
-        return sem_error(module, id, "顶层条件分支只能包含 target 声明");
-    }
+    if (stack.array)
+        ccalloc(stack.array, 0, NULL);
+    return CCTRUE;
+
+Failed:
+    if (stack.array)
+        ccalloc(stack.array, 0, NULL);
+    return CCFALSE;
 }
 
 /* ============================================================================
@@ -922,6 +982,7 @@ static CCBOOL sem_expr_config(
     return CCTRUE;
 }
 
+#if 0
 static CCBOOL sem_expr_list(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
     const CMKType *expected, CCBOOL allow_target_ref, CMKType *out
@@ -964,6 +1025,7 @@ static CCBOOL sem_expr_list(
     *out = cmk_type_list(element);
     return CCTRUE;
 }
+#endif
 
 static CCBOOL sem_expr_ident(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
@@ -1072,6 +1134,742 @@ static CCBOOL sem_expr_member(
     );
 }
 
+typedef enum cmk_sem_expr_kind {
+    CMK_SEM_EXPR_LITERAL = 0,
+    CMK_SEM_EXPR_IDENT,
+    CMK_SEM_EXPR_CONFIG,
+    CMK_SEM_EXPR_MEMBER,
+    CMK_SEM_EXPR_LIST,
+    CMK_SEM_EXPR_UNARY,
+    CMK_SEM_EXPR_BINARY,
+    CMK_SEM_EXPR_CALL,
+    CMK_SEM_EXPR_INDEX
+} CMKSemExprKind;
+
+typedef enum cmk_sem_expr_stage {
+    CMK_SEM_EXPR_START = 0,
+    CMK_SEM_EXPR_LIST_ELEM,
+    CMK_SEM_EXPR_UNARY_OPERAND,
+    CMK_SEM_EXPR_BINARY_LEFT,
+    CMK_SEM_EXPR_BINARY_RIGHT,
+    CMK_SEM_EXPR_CALL_ARG,
+    CMK_SEM_EXPR_INDEX_BASE,
+    CMK_SEM_EXPR_INDEX_INDEX
+} CMKSemExprStage;
+
+typedef struct cmk_sem_expr_frame {
+    CMKSemExprKind kind;
+    CMKSemExprStage stage;
+    CMKASTNodeId id;
+    CMKScope *scope;
+    CMKType expected;
+    CCBOOL has_expected;
+    CCBOOL allow_target_ref;
+    CMKType out;
+    CCUINT32 index;
+    CCUINT32 count;
+    CMKType child_expected;
+    CCBOOL child_has_expected;
+    CMKType left_type;
+    CMKValueType element;
+    CMKBinaryOp op;
+    const CMKFunctionInfo *function;
+    const CMKBuiltinSpec *builtin;
+    CCUINT32 formal_count;
+} CMKSemExprFrame;
+
+static CMKSemExprFrame *sem_expr_top(CCDyn *frames)
+{
+    if (!frames || frames->size < (CCUINT32)sizeof(CMKSemExprFrame))
+        return NULL;
+    CCUINT32 count = frames->size / (CCUINT32)sizeof(CMKSemExprFrame);
+    return &((CMKSemExprFrame *)frames->array)[count - 1];
+}
+
+static CCBOOL sem_expr_push(
+    CMKSemanticModule *module, CCDyn *frames,
+    CMKASTNodeId id, CMKScope *scope,
+    const CMKType *expected, CCBOOL allow_target_ref
+)
+{
+    CMKSemExprFrame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.kind = CMK_SEM_EXPR_LITERAL;
+    frame.stage = CMK_SEM_EXPR_START;
+    frame.id = id;
+    frame.scope = scope;
+    frame.allow_target_ref = allow_target_ref;
+    if (expected)
+    {
+        frame.expected = *expected;
+        frame.has_expected = CCTRUE;
+    }
+    if (!cmk_dyn_push(
+            frames, (CCUINT32)sizeof(CMKSemExprFrame),
+            (CCINT32)sizeof(CMKSemExprFrame), &frame
+        ))
+        return sem_error(module, id, "内存分配失败");
+    return CCTRUE;
+}
+
+static CCBOOL sem_expr_pop(CCDyn *frames, CMKSemExprFrame *out)
+{
+    return (cc_dyn_core_pop(
+        frames, (CCUINT32)sizeof(CMKSemExprFrame),
+        (CCINT32)sizeof(CMKSemExprFrame), out
+    ) == 0) ? CCTRUE : CCFALSE;
+}
+
+static void sem_expr_frames_abort(CCDyn *frames)
+{
+    if (frames->array)
+        ccalloc(frames->array, 0, NULL);
+    memset(frames, 0, sizeof(*frames));
+}
+
+static CCBOOL sem_expr_list_next(
+    CMKSemanticModule *module, CMKSemExprFrame *frame,
+    CCDyn *frames
+)
+{
+    if (frame->index >= frame->count)
+    {
+        frame->out = cmk_type_list(frame->element);
+        return CCTRUE;
+    }
+
+    CMKASTNodeId item = sem_child(module, frame->id, frame->index);
+    CMKType expected;
+    const CMKType *expected_ptr = NULL;
+    if (frame->element != CMK_VALUE_VOID)
+    {
+        expected = cmk_type_scalar(frame->element);
+        expected_ptr = &expected;
+    }
+    return sem_expr_push(
+        module, frames, item, frame->scope,
+        expected_ptr, frame->allow_target_ref
+    );
+}
+
+static CCBOOL sem_expr_call_next(
+    CMKSemanticModule *module, CMKSemExprFrame *frame,
+    CCDyn *frames
+)
+{
+    if (frame->index >= frame->count)
+    {
+        if (frame->function)
+        {
+            frame->out = frame->function->return_type;
+            module->nodes[frame->id].function = frame->function;
+        }
+        else
+        {
+            frame->out = frame->builtin->return_type;
+            module->nodes[frame->id].builtin = frame->builtin;
+            if (frame->builtin->flags & CMK_BUILTIN_NORETURN)
+                module->nodes[frame->id].noreturn = CCTRUE;
+        }
+        return CCTRUE;
+    }
+
+    CMKASTNodeId arg = sem_child(module, frame->id, frame->index);
+    CMKType formal;
+    const CMKType *expected = NULL;
+    if (frame->function)
+    {
+        formal = frame->function->params[frame->index];
+        expected = &formal;
+    }
+    else if (frame->index < frame->formal_count)
+    {
+        formal = frame->builtin->args[frame->index].type;
+        expected = &formal;
+    }
+    return sem_expr_push(module, frames, arg, frame->scope, expected, CCFALSE);
+}
+
+static CCBOOL sem_expr_begin_call(
+    CMKSemanticModule *module, CMKSemExprFrame *frame,
+    const CMKASTNode *node
+)
+{
+    const char *name = NULL;
+    CCUINT32 name_len = 0;
+    if (!sem_string(module, node->as.call.callee, &name, &name_len))
+        return sem_error(module, frame->id, "函数名无效");
+
+    const CMKSymbol *symbol = scope_find(frame->scope, name, name_len);
+    if (symbol && symbol->kind == CMK_SYMBOL_VAR)
+        return sem_error(
+            module, frame->id, "变量不是函数：%.*s",
+            (int)name_len, name
+        );
+    if (symbol && symbol->kind == CMK_SYMBOL_TARGET)
+        return sem_error(
+            module, frame->id, "target 不是函数：%.*s",
+            (int)name_len, name
+        );
+
+    frame->count = sem_child_count(module, frame->id);
+    frame->index = 0;
+    if (symbol && symbol->kind == CMK_SYMBOL_FUNCTION)
+    {
+        const CMKFunctionInfo *function = symbol->function;
+        if (!function)
+            return sem_error(module, frame->id, "函数符号损坏");
+        if (function->param_count != frame->count)
+            return sem_error(
+                module, frame->id,
+                "函数 %.*s 需要 %u 个参数，实际 %u",
+                (int)name_len, name, function->param_count, frame->count
+            );
+        frame->function = function;
+        frame->stage = CMK_SEM_EXPR_CALL_ARG;
+        return CCTRUE;
+    }
+
+    const CMKBuiltinSpec *spec =
+        cmk_builtin_find(module->builtins, name, name_len);
+    if (!spec)
+        return sem_error(
+            module, frame->id, "未定义的函数：%.*s", (int)name_len, name
+        );
+    if (frame->count < spec->min_args ||
+        (!(spec->flags & CMK_BUILTIN_VARIADIC) &&
+         frame->count > spec->max_args))
+        return sem_error(
+            module, frame->id,
+            "内建函数调用参数数量错误：%s", spec->signature
+        );
+    frame->builtin = spec;
+    frame->formal_count =
+        (spec->flags & CMK_BUILTIN_VARIADIC)
+            ? spec->min_args : spec->max_args;
+    frame->stage = CMK_SEM_EXPR_CALL_ARG;
+    return CCTRUE;
+}
+
+static CCBOOL sem_expr_apply_binary(
+    CMKSemanticModule *module, CMKSemExprFrame *frame,
+    const CMKType *left_type, const CMKType *right_type,
+    CMKType *out
+)
+{
+    CMKBinaryOp op = frame->op;
+    if (op == CMK_BINARY_AND || op == CMK_BINARY_OR)
+    {
+        CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
+        if (!sem_type_expect(
+                module, sem_child(module, frame->id, 0),
+                left_type, &bool_type, "逻辑运算"
+            ) ||
+            !sem_type_expect(
+                module, sem_child(module, frame->id, 1),
+                right_type, &bool_type, "逻辑运算"
+            ))
+            return CCFALSE;
+        *out = bool_type;
+        return CCTRUE;
+    }
+
+    if (op == CMK_BINARY_EQ || op == CMK_BINARY_NE ||
+        op == CMK_BINARY_LT || op == CMK_BINARY_LE ||
+        op == CMK_BINARY_GT || op == CMK_BINARY_GE)
+    {
+        if (!cmk_type_equal(left_type, right_type))
+            return sem_error(module, frame->id, "比较运算两侧类型不一致");
+        if (left_type->kind == CMK_VALUE_VOID ||
+            left_type->kind == CMK_VALUE_LIST ||
+            left_type->kind == CMK_VALUE_ACTION ||
+            left_type->kind == CMK_VALUE_TARGET_REF)
+            return sem_error(module, frame->id, "该类型不能参与比较");
+        if (op != CMK_BINARY_EQ && op != CMK_BINARY_NE &&
+            left_type->kind != CMK_VALUE_INT &&
+            left_type->kind != CMK_VALUE_FLOAT &&
+            left_type->kind != CMK_VALUE_STRING)
+            return sem_error(module, frame->id, "该类型不能参与大小比较");
+        *out = cmk_type_scalar(CMK_VALUE_BOOL);
+        return CCTRUE;
+    }
+
+    if (op == CMK_BINARY_ADD)
+    {
+        if (left_type->kind == CMK_VALUE_INT &&
+            right_type->kind == CMK_VALUE_INT)
+        {
+            *out = cmk_type_scalar(CMK_VALUE_INT);
+            return CCTRUE;
+        }
+        if (left_type->kind == CMK_VALUE_FLOAT &&
+            right_type->kind == CMK_VALUE_FLOAT)
+        {
+            *out = cmk_type_scalar(CMK_VALUE_FLOAT);
+            return CCTRUE;
+        }
+        if (left_type->kind == CMK_VALUE_STRING &&
+            right_type->kind == CMK_VALUE_STRING)
+        {
+            *out = cmk_type_scalar(CMK_VALUE_STRING);
+            return CCTRUE;
+        }
+        if (left_type->kind == CMK_VALUE_LIST &&
+            right_type->kind == CMK_VALUE_LIST)
+        {
+            CMKValueType element = left_type->element;
+            if (element == CMK_VALUE_VOID)
+                element = right_type->element;
+            if (element == CMK_VALUE_VOID)
+                return sem_error(
+                    module, frame->id, "空列表无法推导元素类型"
+                );
+            if (left_type->element != CMK_VALUE_VOID &&
+                right_type->element != CMK_VALUE_VOID &&
+                left_type->element != right_type->element)
+                return sem_error(
+                    module, frame->id, "list 拼接元素类型不一致"
+                );
+            *out = cmk_type_list(element);
+            return CCTRUE;
+        }
+        return sem_error(module, frame->id, "加法两侧类型不支持");
+    }
+
+    if (!cmk_type_is_numeric(left_type) ||
+        !cmk_type_is_numeric(right_type) ||
+        left_type->kind != right_type->kind)
+        return sem_error(module, frame->id, "算术运算需要同类型数值");
+    if (op == CMK_BINARY_MOD && left_type->kind != CMK_VALUE_INT)
+        return sem_error(module, frame->id, "取模运算只支持 int");
+    *out = *left_type;
+    return CCTRUE;
+}
+
+static CCBOOL sem_expr_step(
+    CMKSemanticModule *module, CMKSemExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, const CMKType *input,
+    CMKType *out, CCBOOL *done
+)
+{
+    if (!has_input)
+    {
+        const CMKASTNode *node = sem_node(module, frame->id);
+        if (!node)
+            return sem_error(module, frame->id, "表达式节点缺失");
+
+        switch (node->kind)
+        {
+        case CMK_AST_LITERAL:
+            *done = CCTRUE;
+            return sem_expr_literal(module, frame->id, out);
+
+        case CMK_AST_IDENT:
+            *done = CCTRUE;
+            return sem_expr_ident(
+                module, frame->id, frame->scope,
+                frame->allow_target_ref, out
+            );
+
+        case CMK_AST_CONFIG_REF:
+            *done = CCTRUE;
+            return sem_expr_config(
+                module, frame->id,
+                frame->has_expected ? &frame->expected : NULL, out
+            );
+
+        case CMK_AST_MEMBER:
+            *done = CCTRUE;
+            return sem_expr_member(
+                module, frame->id, frame->allow_target_ref, out
+            );
+
+        case CMK_AST_LIST:
+            frame->kind = CMK_SEM_EXPR_LIST;
+            frame->count = sem_child_count(module, frame->id);
+            frame->index = 0;
+            frame->element =
+                (frame->has_expected &&
+                 frame->expected.kind == CMK_VALUE_LIST)
+                    ? frame->expected.element : CMK_VALUE_VOID;
+            frame->stage = CMK_SEM_EXPR_LIST_ELEM;
+            if (!sem_expr_list_next(module, frame, frames))
+                return CCFALSE;
+            if (frame->index >= frame->count)
+            {
+                *out = frame->out;
+                *done = CCTRUE;
+            }
+            else
+            {
+                *done = CCFALSE;
+            }
+            return CCTRUE;
+
+        case CMK_AST_UNARY:
+        {
+            frame->kind = CMK_SEM_EXPR_UNARY;
+            frame->stage = CMK_SEM_EXPR_UNARY_OPERAND;
+            CMKASTNodeId operand = sem_child(module, frame->id, 0);
+            CMKType expected;
+            const CMKType *expected_ptr = NULL;
+            if (node->as.unary.op == CMK_UNARY_NOT)
+            {
+                expected = cmk_type_scalar(CMK_VALUE_BOOL);
+                expected_ptr = &expected;
+            }
+            else if (frame->has_expected &&
+                     cmk_type_is_numeric(&frame->expected))
+            {
+                expected = frame->expected;
+                expected_ptr = &expected;
+            }
+            if (expected_ptr)
+            {
+                frame->child_expected = *expected_ptr;
+                frame->child_has_expected = CCTRUE;
+            }
+            if (!sem_expr_push(
+                    module, frames, operand, frame->scope,
+                    expected_ptr, CCFALSE
+                ))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+        }
+
+        case CMK_AST_BINARY:
+        {
+            frame->kind = CMK_SEM_EXPR_BINARY;
+            frame->op = node->as.binary.op;
+            frame->stage = CMK_SEM_EXPR_BINARY_LEFT;
+            CMKType expected;
+            const CMKType *expected_ptr = NULL;
+            if (frame->op == CMK_BINARY_AND || frame->op == CMK_BINARY_OR)
+            {
+                expected = cmk_type_scalar(CMK_VALUE_BOOL);
+                expected_ptr = &expected;
+            }
+            else if (frame->op != CMK_BINARY_EQ &&
+                     frame->op != CMK_BINARY_NE &&
+                     frame->op != CMK_BINARY_LT &&
+                     frame->op != CMK_BINARY_LE &&
+                     frame->op != CMK_BINARY_GT &&
+                     frame->op != CMK_BINARY_GE &&
+                     frame->has_expected &&
+                     frame->expected.kind != CMK_VALUE_VOID)
+            {
+                expected = frame->expected;
+                expected_ptr = &expected;
+            }
+            if (expected_ptr)
+            {
+                frame->child_expected = *expected_ptr;
+                frame->child_has_expected = CCTRUE;
+            }
+            if (!sem_expr_push(
+                    module, frames, sem_child(module, frame->id, 0),
+                    frame->scope, expected_ptr, CCFALSE
+                ))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+        }
+
+        case CMK_AST_CALL:
+            frame->kind = CMK_SEM_EXPR_CALL;
+            frame->stage = CMK_SEM_EXPR_CALL_ARG;
+            if (!sem_expr_begin_call(module, frame, node))
+                return CCFALSE;
+            if (!sem_expr_call_next(module, frame, frames))
+                return CCFALSE;
+            if (frame->index >= frame->count)
+            {
+                *out = frame->out;
+                *done = CCTRUE;
+            }
+            else
+            {
+                *done = CCFALSE;
+            }
+            return CCTRUE;
+
+        case CMK_AST_INDEX:
+            frame->kind = CMK_SEM_EXPR_INDEX;
+            frame->stage = CMK_SEM_EXPR_INDEX_BASE;
+            if (!sem_expr_push(
+                    module, frames, sem_child(module, frame->id, 0),
+                    frame->scope, NULL, CCFALSE
+                ))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+
+        default:
+            return sem_error(
+                module, frame->id,
+                "不支持的表达式节点：%s",
+                cmk_ast_kind_name(node->kind)
+            );
+        }
+    }
+
+    switch (frame->kind)
+    {
+    case CMK_SEM_EXPR_LIST:
+    {
+        CMKASTNodeId item = sem_child(module, frame->id, frame->index);
+        if (input->kind == CMK_VALUE_LIST)
+            return sem_error(module, item, "不允许嵌套 list");
+        if (input->kind == CMK_VALUE_VOID)
+            return sem_error(module, item, "list 元素不能是 void");
+        if (frame->element == CMK_VALUE_VOID)
+            frame->element = input->kind;
+        else if (frame->element != input->kind)
+            return sem_error(module, item, "list 元素类型不一致");
+        frame->index++;
+        if (frame->index >= frame->count)
+        {
+            *out = cmk_type_list(frame->element);
+            *done = CCTRUE;
+            return CCTRUE;
+        }
+        if (!sem_expr_list_next(module, frame, frames))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+
+    case CMK_SEM_EXPR_UNARY:
+    {
+        const CMKASTNode *node = sem_node(module, frame->id);
+        if (!node || node->kind != CMK_AST_UNARY)
+            return sem_error(module, frame->id, "内部错误：期望一元表达式");
+        CMKASTNodeId operand = sem_child(module, frame->id, 0);
+        if (node->as.unary.op == CMK_UNARY_NOT)
+        {
+            CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
+            if (!sem_type_expect(
+                    module, operand, input, &bool_type, "逻辑非"
+                ))
+                return CCFALSE;
+            *out = bool_type;
+            *done = CCTRUE;
+            return CCTRUE;
+        }
+        if (!cmk_type_is_numeric(input))
+            return sem_error(
+                module, frame->id, "一元 + / - 只能作用于数值"
+            );
+        if (frame->has_expected &&
+            cmk_type_is_numeric(&frame->expected) &&
+            !sem_type_expect(
+                module, frame->id, input, &frame->expected, "一元运算"
+            ))
+            return CCFALSE;
+        *out = *input;
+        *done = CCTRUE;
+        return CCTRUE;
+    }
+
+    case CMK_SEM_EXPR_BINARY:
+    {
+        if (frame->stage == CMK_SEM_EXPR_BINARY_LEFT)
+        {
+            frame->left_type = *input;
+            frame->stage = CMK_SEM_EXPR_BINARY_RIGHT;
+            const CMKType *expected =
+                frame->child_has_expected
+                    ? &frame->child_expected : NULL;
+            if (!sem_expr_push(
+                    module, frames, sem_child(module, frame->id, 1),
+                    frame->scope, expected, CCFALSE
+                ))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+        }
+        if (!sem_expr_apply_binary(
+                module, frame, &frame->left_type, input, out
+            ))
+            return CCFALSE;
+        *done = CCTRUE;
+        return CCTRUE;
+    }
+
+    case CMK_SEM_EXPR_CALL:
+    {
+        CMKASTNodeId arg = sem_child(module, frame->id, frame->index);
+        if (frame->function)
+        {
+            if (!sem_type_expect(
+                    module, arg, input, &frame->function->params[frame->index],
+                    "函数实参"
+                ))
+                return CCFALSE;
+        }
+        else
+        {
+            const CMKType *expected = NULL;
+            CMKType formal;
+            if (frame->index < frame->formal_count)
+            {
+                formal = frame->builtin->args[frame->index].type;
+                expected = &formal;
+            }
+            if (expected && !cmk_builtin_arg_matches(expected, input))
+            {
+                char actual_buf[64];
+                char expected_buf[64];
+                sem_type_format(input, actual_buf, sizeof(actual_buf));
+                sem_type_format(expected, expected_buf, sizeof(expected_buf));
+                return sem_error(
+                    module, arg,
+                    "内建实参类型错误：需要 %s，实际 %s（%s）",
+                    expected_buf, actual_buf, frame->builtin->signature
+                );
+            }
+        }
+        frame->index++;
+        if (frame->index >= frame->count)
+        {
+            if (frame->function)
+            {
+                *out = frame->function->return_type;
+                module->nodes[frame->id].function = frame->function;
+            }
+            else
+            {
+                *out = frame->builtin->return_type;
+                module->nodes[frame->id].builtin = frame->builtin;
+                if (frame->builtin->flags & CMK_BUILTIN_NORETURN)
+                    module->nodes[frame->id].noreturn = CCTRUE;
+            }
+            *done = CCTRUE;
+            return CCTRUE;
+        }
+        if (!sem_expr_call_next(module, frame, frames))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+
+    case CMK_SEM_EXPR_INDEX:
+    {
+        if (frame->stage == CMK_SEM_EXPR_INDEX_BASE)
+        {
+            frame->left_type = *input;
+            frame->stage = CMK_SEM_EXPR_INDEX_INDEX;
+            CMKType int_type = cmk_type_scalar(CMK_VALUE_INT);
+            if (!sem_expr_push(
+                    module, frames, sem_child(module, frame->id, 1),
+                    frame->scope, &int_type, CCFALSE
+                ))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+        }
+        if (frame->left_type.kind != CMK_VALUE_LIST)
+            return sem_error(module, frame->id, "索引只支持 list");
+        if (frame->left_type.element == CMK_VALUE_VOID)
+            return sem_error(
+                module, frame->id, "空列表无法确定索引元素类型"
+            );
+        if (input->kind != CMK_VALUE_INT)
+            return sem_error(module, frame->id, "list 索引必须是 int");
+        *out = cmk_type_scalar(frame->left_type.element);
+        *done = CCTRUE;
+        return CCTRUE;
+    }
+
+    default:
+        return CCFALSE;
+    }
+}
+
+static CCBOOL sem_expr_run(
+    CMKSemanticModule *module, CMKASTNodeId id,
+    CMKScope *scope, const CMKType *expected,
+    CCBOOL allow_target_ref, CMKType *out
+)
+{
+    CCDyn frames;
+    memset(&frames, 0, sizeof(frames));
+    CCBOOL has_completed = CCFALSE;
+    CMKType completed;
+
+    for (;;)
+    {
+        if (has_completed)
+        {
+            CMKSemExprFrame *frame = sem_expr_top(&frames);
+            if (!frame)
+            {
+                *out = completed;
+                ccalloc(frames.array, 0, NULL);
+                return CCTRUE;
+            }
+            CMKType result;
+            CCBOOL done = CCFALSE;
+            if (!sem_expr_step(
+                    module, frame, &frames, CCTRUE, &completed,
+                    &result, &done
+                ))
+                goto Failed;
+            if (done)
+            {
+                sem_set_type(module, frame->id, &result);
+                CMKSemExprFrame popped;
+                memset(&popped, 0, sizeof(popped));
+                if (!sem_expr_pop(&frames, &popped))
+                    goto Failed;
+                completed = result;
+            }
+            else
+            {
+                has_completed = CCFALSE;
+            }
+            continue;
+        }
+
+        if (frames.size == 0)
+        {
+            if (!sem_expr_push(
+                    module, &frames, id, scope, expected,
+                    allow_target_ref
+                ))
+                goto Failed;
+            continue;
+        }
+
+        CMKSemExprFrame *frame = sem_expr_top(&frames);
+        if (!frame)
+            goto Failed;
+        CMKType result;
+        CCBOOL done = CCFALSE;
+        if (!sem_expr_step(
+                module, frame, &frames, CCFALSE, NULL,
+                &result, &done
+            ))
+            goto Failed;
+        if (done)
+        {
+            sem_set_type(module, frame->id, &result);
+            CMKSemExprFrame popped;
+            memset(&popped, 0, sizeof(popped));
+            if (!sem_expr_pop(&frames, &popped))
+                goto Failed;
+            completed = result;
+            has_completed = CCTRUE;
+        }
+    }
+
+Failed:
+    sem_expr_frames_abort(&frames);
+    return CCFALSE;
+}
+
+#if 0
 static CCBOOL sem_expr_call(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
     CMKType *out
@@ -1433,57 +2231,36 @@ static CCBOOL sem_expr(
         sem_set_type(module, id, out);
     return ok;
 }
+#endif
+
+static CCBOOL sem_expr(
+    CMKSemanticModule *module, CMKASTNodeId id,
+    CMKScope *scope, const CMKType *expected,
+    CCBOOL allow_target_ref, CMKType *out
+)
+{
+    if (!module || !out)
+        return CCFALSE;
+    return sem_expr_run(
+        module, id, scope, expected, allow_target_ref, out
+    );
+}
 
 /* ============================================================================
  * 语句与控制流
  * ========================================================================== */
 
-static CCBOOL sem_stmt(
-    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
-    const CMKFunctionInfo *function, CCUINT32 loop_depth,
-    CMKSemFlow *flow
-);
-
 static CCBOOL sem_block(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
     CCBOOL create_scope, const CMKFunctionInfo *function,
     CCUINT32 loop_depth, CMKSemFlow *flow
-)
-{
-    CMKScope *block_scope = scope;
-    if (create_scope)
-    {
-        block_scope = scope_create(scope);
-        if (!block_scope)
-            return sem_error(module, id, "内存分配失败");
-    }
+);
 
-    CCUINT32 count = sem_child_count(module, id);
-    flow->reachable = CCTRUE;
-    flow->returns = CCFALSE;
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        CMKSemFlow item_flow;
-        if (!sem_stmt(
-                module, sem_child(module, id, i), block_scope,
-                function, loop_depth, &item_flow
-            ))
-        {
-            if (create_scope)
-                scope_destroy(block_scope);
-            return CCFALSE;
-        }
-        if (!item_flow.reachable)
-        {
-            flow->reachable = CCFALSE;
-            flow->returns = item_flow.returns;
-        }
-    }
-
-    if (create_scope)
-        scope_destroy(block_scope);
-    return CCTRUE;
-}
+static CCBOOL sem_stmt_tree(
+    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
+    CCBOOL create_scope, const CMKFunctionInfo *function,
+    CCUINT32 loop_depth, CMKSemFlow *flow
+);
 
 static CCBOOL sem_declare_local(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
@@ -1680,6 +2457,7 @@ static CCBOOL sem_stmt_return(
     return CCTRUE;
 }
 
+#if 0
 static CCBOOL sem_stmt_if(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
     const CMKFunctionInfo *function, CCUINT32 loop_depth,
@@ -1890,6 +2668,442 @@ static CCBOOL sem_stmt(
         );
     }
 }
+#endif
+
+typedef enum cmk_sem_frame_kind {
+    CMK_SEM_FRAME_BLOCK = 0,
+    CMK_SEM_FRAME_IF,
+    CMK_SEM_FRAME_WHILE,
+    CMK_SEM_FRAME_FOR
+} CMKSemFrameKind;
+
+typedef enum cmk_sem_frame_stage {
+    CMK_SEM_STAGE_ITEMS = 0,
+    CMK_SEM_STAGE_THEN,
+    CMK_SEM_STAGE_ELSE,
+    CMK_SEM_STAGE_BODY
+} CMKSemFrameStage;
+
+typedef struct cmk_sem_frame {
+    CMKSemFrameKind kind;
+    CMKSemFrameStage stage;
+    CMKASTNodeId id;
+    CMKScope *scope;
+    CCBOOL owns_scope;
+    const CMKFunctionInfo *function;
+    CCUINT32 loop_depth;
+    CCUINT32 index;
+    CCUINT32 count;
+    CMKSemFlow flow;
+    CMKSemFlow branch;
+    CCBOOL has_else;
+} CMKSemFrame;
+
+static CCBOOL sem_stmt_simple(
+    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
+    const CMKFunctionInfo *function, CCUINT32 loop_depth,
+    CMKSemFlow *flow
+)
+{
+    const CMKASTNode *node = sem_node(module, id);
+    if (!node)
+        return sem_error(module, id, "内部错误：语句节点缺失");
+
+    flow->reachable = CCTRUE;
+    flow->returns = CCFALSE;
+    switch (node->kind)
+    {
+    case CMK_AST_VAR_DECL:
+        return sem_declare_local(module, id, scope, NULL);
+
+    case CMK_AST_ASSIGN:
+        return sem_stmt_assign(module, id, scope);
+
+    case CMK_AST_EXPR_STMT:
+        return sem_stmt_expr_stmt(module, id, scope, flow);
+
+    case CMK_AST_RETURN:
+        return sem_stmt_return(module, id, scope, function, flow);
+
+    case CMK_AST_BREAK:
+    case CMK_AST_CONTINUE:
+        if (loop_depth == 0)
+            return sem_error(module, id, "break/continue 只能出现在循环内");
+        flow->reachable = CCFALSE;
+        flow->returns = CCFALSE;
+        return CCTRUE;
+
+    default:
+        return sem_error(
+            module, id, "内部错误：不是简单语句：%s",
+            cmk_ast_kind_name(node->kind)
+        );
+    }
+}
+
+static CCBOOL sem_frame_begin(
+    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
+    CCBOOL create_scope, const CMKFunctionInfo *function,
+    CCUINT32 loop_depth, CMKSemFrame *frame,
+    CCBOOL *is_simple, CMKSemFlow *simple_flow
+)
+{
+    memset(frame, 0, sizeof(*frame));
+    *is_simple = CCFALSE;
+
+    const CMKASTNode *node = sem_node(module, id);
+    if (!node)
+        return sem_error(module, id, "内部错误：语句节点缺失");
+
+    frame->id = id;
+    frame->scope = scope;
+    frame->function = function;
+    frame->loop_depth = loop_depth;
+    frame->flow.reachable = CCTRUE;
+    frame->flow.returns = CCFALSE;
+
+    switch (node->kind)
+    {
+    case CMK_AST_BLOCK:
+        frame->kind = CMK_SEM_FRAME_BLOCK;
+        frame->stage = CMK_SEM_STAGE_ITEMS;
+        if (create_scope)
+        {
+            CMKScope *block_scope = scope_create(scope);
+            if (!block_scope)
+                return sem_error(module, id, "内存分配失败");
+            frame->scope = block_scope;
+            frame->owns_scope = CCTRUE;
+        }
+        frame->count = sem_child_count(module, id);
+        return CCTRUE;
+
+    case CMK_AST_IF:
+    {
+        CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
+        CMKType condition_type;
+        if (!sem_expr(
+                module, sem_child(module, id, 0), scope,
+                &bool_type, CCFALSE, &condition_type
+            ))
+            return CCFALSE;
+        if (!sem_type_expect(
+                module, sem_child(module, id, 0), &condition_type,
+                &bool_type, "if 条件"
+            ))
+            return CCFALSE;
+        frame->kind = CMK_SEM_FRAME_IF;
+        frame->stage = CMK_SEM_STAGE_THEN;
+        frame->has_else = node->as.if_stmt.has_else;
+        return CCTRUE;
+    }
+
+    case CMK_AST_WHILE:
+    {
+        CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
+        CMKType condition_type;
+        if (!sem_expr(
+                module, sem_child(module, id, 0), scope,
+                &bool_type, CCFALSE, &condition_type
+            ))
+            return CCFALSE;
+        if (!sem_type_expect(
+                module, sem_child(module, id, 0), &condition_type,
+                &bool_type, "while 条件"
+            ))
+            return CCFALSE;
+        frame->kind = CMK_SEM_FRAME_WHILE;
+        frame->stage = CMK_SEM_STAGE_BODY;
+        return CCTRUE;
+    }
+
+    case CMK_AST_FOR_IN:
+    {
+        CMKType element;
+        if (!sem_type_from_ast(
+                module, sem_child(module, id, 0), CCFALSE, &element
+            ))
+            return CCFALSE;
+        if (element.kind == CMK_VALUE_VOID)
+            return sem_error(module, id, "for-in 元素类型不能是 void");
+
+        CMKType list_type = cmk_type_list(element.kind);
+        CMKType iterable_type;
+        if (!sem_expr(
+                module, sem_child(module, id, 1), scope,
+                &list_type, CCFALSE, &iterable_type
+            ))
+            return CCFALSE;
+        if (!sem_type_expect(
+                module, sem_child(module, id, 1), &iterable_type,
+                &list_type, "for-in 可迭代对象"
+            ))
+            return CCFALSE;
+
+        CMKScope *loop_scope = scope_create(scope);
+        if (!loop_scope)
+            return sem_error(module, id, "内存分配失败");
+
+        const char *name = NULL;
+        CCUINT32 name_len = 0;
+        if (!sem_string(module, node->as.for_in.name, &name, &name_len))
+        {
+            scope_destroy(loop_scope);
+            return sem_error(module, id, "for-in 变量名无效");
+        }
+        CMKScopeAddResult added = scope_add(
+            loop_scope, name, name_len, CMK_SYMBOL_VAR,
+            element, CCFALSE, NULL, NULL
+        );
+        if (added != CMK_SCOPE_ADD_OK)
+        {
+            scope_destroy(loop_scope);
+            return sem_error(module, id, "for-in 变量声明失败");
+        }
+
+        frame->kind = CMK_SEM_FRAME_FOR;
+        frame->stage = CMK_SEM_STAGE_BODY;
+        frame->scope = loop_scope;
+        frame->owns_scope = CCTRUE;
+        frame->loop_depth = loop_depth + 1;
+        return CCTRUE;
+    }
+
+    default:
+        *is_simple = CCTRUE;
+        return sem_stmt_simple(
+            module, id, scope, function, loop_depth, simple_flow
+        );
+    }
+}
+
+static CMKSemFrame *sem_frame_top(CCDyn *frames)
+{
+    if (!frames || frames->size < (CCUINT32)sizeof(CMKSemFrame))
+        return NULL;
+    CCUINT32 count = frames->size / (CCUINT32)sizeof(CMKSemFrame);
+    return &((CMKSemFrame *)frames->array)[count - 1];
+}
+
+static CCBOOL sem_frame_push(
+    CMKSemanticModule *module, CCDyn *frames, const CMKSemFrame *frame
+)
+{
+    if (!cmk_dyn_push(
+            frames, (CCUINT32)sizeof(CMKSemFrame),
+            (CCINT32)sizeof(CMKSemFrame), frame
+        ))
+        return sem_error(module, frame->id, "内存分配失败");
+    return CCTRUE;
+}
+
+static CCBOOL sem_frame_pop(CCDyn *frames, CMKSemFrame *out)
+{
+    return (cc_dyn_core_pop(
+        frames, (CCUINT32)sizeof(CMKSemFrame),
+        (CCINT32)sizeof(CMKSemFrame), out
+    ) == 0) ? CCTRUE : CCFALSE;
+}
+
+static void sem_frame_scope_release(CMKSemFrame *frame)
+{
+    if (frame->owns_scope && frame->scope)
+    {
+        scope_destroy(frame->scope);
+        frame->scope = NULL;
+        frame->owns_scope = CCFALSE;
+    }
+}
+
+static void sem_frames_abort(CCDyn *frames)
+{
+    CCUINT32 count = frames->size / (CCUINT32)sizeof(CMKSemFrame);
+    for (CCUINT32 i = count; i > 0; i--)
+        sem_frame_scope_release(
+            &((CMKSemFrame *)frames->array)[i - 1]
+        );
+    if (frames->array)
+        ccalloc(frames->array, 0, NULL);
+    memset(frames, 0, sizeof(*frames));
+}
+
+static CCBOOL sem_stmt_tree(
+    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
+    CCBOOL create_scope, const CMKFunctionInfo *function,
+    CCUINT32 loop_depth, CMKSemFlow *flow
+)
+{
+    CCDyn frames;
+    memset(&frames, 0, sizeof(frames));
+    CCBOOL has_completed = CCFALSE;
+    CMKSemFlow completed;
+    memset(&completed, 0, sizeof(completed));
+
+    for (;;)
+    {
+        if (has_completed)
+        {
+            CMKSemFrame *frame = sem_frame_top(&frames);
+            if (!frame)
+            {
+                *flow = completed;
+                ccalloc(frames.array, 0, NULL);
+                return CCTRUE;
+            }
+
+            if (frame->kind == CMK_SEM_FRAME_BLOCK)
+            {
+                if (!completed.reachable)
+                {
+                    frame->flow.reachable = CCFALSE;
+                    frame->flow.returns = completed.returns;
+                }
+                has_completed = CCFALSE;
+                continue;
+            }
+
+            if (frame->kind == CMK_SEM_FRAME_IF)
+            {
+                if (frame->stage == CMK_SEM_STAGE_THEN)
+                {
+                    frame->branch = completed;
+                    if (frame->has_else)
+                    {
+                        frame->stage = CMK_SEM_STAGE_ELSE;
+                        has_completed = CCFALSE;
+                        continue;
+                    }
+                    completed.reachable = CCTRUE;
+                    completed.returns = CCFALSE;
+                }
+                else
+                {
+                    completed.reachable =
+                        frame->branch.reachable || completed.reachable;
+                    completed.returns =
+                        frame->branch.returns && completed.returns;
+                }
+            }
+            else
+            {
+                completed.reachable = CCTRUE;
+                completed.returns = CCFALSE;
+            }
+
+            sem_frame_scope_release(frame);
+            CMKSemFrame popped;
+            memset(&popped, 0, sizeof(popped));
+            if (!sem_frame_pop(&frames, &popped))
+                goto Failed;
+            has_completed = CCTRUE;
+            continue;
+        }
+
+        if (frames.size == 0)
+        {
+            CMKSemFrame start;
+            CCBOOL is_simple = CCFALSE;
+            if (!sem_frame_begin(
+                    module, id, scope, create_scope, function,
+                    loop_depth, &start, &is_simple, &completed
+                ))
+                goto Failed;
+            if (is_simple)
+            {
+                *flow = completed;
+                ccalloc(frames.array, 0, NULL);
+                return CCTRUE;
+            }
+            if (!sem_frame_push(module, &frames, &start))
+            {
+                sem_frame_scope_release(&start);
+                goto Failed;
+            }
+            continue;
+        }
+
+        CMKSemFrame *frame = sem_frame_top(&frames);
+        if (!frame)
+            goto Failed;
+
+        CMKASTNodeId child_id = CMK_AST_NODE_NIL;
+        CMKScope *child_scope = frame->scope;
+        CCUINT32 child_loop_depth = frame->loop_depth;
+        CCBOOL child_create_scope = CCTRUE;
+
+        if (frame->kind == CMK_SEM_FRAME_BLOCK)
+        {
+            if (frame->index >= frame->count)
+            {
+                completed = frame->flow;
+                sem_frame_scope_release(frame);
+                CMKSemFrame popped;
+                memset(&popped, 0, sizeof(popped));
+                if (!sem_frame_pop(&frames, &popped))
+                    goto Failed;
+                has_completed = CCTRUE;
+                continue;
+            }
+            child_id = sem_child(module, frame->id, frame->index);
+            frame->index++;
+        }
+        else if (frame->kind == CMK_SEM_FRAME_IF)
+        {
+            child_id = sem_child(
+                module, frame->id,
+                frame->stage == CMK_SEM_STAGE_THEN ? 1 : 2
+            );
+        }
+        else if (frame->kind == CMK_SEM_FRAME_WHILE)
+        {
+            child_id = sem_child(module, frame->id, 1);
+            child_loop_depth = frame->loop_depth + 1;
+        }
+        else
+        {
+            child_id = sem_child(module, frame->id, 2);
+        }
+
+        CMKSemFrame child;
+        CCBOOL is_simple = CCFALSE;
+        CMKSemFlow simple_flow;
+        if (!sem_frame_begin(
+                module, child_id, child_scope, child_create_scope,
+                function, child_loop_depth,
+                &child, &is_simple, &simple_flow
+            ))
+            goto Failed;
+        if (is_simple)
+        {
+            completed = simple_flow;
+            has_completed = CCTRUE;
+            continue;
+        }
+        if (!sem_frame_push(module, &frames, &child))
+        {
+            sem_frame_scope_release(&child);
+            goto Failed;
+        }
+    }
+
+Failed:
+    sem_frames_abort(&frames);
+    return CCFALSE;
+}
+
+static CCBOOL sem_block(
+    CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
+    CCBOOL create_scope, const CMKFunctionInfo *function,
+    CCUINT32 loop_depth, CMKSemFlow *flow
+)
+{
+    const CMKASTNode *node = sem_node(module, id);
+    if (!node || node->kind != CMK_AST_BLOCK)
+        return sem_error(module, id, "内部错误：期望代码块");
+    return sem_stmt_tree(
+        module, id, scope, create_scope, function, loop_depth, flow
+    );
+}
 
 /* ============================================================================
  * 函数、target 与模块
@@ -2065,6 +3279,7 @@ static CCBOOL sem_analyze_target(
     return CCTRUE;
 }
 
+#if 0
 static CCBOOL sem_analyze_top_if(
     CMKSemanticModule *module, CMKASTNodeId id
 )
@@ -2178,6 +3393,127 @@ static CCBOOL sem_analyze_top_if(
             );
     }
     return CCTRUE;
+}
+#endif
+
+static CCBOOL sem_analyze_top_if(
+    CMKSemanticModule *module, CMKASTNodeId root
+)
+{
+    const CMKASTNode *root_node = sem_node(module, root);
+    if (!root_node || root_node->kind != CMK_AST_IF)
+        return sem_error(module, root, "顶层 if 节点错误");
+
+    CCDyn stack;
+    memset(&stack, 0, sizeof(stack));
+    CMKASTNodeId first = root;
+    if (!cmk_dyn_push(
+            &stack, (CCUINT32)sizeof(CMKASTNodeId),
+            (CCINT32)sizeof(CMKASTNodeId), &first
+        ))
+        return sem_error(module, root, "内存分配失败");
+
+    while (stack.size >= (CCUINT32)sizeof(CMKASTNodeId))
+    {
+        CMKASTNodeId id = CMK_AST_NODE_NIL;
+        if (cc_dyn_core_pop(
+                &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                (CCINT32)sizeof(CMKASTNodeId), &id
+            ) != 0)
+            goto Failed;
+
+        const CMKASTNode *node = sem_node(module, id);
+        if (!node)
+        {
+            (void)sem_error(module, id, "顶层 if 分支缺失");
+            goto Failed;
+        }
+
+        if (node->kind == CMK_AST_TARGET_DECL)
+        {
+            if (!sem_analyze_target(module, id))
+                goto Failed;
+            continue;
+        }
+
+        if (node->kind == CMK_AST_IF)
+        {
+            CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
+            CMKType condition_type;
+            if (!sem_expr(
+                    module, sem_child(module, id, 0),
+                    module->module_scope, &bool_type, CCFALSE,
+                    &condition_type
+                ))
+                goto Failed;
+            if (!sem_type_expect(
+                    module, sem_child(module, id, 0), &condition_type,
+                    &bool_type, "顶层 if 条件"
+                ))
+                goto Failed;
+
+            if (node->as.if_stmt.has_else)
+            {
+                CMKASTNodeId else_id = sem_child(module, id, 2);
+                if (!cmk_dyn_push(
+                        &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                        (CCINT32)sizeof(CMKASTNodeId), &else_id
+                    ))
+                    goto Failed;
+            }
+            CMKASTNodeId then_id = sem_child(module, id, 1);
+            if (!cmk_dyn_push(
+                    &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                    (CCINT32)sizeof(CMKASTNodeId), &then_id
+                ))
+                goto Failed;
+            continue;
+        }
+
+        if (node->kind == CMK_AST_BLOCK)
+        {
+            CCUINT32 count = sem_child_count(module, id);
+            for (CCUINT32 i = count; i > 0; i--)
+            {
+                CMKASTNodeId child = sem_child(module, id, i - 1);
+                const CMKASTNode *child_node = sem_node(module, child);
+                if (!child_node)
+                {
+                    (void)sem_error(module, child, "顶层 if 分支缺失");
+                    goto Failed;
+                }
+                if (child_node->kind != CMK_AST_TARGET_DECL &&
+                    child_node->kind != CMK_AST_IF)
+                {
+                    (void)sem_error(
+                        module, child,
+                        "顶层 if 分支只能包含 target 声明"
+                    );
+                    goto Failed;
+                }
+                if (!cmk_dyn_push(
+                        &stack, (CCUINT32)sizeof(CMKASTNodeId),
+                        (CCINT32)sizeof(CMKASTNodeId), &child
+                    ))
+                    goto Failed;
+            }
+            continue;
+        }
+
+        (void)sem_error(
+            module, id, "顶层 if 分支只能包含 target 声明"
+        );
+        goto Failed;
+    }
+
+    if (stack.array)
+        ccalloc(stack.array, 0, NULL);
+    return CCTRUE;
+
+Failed:
+    if (stack.array)
+        ccalloc(stack.array, 0, NULL);
+    return CCFALSE;
 }
 
 static CCBOOL sem_add_imported_functions(CMKSemanticModule *module)

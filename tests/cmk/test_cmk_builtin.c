@@ -336,15 +336,17 @@ void test_cmk_builtin(void)
             "find_files 调用"
         );
         CC_CHECK_EQ_I64(
-            "find_files 结果数", 2,
+            "find_files 结果数", 3,
             (CCINT64)cmk_list_count(out.as.list)
         );
         const CMKValue *first = cmk_list_at(out.as.list, 0);
         const CMKValue *second = cmk_list_at(out.as.list, 1);
+        const CMKValue *third = cmk_list_at(out.as.list, 2);
         CC_CHECK(
-            first && second &&
+            first && second && third &&
             strstr(first->as.string.data, "find/a.c") != NULL &&
-            strstr(second->as.string.data, "find/sub/b.c") != NULL,
+            strstr(second->as.string.data, "find/sub/b.c") != NULL &&
+            strstr(third->as.string.data, "find/sub/deep/c.c") != NULL,
             "find_files 结果排序"
         );
         cmk_value_clear(&out);

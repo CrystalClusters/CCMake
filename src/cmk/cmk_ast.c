@@ -8,6 +8,7 @@
  */
 
 #include "cmk_ast.h"
+#include "cmk_safe.h"
 
 #include <ccalloc.h>
 
@@ -357,9 +358,9 @@ CMKASTNodeId cmk_ast_add_node(
     if (span)
         node.span = *span;
 
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &ast->nodes, CMK_AST_NODE_ALIGN, CMK_AST_NODE_SIZE, &node
-        ) != 0)
+        ))
         return CMK_AST_NODE_NIL;
     return index;
 }
@@ -387,9 +388,10 @@ CMKASTStringId cmk_ast_add_string(
     string.data = copy;
     string.len = len;
 
-    if (cc_dyn_core_push(
-            &ast->strings, CMK_AST_STRING_ALIGN, CMK_AST_STRING_SIZE, &string
-        ) != 0)
+    if (!cmk_dyn_push(
+            &ast->strings, CMK_AST_STRING_ALIGN, CMK_AST_STRING_SIZE,
+            &string
+        ))
     {
         ccalloc(copy, 0, NULL);
         return CMK_AST_STRING_NIL;
@@ -1036,9 +1038,9 @@ CCBOOL cmk_ast_validate(const CMKAST *ast, const char **reason)
     CCDyn stack;
     memset(&stack, 0, sizeof(stack));
     CMKASTNodeId root_id = ast->root;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &stack, CMK_AST_ID_ALIGN, CMK_AST_ID_SIZE, &root_id
-        ) != 0)
+        ))
     {
         ccalloc(seen, 0, NULL);
         return ast_fail(reason, "内存分配失败");
@@ -1087,9 +1089,9 @@ CCBOOL cmk_ast_validate(const CMKAST *ast, const char **reason)
                 (void)ast_fail(reason, "子节点链接错误");
                 goto Failed;
             }
-            if (cc_dyn_core_push(
+            if (!cmk_dyn_push(
                     &stack, CMK_AST_ID_ALIGN, CMK_AST_ID_SIZE, &child
-                ) != 0)
+                ))
             {
                 (void)ast_fail(reason, "内存分配失败");
                 goto Failed;
@@ -1137,9 +1139,9 @@ CCBOOL cmk_ast_visit(
     memset(&stack, 0, sizeof(stack));
     memset(&children, 0, sizeof(children));
 
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &stack, CMK_AST_ID_ALIGN, CMK_AST_ID_SIZE, &root
-        ) != 0)
+        ))
         goto Failed;
 
     CCUINT32 steps = 0;
@@ -1166,9 +1168,9 @@ CCBOOL cmk_ast_visit(
             const CMKASTNode *child_node = ast_node_at_const(ast, child);
             if (!child_node || ++guard > node_count)
                 goto Failed;
-            if (cc_dyn_core_push(
+            if (!cmk_dyn_push(
                     &children, CMK_AST_ID_ALIGN, CMK_AST_ID_SIZE, &child
-                ) != 0)
+                ))
                 goto Failed;
             child = child_node->next_sibling;
         }
@@ -1182,9 +1184,9 @@ CCBOOL cmk_ast_visit(
                     &push_id, i - 1
                 ) != 0)
                 goto Failed;
-            if (cc_dyn_core_push(
+            if (!cmk_dyn_push(
                     &stack, CMK_AST_ID_ALIGN, CMK_AST_ID_SIZE, &push_id
-                ) != 0)
+                ))
                 goto Failed;
         }
     }

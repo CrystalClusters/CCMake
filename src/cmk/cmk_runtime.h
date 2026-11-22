@@ -16,6 +16,18 @@
 
 typedef struct cmk_runtime CMKRuntime;
 
+/* 可配置执行策略；0 表示不限制 */
+typedef struct cmk_execution_policy {
+    CCUINT32 max_recursion_depth;
+    CCUINT64 max_steps;
+    CCUINT64 max_configure_time_ms;
+    CCUINT32 max_find_depth;
+    CCUINT32 max_processes;
+    CCUINT64 max_output_capture;
+} CMKExecutionPolicy;
+
+void cmk_execution_policy_init(CMKExecutionPolicy *policy);
+
 /* 跨模块函数调用时由 Program 提供 module -> runtime 映射 */
 typedef CMKRuntime *(*CMKRuntimeModuleResolver)(
     CMKRuntime *runtime, CMKSemanticModule *module
@@ -53,6 +65,12 @@ void *cmk_runtime_get_resolver_user(const CMKRuntime *runtime);
 /* Program 注入工作目录，供 find_files 等只读内建解析相对路径 */
 void cmk_runtime_set_work_dir(CMKRuntime *runtime, const char *work_dir);
 const char *cmk_runtime_get_work_dir(const CMKRuntime *runtime);
+void cmk_runtime_set_policy(
+    CMKRuntime *runtime, const CMKExecutionPolicy *policy
+);
+const CMKExecutionPolicy *cmk_runtime_get_policy(
+    const CMKRuntime *runtime
+);
 
 CCUINT32 cmk_runtime_target_count(const CMKRuntime *runtime);
 const CMKTargetDraft *cmk_runtime_target_at(

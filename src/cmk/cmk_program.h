@@ -27,6 +27,13 @@ CCBOOL cmk_program_load(
 );
 /* 初始化各模块全局变量，并求值根模块的 target 声明 */
 CCBOOL cmk_program_configure(CMKProgram *program);
+/* 设置 Configure 执行策略；应在 cmk_program_configure 前调用 */
+void cmk_program_set_policy(
+    CMKProgram *program, const CMKExecutionPolicy *policy
+);
+void cmk_program_get_policy(
+    const CMKProgram *program, CMKExecutionPolicy *policy
+);
 
 CMKRuntime *cmk_program_root_runtime(const CMKProgram *program);
 const CMKProgramModule *cmk_program_root_module(

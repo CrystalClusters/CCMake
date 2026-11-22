@@ -16,8 +16,8 @@ void cmk_limits_init(CMKLimits *limits)
 
     limits->max_tokens = 0;
     limits->max_ast_nodes = 0;
-    limits->max_syntax_depth = 1024;
-    limits->max_expression_depth = 512;
+    limits->max_syntax_depth = 0;
+    limits->max_expression_depth = 0;
     limits->max_function_params = 0;
     limits->max_list_elements = 0;
     limits->max_declarations = 0;

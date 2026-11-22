@@ -8,6 +8,7 @@
  */
 
 #include "cmk_builtin.h"
+#include "cmk_safe.h"
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
@@ -95,12 +96,12 @@ CCBOOL cmk_builtin_register(
     if (!owned)
         return CCFALSE;
     *owned = *spec;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &registry->specs,
             (CCUINT32)sizeof(CMKBuiltinSpec *),
             (CCINT32)sizeof(CMKBuiltinSpec *),
             &owned
-        ) != 0)
+        ))
     {
         ccalloc(owned, 0, NULL);
         return CCFALSE;

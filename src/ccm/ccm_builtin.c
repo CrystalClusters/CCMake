@@ -8,6 +8,7 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_safe.h"
 #include "ccm_scan_util.h"
 #include "ccvar.h"
 
@@ -22,7 +23,7 @@ static CCBOOL buf_put(CCMBuf *b, const char *text, CCUINT32 len)
 {
     for (CCUINT32 i = 0; i < len; i++)
     {
-        if (cc_dyn_core_push(&b->dyn, 1, 1, (void *)&text[i]) != 0)
+        if (!ccm_dyn_push(&b->dyn, 1, 1, (void *)&text[i]))
             return CCFALSE;
     }
     return CCTRUE;
@@ -36,7 +37,7 @@ static CCBOOL buf_puts(CCMBuf *b, const char *text)
 static char *buf_finish(CCMBuf *b, CCUINT32 *out_len)
 {
     char zero = '\0';
-    if (cc_dyn_core_push(&b->dyn, 1, 1, &zero) != 0)
+    if (!ccm_dyn_push(&b->dyn, 1, 1, &zero))
     {
         if (b->dyn.array)
             ccalloc(b->dyn.array, 0, NULL);

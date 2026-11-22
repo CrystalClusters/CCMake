@@ -8,6 +8,7 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_safe.h"
 
 #include <stdio.h>
 
@@ -44,18 +45,19 @@ void ccm_context_init(CCMakeCCMContext *ctx)
     if (!ctx)
         return;
     memset(ctx, 0, sizeof(*ctx));
-    ctx->limits.max_total_bytes = (CCUINT64)64 * 1024 * 1024;
-    ctx->limits.max_file_bytes = (CCUINT64)16 * 1024 * 1024;
-    ctx->limits.max_files = 4096;
-    ctx->limits.max_include_edges = 65536;
-    ctx->limits.max_include_depth = 128;
-    ctx->limits.max_token_bytes = 1024 * 1024;
-    ctx->limits.max_array_elements = 65536;
-    ctx->limits.max_object_members = 65536;
-    ctx->limits.max_value_depth = 128;
-    ctx->limits.max_find_args = 1024;
-    ctx->limits.max_find_results = 65536;
-    ctx->limits.max_find_depth = 64;
+    // 0 表示动态/不设硬上限，由实际资源与表示边界约束
+    ctx->limits.max_total_bytes = 0;
+    ctx->limits.max_file_bytes = 0;
+    ctx->limits.max_files = 0;
+    ctx->limits.max_include_edges = 0;
+    ctx->limits.max_include_depth = 0;
+    ctx->limits.max_token_bytes = 0;
+    ctx->limits.max_array_elements = 0;
+    ctx->limits.max_object_members = 0;
+    ctx->limits.max_value_depth = 0;
+    ctx->limits.max_find_args = 0;
+    ctx->limits.max_find_results = 0;
+    ctx->limits.max_find_depth = 0;
 }
 
 static void ccm_release_vfs(CCMakeCCMContext *ctx)
@@ -132,7 +134,8 @@ static CCUINT32 ccm_append_file(
 {
     if (!ctx || !real_path)
         return CC_CCM_NIL;
-    if (file_count(ctx) >= ctx->limits.max_files)
+    if (ctx->limits.max_files != 0 &&
+        file_count(ctx) >= ctx->limits.max_files)
         return CC_CCM_NIL;
 
     size_t path_len = strlen(real_path);
@@ -158,13 +161,12 @@ static CCUINT32 ccm_append_file(
     item.state = CC_CCM_FILE_UNSEEN;
     item.mounted = CCFALSE;
 
-    if (cc_dyn_core_push(
+    if (!ccm_dyn_push(
             &ctx->files,
             (CCUINT32)sizeof(CCMakeCCMFile),
             (CCINT32)sizeof(CCMakeCCMFile),
             &item
-        ) != 0
-    )
+        ))
     {
         ccalloc(path_copy, 0, NULL);
         return CC_CCM_NIL;
@@ -188,13 +190,12 @@ static CCBOOL ccm_stack_push(CCMakeCCMContext *ctx, CCUINT32 file)
     CCMakeCCMFrame frame;
     frame.file = file;
     frame.next = 0;
-    return (cc_dyn_core_push(
+    return ccm_dyn_push(
             &ctx->stack,
             (CCUINT32)sizeof(CCMakeCCMFrame),
             (CCINT32)sizeof(CCMakeCCMFrame),
             &frame
-        ) == 0
-    ) ? CCTRUE : CCFALSE;
+        ) ? CCTRUE : CCFALSE;
 }
 
 static CCBOOL ccm_stack_top(CCMakeCCMContext *ctx, CCMakeCCMFrame *out)
@@ -389,12 +390,15 @@ static CCBOOL ccm_load_file(
     f = file_at(ctx, index);
     f->size = st.size;
 
-    if (f->size == (CCUINT64)-1)
+    if (f->size == (CCUINT64)-1 ||
+        f->size > (CCUINT64)(~(size_t)0) - 1)
         return ccm_load_error(real_path, via_path, via_line, "文件过大");
-    if (f->size > ctx->limits.max_file_bytes)
+    if (ctx->limits.max_file_bytes != 0 &&
+        f->size > ctx->limits.max_file_bytes)
         return ccm_load_error(real_path, via_path, via_line, "单个文件超过大小限制");
-    if (f->size > ctx->limits.max_total_bytes ||
-        ctx->total_bytes > ctx->limits.max_total_bytes - f->size)
+    if (ctx->limits.max_total_bytes != 0 &&
+        (f->size > ctx->limits.max_total_bytes ||
+         ctx->total_bytes > ctx->limits.max_total_bytes - f->size))
         return ccm_load_error(real_path, via_path, via_line, "配置文件总大小超过限制");
 
     f->content = ccalloc(
@@ -452,11 +456,10 @@ static CCBOOL ccm_report_cycle(
     CCBOOL reached = CCFALSE;
     while (cur != CC_CCM_NIL && cur < file_count(ctx))
     {
-        if (cc_dyn_core_push(
+        if (!ccm_dyn_push(
                 &chain, (CCUINT32)sizeof(CCUINT32),
                 (CCINT32)sizeof(CCUINT32), &cur
-            ) != 0
-        )
+            ))
             break;
         if (cur == target)
         {
@@ -531,12 +534,14 @@ static CCBOOL ccm_locate_include(
     }
 
     CCUINT32 depth = file_at(ctx, parent_index)->depth + 1;
-    if (depth > ctx->limits.max_include_depth)
+    if (ctx->limits.max_include_depth != 0 &&
+        depth > ctx->limits.max_include_depth)
     {
         ccalloc(resolved, 0, NULL);
         return ccm_load_error(literal, parent_path, line, "include 深度超过限制");
     }
-    if (file_count(ctx) >= ctx->limits.max_files)
+    if (ctx->limits.max_files != 0 &&
+        file_count(ctx) >= ctx->limits.max_files)
     {
         ccalloc(resolved, 0, NULL);
         return ccm_load_error(literal, parent_path, line, "include 文件数量超过限制");
@@ -668,7 +673,8 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
         return CCFALSE;
     }
 
-    if (file_count(ctx) >= ctx->limits.max_files)
+    if (ctx->limits.max_files != 0 &&
+        file_count(ctx) >= ctx->limits.max_files)
     {
         ccalloc(root_norm, 0, NULL);
         color_print(
@@ -730,13 +736,12 @@ CCBOOL ccm_locate(const char *root_path, const char *work_dir, CCMakeCCMContext 
 
         current->state = CC_CCM_FILE_VISITED;
         CCUINT32 index = frame.file;
-        if (cc_dyn_core_push(
+        if (!ccm_dyn_push(
                 &ctx->order,
                 (CCUINT32)sizeof(CCUINT32),
                 (CCINT32)sizeof(CCUINT32),
                 &index
-            ) != 0
-        )
+            ))
         {
             color_print(
                 CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)

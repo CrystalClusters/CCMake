@@ -5,8 +5,21 @@
 
 #include "test_harness.h"
 #include "cmk_test_context.h"
+#include "cmk/cmk_exec_stack.h"
+
+#include <ccalloc.h>
 
 #include <string.h>
+
+static void test_runtime_deep_statements(void);
+
+static CCBOOL exec_stack_probe(void *user)
+{
+    CCBOOL *flags = (CCBOOL *)user;
+    flags[0] = CCTRUE;
+    flags[1] = cmk_exec_stack_check((size_t)1024);
+    return CCTRUE;
+}
 
 static CCBOOL get_global(
     CMKTestContext *ctx, const char *name, CMKValue *out
@@ -380,6 +393,632 @@ void test_cmk_runtime(void)
             strstr(diag->message, "boom x") != NULL,
             "error 格式文本"
         );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * RT-008 可配置执行策略
+     * ---------------------------------------------------------------- */
+    CC_CASE("RT-008", "可配置执行策略");
+    {
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(
+                &ctx,
+                "int a = 1;\nint b = 2;\nint c = 3;\n"
+            ),
+            "策略用例语义通过"
+        );
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "策略运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_steps = 2;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(!cmk_runtime_configure(ctx.runtime), "步数预算触发失败");
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "执行步数") != NULL,
+            "步数预算诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+    test_runtime_deep_statements();
+}
+
+static void test_runtime_deep_statements(void)
+{
+    CC_CASE("RT-009", "显式语句栈深嵌套");
+    char *source = ccalloc(NULL, 200000, "CMK 运行时深语句测试");
+    CC_CHECK(source != NULL, "运行时深语句缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        const char *head = "func f() -> int {";
+        memcpy(source + pos, head, strlen(head));
+        pos += strlen(head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '{';
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '}';
+        const char *tail =
+            "return 1; }\nint g = f();\ntarget core() {}\n";
+        memcpy(source + pos, tail, strlen(tail));
+        pos += strlen(tail);
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层块语义"
+        );
+        CC_CHECK(
+            cmk_test_context_configure(&ctx),
+            "5000 层块 Configure"
+        );
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "深块全局变量");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 1,
+            "深块返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
+    }
+
+    source = ccalloc(NULL, 200000, "CMK 运行时深 if 测试");
+    CC_CHECK(source != NULL, "运行时深 if 缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        const char *head = "func f() -> int {";
+        memcpy(source + pos, head, strlen(head));
+        pos += strlen(head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+        {
+            const char *if_head = "if (true) {";
+            memcpy(source + pos, if_head, strlen(if_head));
+            pos += strlen(if_head);
+        }
+        const char *body = "return 1;";
+        memcpy(source + pos, body, strlen(body));
+        pos += strlen(body);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '}';
+        const char *tail =
+            "return 1; }\nint g = f();\ntarget core() {}\n";
+        memcpy(source + pos, tail, strlen(tail));
+        pos += strlen(tail);
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层 if 语义"
+        );
+        CC_CHECK(
+            cmk_test_context_configure(&ctx),
+            "5000 层 if Configure"
+        );
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "深 if 全局变量");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 1,
+            "深 if 返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-010", "递归深度策略");
+    {
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(
+                &ctx,
+                "func f(int n) -> int {\n"
+                "    if (n <= 0) { return 0; }\n"
+                "    return f(n - 1);\n"
+                "}\n"
+                "int g = f(100);\n"
+                "target core() {}\n"
+            ),
+            "递归策略语义通过"
+        );
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "递归策略运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_recursion_depth = 8;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "递归深度预算触发失败"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "递归深度") != NULL,
+            "递归深度预算诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-011", "显式顶层 target 栈");
+    {
+        char *source = ccalloc(NULL, 200000, "CMK 运行时顶层 if 测试");
+        CC_CHECK(source != NULL, "运行时顶层 if 缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                const char *head = "if (true) {";
+                memcpy(source + pos, head, strlen(head));
+                pos += strlen(head);
+            }
+            const char *target = "target core() {}";
+            memcpy(source + pos, target, strlen(target));
+            pos += strlen(target);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '}';
+            source[pos] = '\0';
+
+            CMKTestContext ctx;
+            cmk_test_context_init(&ctx);
+            CC_CHECK(
+                cmk_test_context_load(&ctx, source),
+                "5000 层顶层 if 语义"
+            );
+            CC_CHECK(
+                cmk_test_context_configure(&ctx),
+                "5000 层顶层 if Configure"
+            );
+            cmk_test_context_clear(&ctx);
+            ccalloc(source, 0, NULL);
+        }
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-012", "显式表达式栈深嵌套");
+    {
+        char *source = ccalloc(NULL, 200000, "CMK 运行时深表达式测试");
+        CC_CHECK(source != NULL, "运行时深表达式缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            const char *head = "int a = 1";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                memcpy(source + pos, " + 1", 4);
+                pos += 4;
+            }
+            const char *body =
+                ";\nbool b = ";
+            memcpy(source + pos, body, strlen(body));
+            pos += strlen(body);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '!';
+            const char *list_head = "true;\nlist<int> l = {";
+            memcpy(source + pos, list_head, strlen(list_head));
+            pos += strlen(list_head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                source[pos++] = '1';
+                if (i + 1 < 5000)
+                    source[pos++] = ',';
+            }
+            const char *tail =
+                "};\nint c = l[0];\ntarget core() {}\n";
+            memcpy(source + pos, tail, strlen(tail));
+            pos += strlen(tail);
+            source[pos] = '\0';
+
+            CMKTestContext ctx;
+            cmk_test_context_init(&ctx);
+            CC_CHECK(
+                cmk_test_context_load(&ctx, source),
+                "5000 层表达式语义"
+            );
+            CC_CHECK(
+                cmk_test_context_configure(&ctx),
+                "5000 层表达式 Configure"
+            );
+            CMKValue value;
+            cmk_value_init(&value);
+            CC_CHECK(get_global(&ctx, "a", &value), "读取 a");
+            CC_CHECK(
+                value.type == CMK_VALUE_INT &&
+                value.as.integer == 5001,
+                "深二元结果"
+            );
+            cmk_value_clear(&value);
+            cmk_value_init(&value);
+            CC_CHECK(get_global(&ctx, "b", &value), "读取 b");
+            CC_CHECK(
+                value.type == CMK_VALUE_BOOL &&
+                value.as.boolean == CCTRUE,
+                "深一元结果"
+            );
+            cmk_value_clear(&value);
+            cmk_value_init(&value);
+            CC_CHECK(get_global(&ctx, "c", &value), "读取 c");
+            CC_CHECK(
+                value.type == CMK_VALUE_INT &&
+                value.as.integer == 1,
+                "深列表索引结果"
+            );
+            cmk_value_clear(&value);
+            cmk_test_context_clear(&ctx);
+            ccalloc(source, 0, NULL);
+        }
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-013", "显式调用栈深嵌套");
+    {
+        char *source = ccalloc(NULL, 200000, "CMK 运行时深调用测试");
+        CC_CHECK(source != NULL, "运行时深调用缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            const char *head =
+                "func f(int n) -> int { return n; }\nint g = ";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                memcpy(source + pos, "f(", 2);
+                pos += 2;
+            }
+            source[pos++] = '1';
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = ')';
+            const char *tail = ";\ntarget core() {}\n";
+            memcpy(source + pos, tail, strlen(tail));
+            pos += strlen(tail);
+            source[pos] = '\0';
+
+            CMKTestContext ctx;
+            cmk_test_context_init(&ctx);
+            CC_CHECK(
+                cmk_test_context_load(&ctx, source),
+                "5000 层调用语义"
+            );
+            CC_CHECK(
+                cmk_test_context_configure(&ctx),
+                "5000 层调用 Configure"
+            );
+            CMKValue value;
+            cmk_value_init(&value);
+            CC_CHECK(get_global(&ctx, "g", &value), "读取 g");
+            CC_CHECK(
+                value.type == CMK_VALUE_INT &&
+                value.as.integer == 1,
+                "深调用结果"
+            );
+            cmk_value_clear(&value);
+            cmk_test_context_clear(&ctx);
+            ccalloc(source, 0, NULL);
+        }
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-014", "尾递归不消耗 C 栈");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    if (n <= 0) { return 0; }\n"
+            "    return f(n - 1);\n"
+            "}\n"
+            "int g = f(5000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "尾递归语义");
+        CC_CHECK(cmk_test_context_configure(&ctx), "100000 层尾递归 Configure");
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "读取尾递归结果");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 0,
+            "尾递归返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-015", "非尾递归深度策略");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    if (n <= 0) { return 1; }\n"
+            "    return n * f(n - 1);\n"
+            "}\n"
+            "int g = f(1000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "非尾递归语义");
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "非尾递归运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_recursion_depth = 20;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "非尾递归深度预算触发"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "递归深度") != NULL,
+            "非尾递归深度诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-016", "非尾线性递归延续栈");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    if (n <= 0) { return 0; }\n"
+            "    return 1 + f(n - 1);\n"
+            "}\n"
+            "int g = f(1000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "线性递归语义");
+        CC_CHECK(cmk_test_context_configure(&ctx), "线性递归 Configure");
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "读取线性递归结果");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 1000,
+            "线性递归返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-017", "分支递归深度策略");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    if (n <= 0) { return 0; }\n"
+            "    if (n == 1) { return 1; }\n"
+            "    return f(n - 1) + f(n - 2);\n"
+            "}\n"
+            "int g = f(1000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "分支递归语义");
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "分支递归运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_recursion_depth = 20;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "分支递归深度预算触发"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "递归深度") != NULL,
+            "分支递归深度诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-018", "分支递归程序栈");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    if (n <= 0) { return 0; }\n"
+            "    if (n == 1) { return 1; }\n"
+            "    return f(n - 1) + f(n - 2);\n"
+            "}\n"
+            "int g = f(15);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "分支递归程序语义");
+        CC_CHECK(
+            cmk_test_context_configure(&ctx),
+            "分支递归程序 Configure"
+        );
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "读取分支递归结果");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 610,
+            "分支递归返回值"
+        );
+        cmk_value_clear(&value);
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-019", "非 return 表达式递归深度策略");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    int x = 0;\n"
+            "    if (n > 0) { x = f(n - 1); }\n"
+            "    return x;\n"
+            "}\n"
+            "int g = f(1000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "赋值递归语义");
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "赋值递归运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_recursion_depth = 20;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "赋值递归深度预算触发"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "递归深度") != NULL,
+            "赋值递归深度诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-020", "Configure 时间策略");
+    {
+        const char *source =
+            "func tick() -> int {\n"
+            "    int i = 0;\n"
+            "    while (i < 2000000) { i += 1; }\n"
+            "    return i;\n"
+            "}\n"
+            "int g = tick();\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "时间策略语义");
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "时间策略运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_configure_time_ms = 1;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "Configure 时间预算触发"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "执行时间") != NULL,
+            "Configure 时间诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-021", "find 深度策略");
+    {
+        const char *source =
+            "list<string> files = find_files(\"*.c\", "
+            "{\"tests/data/cmk/find\"});\n"
+            "int n = len(files);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "find 深度语义");
+        ctx.runtime = cmk_runtime_create(
+            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
+        );
+        CC_CHECK(ctx.runtime != NULL, "find 深度运行时创建");
+        CMKExecutionPolicy policy;
+        cmk_execution_policy_init(&policy);
+        policy.max_find_depth = 1;
+        cmk_runtime_set_policy(ctx.runtime, &policy);
+        CC_CHECK(
+            !cmk_runtime_configure(ctx.runtime),
+            "find 深度预算触发"
+        );
+        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
+        CC_CHECK(
+            diag && diag->message &&
+            strstr(diag->message, "find_files") != NULL,
+            "find 深度诊断"
+        );
+        cmk_test_context_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-022", "托管执行栈创建");
+    {
+        CCBOOL flags[2] = {CCFALSE, CCFALSE};
+        CCBOOL result = CCFALSE;
+        CC_CHECK(
+            cmk_exec_stack_run(
+                exec_stack_probe, flags, &result
+            ),
+            "托管执行栈运行"
+        );
+        CC_CHECK(flags[0] && result, "托管执行栈回调结果");
+        CC_CHECK(flags[1], "托管执行栈余量检查");
+    }
+    CC_CASE_END();
+
+    CC_CASE("RT-023", "非 return 深递归托管栈");
+    {
+        const char *source =
+            "func f(int n) -> int {\n"
+            "    int x = 0;\n"
+            "    if (n > 0) { x = f(n - 1) + 1; }\n"
+            "    return x;\n"
+            "}\n"
+            "int g = f(5000);\n"
+            "target core() {}\n";
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(cmk_test_context_load(&ctx, source), "深递归赋值语义");
+        CC_CHECK(
+            cmk_test_context_configure(&ctx),
+            "深递归赋值 Configure"
+        );
+        CMKValue value;
+        cmk_value_init(&value);
+        CC_CHECK(get_global(&ctx, "g", &value), "读取深递归结果");
+        CC_CHECK(
+            value.type == CMK_VALUE_INT &&
+            value.as.integer == 5000,
+            "深递归赋值返回值"
+        );
+        cmk_value_clear(&value);
         cmk_test_context_clear(&ctx);
     }
     CC_CASE_END();

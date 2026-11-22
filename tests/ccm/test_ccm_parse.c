@@ -5,6 +5,7 @@
 
 #include "test_harness.h"
 #include "ccm/ccm_internal.h"
+#include "ccm/ccm_safe.h"
 #include "ccvar.h"
 
 #include <stdio.h>
@@ -451,12 +452,18 @@ static void test_depth_limits(void)
     CC_CASE("PARSE-015", "值深度边界");
     CCMakeCCMContext ctx;
 
-    CC_CHECK(parse_run("tests/data/ccm/parse/depth_128.ccm", &ctx),
-             "128 层嵌套成功");
+    CC_CHECK(parse_run_limits("tests/data/ccm/parse/depth_128.ccm", &ctx,
+                              0, 0, 0, 128),
+             "128 层嵌套在显式预算内成功");
     parse_cleanup(&ctx);
 
-    CC_CHECK(!parse_run("tests/data/ccm/parse/depth_129.ccm", &ctx),
-             "129 层嵌套拒绝");
+    CC_CHECK(!parse_run_limits("tests/data/ccm/parse/depth_129.ccm", &ctx,
+                               0, 0, 0, 128),
+             "129 层嵌套在显式预算下拒绝");
+    parse_cleanup(&ctx);
+
+    CC_CHECK(parse_run("tests/data/ccm/parse/depth_129.ccm", &ctx),
+             "默认 0 预算不限制 129 层嵌套");
     parse_cleanup(&ctx);
 
     CC_CASE_END();
@@ -610,6 +617,79 @@ static void test_reuse_after_failure(void)
     CC_CASE_END();
 }
 
+static void test_deep_value_stack(void)
+{
+    CC_CASE("PARSE-022", "显式值帧栈深嵌套");
+    const char *path = "out/ccm_deep_value.ccm";
+    FILE *file = fopen(path, "wb");
+    CC_CHECK(file != NULL, "创建深嵌套值文件");
+    if (file)
+    {
+        fputs("\"deep\": ", file);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            fputc('[', file);
+        fputc('1', file);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            fputc(']', file);
+        fputs(";\n", file);
+        fclose(file);
+
+        CCMakeCCMContext ctx;
+        CC_CHECK(parse_run(path, &ctx), "5000 层嵌套值解析");
+        parse_cleanup(&ctx);
+        remove(path);
+    }
+    CC_CASE_END();
+}
+
+static void test_ccm_dyn_safe(void)
+{
+    CC_CASE("PARSE-023", "CCM 动态追加边界");
+    CCDyn dyn;
+    memset(&dyn, 0, sizeof(dyn));
+    dyn.size = (CCUINT32)-1 - 1;
+    CCUINT32 value = 1;
+    CC_CHECK(
+        !ccm_dyn_push(&dyn, (CCUINT32)sizeof(value),
+                      (CCINT32)sizeof(value), &value),
+        "尺寸加法溢出被拒绝"
+    );
+    CC_CHECK(dyn.array == NULL, "失败不分配数组");
+    CC_CHECK(
+        !ccm_dyn_push(NULL, 1, 1, &value),
+        "空动态数组拒绝"
+    );
+    CC_CHECK(
+        !ccm_dyn_push(&dyn, 0, 1, &value),
+        "零对齐拒绝"
+    );
+    CC_CHECK(
+        !ccm_dyn_push(&dyn, 1, 0, &value),
+        "零尺寸拒绝"
+    );
+    CC_CHECK(
+        !ccm_dyn_push(&dyn, 1, 1, NULL),
+        "空元素指针拒绝"
+    );
+
+    CCDyn ok_dyn;
+    memset(&ok_dyn, 0, sizeof(ok_dyn));
+    CC_CHECK(
+        ccm_dyn_push(
+            &ok_dyn, (CCUINT32)sizeof(value),
+            (CCINT32)sizeof(value), &value
+        ),
+        "正常追加成功"
+    );
+    CC_CHECK(
+        ok_dyn.size == (CCUINT32)sizeof(value),
+        "正常追加大小"
+    );
+    if (ok_dyn.array)
+        ccalloc(ok_dyn.array, 0, NULL);
+    CC_CASE_END();
+}
+
 void test_ccm_parse(void)
 {
     test_basic();
@@ -633,4 +713,6 @@ void test_ccm_parse(void)
     test_find_result_limit();
     test_defines();
     test_define_bad_key();
+    test_deep_value_stack();
+    test_ccm_dyn_safe();
 }

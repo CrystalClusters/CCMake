@@ -869,10 +869,10 @@ void test_cmk_ast(void)
         CC_CHECK_EQ_I64("max_tokens", 0, (CCINT64)limits.max_tokens);
         CC_CHECK_EQ_I64("max_ast_nodes", 0, (CCINT64)limits.max_ast_nodes);
         CC_CHECK_EQ_I64(
-            "max_syntax_depth", 1024, (CCINT64)limits.max_syntax_depth
+            "max_syntax_depth", 0, (CCINT64)limits.max_syntax_depth
         );
         CC_CHECK_EQ_I64(
-            "max_expression_depth", 512, (CCINT64)limits.max_expression_depth
+            "max_expression_depth", 0, (CCINT64)limits.max_expression_depth
         );
         CC_CHECK_EQ_I64(
             "max_function_params", 0, (CCINT64)limits.max_function_params

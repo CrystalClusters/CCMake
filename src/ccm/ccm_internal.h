@@ -46,7 +46,7 @@ typedef struct ccmake_ccm_file_struct {
     CCBOOL    mounted;       /* 是否已在 VFS 中建立合成挂载点 */
 } CCMakeCCMFile;
 
-/* 配置解析资源预算；所有上限在分配前检查 */
+/* 配置解析资源策略；0 表示不限制，非 0 才在分配/追加前检查 */
 typedef struct ccmake_ccm_limits_struct {
     CCUINT64 max_total_bytes;     /* 全部文件内容总字节 */
     CCUINT64 max_file_bytes;      /* 单个文件字节 */

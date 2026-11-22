@@ -768,6 +768,7 @@ src/cmk/
   cmk_parser_stmt.c      语句解析
   cmk_parser_decl.c      声明、导入、target 解析
   cmk_diagnostic.c/h
+  cmk_safe.c/h          尺寸/CCDyn 追加安全检查
   cmk_value.c/h          值、类型、列表、动作、目标引用
   cmk_config.c/h         .ccm 变量树适配
   cmk_builtin.c/h        注册表、签名、调用上下文
@@ -792,7 +793,7 @@ src/cmk/
 
 CMK 不设置语言层的循环次数、递归次数、token 数量、AST 节点数量、目标数量或列表长度配额。
 
-Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算默认 0，只受内存约束；语法/表达式递归深度默认开启，用于保护宿主调用栈。该预算不属于语言语义限制，设为 0 即可关闭。详见 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 第 6 节。
+Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算默认 0，只受内存约束；语法/表达式递归深度默认 0，即不设语言能力上限，字段保留为可选执行策略。Parser 的显式堆栈迁移见 [资源管理原则](资源管理原则.md)。详见 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 第 6 节。
 
 - 循环按条件执行，由脚本自身决定终止；
 - 递归使用动态调用帧，只受可用内存和宿主资源约束；

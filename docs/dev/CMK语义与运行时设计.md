@@ -309,14 +309,34 @@ typedef struct cmk_target_draft {
 - 未导入的模块 target 不自动求值；
 - 导入 target 的闭包、Plan 冻结、目标选择、输出检查属于 M5。
 
+### 7.4 执行策略
+
+```c
+typedef struct cmk_execution_policy {
+    CCUINT32 max_recursion_depth;
+    CCUINT64 max_steps;
+    CCUINT64 max_configure_time_ms;
+    CCUINT32 max_find_depth;
+    CCUINT32 max_processes;
+    CCUINT64 max_output_capture;
+} CMKExecutionPolicy;
+```
+
+- 所有字段默认 0，表示不限制；
+- Runtime 当前接入 `max_steps`（表达式/语句步数）、`max_recursion_depth`（函数调用深度）与 `max_configure_time_ms`（`clock()` CPU 时间）；`max_find_depth` 接入 `find_files` 目录栈；
+- `CMKProgram` 通过 `cmk_program_set_policy` 在 Configure 前把策略下发到各模块 Runtime；
+- `CMKProgram` 创建时读取 `CCMAKE_CMK_MAX_STEPS`、`CCMAKE_CMK_MAX_RECURSION_DEPTH`、`CCMAKE_CMK_MAX_CONFIGURE_TIME_MS`、`CCMAKE_CMK_MAX_FIND_DEPTH`、`CCMAKE_CMK_MAX_PROCESSES`、`CCMAKE_CMK_MAX_OUTPUT_CAPTURE` 环境变量；`max_processes` 未设置时继承 `-j/--jobs`；
+- `max_recursion_depth`、执行时间、并发、输出捕获字段保留给后续 VM/Scheduler/Executor；
+- 策略失败写诊断并终止 Configure，不发布半成品 target draft。
+
 ## 8. Program
 
 - `cmk_program_load`：
   1. 规范化根路径；
   2. 读取/解析模块；
   3. 处理 `@include`（调用现有 `.ccm` 定位/解析器写入配置树）；
-  4. 递归加载 `@import` 模块并检测循环；
-  5. 为每个模块建立 Semantic，加入导入函数/目标，执行语义分析；
+  4. 使用显式加载帧栈（`CMKProgramLoadFrame`）扫描 `@import`、递归加载子模块并检测循环；
+  5. 子模块加载完成后，为每个模块建立 Semantic，加入导入函数/目标，执行语义分析；
 - `cmk_program_configure`：
   1. 为所有已加载模块建立 Runtime；
   2. 按导入依赖递归初始化模块全局变量；
@@ -339,11 +359,11 @@ typedef struct cmk_target_draft {
 
 | 套件 | 覆盖 |
 |---|---|
-| `CMKVALUE` | 类型、字符串所有权、列表深复制、目标引用、动作、文本化 |
+| `CMKVALUE` | 类型、字符串所有权、列表深复制、目标引用、动作、文本化、尺寸运算与动态追加边界 |
 | `CMKBUILTIN` | 注册表、纯计算、host_info、动作构造、find_files、error 格式 |
-| `CMKSEMANTIC` | 作用域、类型、函数、内建、target、配置、控制流 |
-| `CMKRUNTIME` | 全局变量、while、函数/递归、列表/字符串、target draft、for/break/continue、运行时错误 |
-| `CMKPROGRAM` | 根模块、跨模块函数、target 导入、通配/别名、@include、循环导入、导入错误 |
+| `CMKSEMANTIC` | 作用域、类型、函数、内建、target、配置、控制流、5000 层显式语句/表达式/顶层 if 栈 |
+| `CMKRUNTIME` | 全局变量、while、函数/递归、列表/字符串、target draft、for/break/continue、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归 |
+| `CMKPROGRAM` | 根模块、跨模块函数、target 导入、通配/别名、@include、循环导入、导入错误、Program 执行策略、环境变量策略、并发策略继承、进程/捕获策略、非法环境变量回退 |
 
 M3/M4 完成后的全量验收：Debug/Release 全通过，`-fanalyzer` 无告警，`git diff --check` 通过。
 

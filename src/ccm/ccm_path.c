@@ -8,6 +8,7 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_safe.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -26,7 +27,7 @@ static CCBOOL path_buf_put(CCDyn *buf, const char *text, size_t len)
 {
     for (size_t i = 0; i < len; i++)
     {
-        if (cc_dyn_core_push(buf, 1, 1, (void *)&text[i]) != 0)
+        if (!ccm_dyn_push(buf, 1, 1, (void *)&text[i]))
             return CCFALSE;
     }
     return CCTRUE;
@@ -34,13 +35,13 @@ static CCBOOL path_buf_put(CCDyn *buf, const char *text, size_t len)
 
 static CCBOOL path_buf_putc(CCDyn *buf, char c)
 {
-    return (cc_dyn_core_push(buf, 1, 1, &c) == 0) ? CCTRUE : CCFALSE;
+    return ccm_dyn_push(buf, 1, 1, &c) ? CCTRUE : CCFALSE;
 }
 
 static char *path_buf_finish(CCDyn *buf)
 {
     char zero = '\0';
-    if (cc_dyn_core_push(buf, 1, 1, &zero) != 0)
+    if (!ccm_dyn_push(buf, 1, 1, &zero))
     {
         if (buf->array)
             ccalloc(buf->array, 0, NULL);
@@ -137,6 +138,11 @@ char *ccm_path_normalize(const char *path, const char *base, const char *comment
         }
 
         size_t base_len = strlen(base);
+        if (base_len > (size_t)-1 - path_len - 2)
+        {
+            ccalloc(work, 0, NULL);
+            return NULL;
+        }
         CCBOOL base_has_slash = (base[base_len - 1] == '/') ? CCTRUE : CCFALSE;
         size_t total = base_len + (base_has_slash ? 0 : 1) + path_len + 1;
         char *combined = ccalloc(NULL, (CCUINT64)total, CC_CCM_PATH_COMMENT);
@@ -258,11 +264,10 @@ char *ccm_path_normalize(const char *path, const char *base, const char *comment
         }
 #endif
 
-        if (cc_dyn_core_push(
+        if (!ccm_dyn_push(
                 &comps, (CCUINT32)sizeof(char *),
                 (CCINT32)sizeof(char *), &comp
-            ) != 0
-        )
+            ))
         {
             ccalloc(work, 0, NULL);
             if (comps.array)

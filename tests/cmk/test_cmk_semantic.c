@@ -6,7 +6,13 @@
 #include "test_harness.h"
 #include "cmk_test_context.h"
 
+#include <ccalloc.h>
+
 #include <string.h>
+
+static void test_semantic_deep_statements(void);
+static void test_semantic_deep_expressions(void);
+static void test_semantic_deep_top_if(void);
 
 static void check_error(
     const char *source, const char *expected
@@ -325,6 +331,173 @@ void test_cmk_semantic(void)
             "func f() -> int { while (true) { return 1; } }",
             "缺少返回值"
         );
+    }
+    CC_CASE_END();
+    test_semantic_deep_statements();
+    test_semantic_deep_expressions();
+    test_semantic_deep_top_if();
+}
+
+static void test_semantic_deep_statements(void)
+{
+    CC_CASE("SEM-007", "显式语句栈深嵌套");
+    char *source = ccalloc(NULL, 200000, "CMK 语义深语句测试");
+    CC_CHECK(source != NULL, "语义深语句缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        const char *head = "func f() -> void {";
+        memcpy(source + pos, head, strlen(head));
+        pos += strlen(head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '{';
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '}';
+        source[pos++] = '}';
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层块语义"
+        );
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
+    }
+
+    source = ccalloc(NULL, 200000, "CMK 语义深 if 测试");
+    CC_CHECK(source != NULL, "语义深 if 缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        const char *head = "func g() -> void {";
+        memcpy(source + pos, head, strlen(head));
+        pos += strlen(head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+        {
+            const char *if_head = "if (true) {";
+            memcpy(source + pos, if_head, strlen(if_head));
+            pos += strlen(if_head);
+        }
+        const char *body = "int x = 1;";
+        memcpy(source + pos, body, strlen(body));
+        pos += strlen(body);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '}';
+        source[pos++] = '}';
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层 if 语义"
+        );
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
+    }
+    CC_CASE_END();
+}
+
+static void test_semantic_deep_expressions(void)
+{
+    CC_CASE("SEM-008", "显式表达式栈深嵌套");
+    char *source = ccalloc(NULL, 200000, "CMK 语义深表达式测试");
+    CC_CHECK(source != NULL, "语义深表达式缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        const char *head = "int x = 1";
+        memcpy(source + pos, head, strlen(head));
+        pos += strlen(head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+        {
+            memcpy(source + pos, " + 1", 4);
+            pos += 4;
+        }
+        source[pos++] = ';';
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层二元链语义"
+        );
+        cmk_test_context_clear(&ctx);
+
+        pos = 0;
+        const char *bool_head = "bool y = ";
+        memcpy(source + pos, bool_head, strlen(bool_head));
+        pos += strlen(bool_head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '!';
+        memcpy(source + pos, "true;", 5);
+        pos += 5;
+        source[pos] = '\0';
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层一元链语义"
+        );
+        cmk_test_context_clear(&ctx);
+
+        pos = 0;
+        const char *call_head =
+            "func f(int n) -> int { return n; }\nint z = ";
+        memcpy(source + pos, call_head, strlen(call_head));
+        pos += strlen(call_head);
+        for (CCUINT32 i = 0; i < 5000; i++)
+        {
+            memcpy(source + pos, "f(", 2);
+            pos += 2;
+        }
+        source[pos++] = '1';
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = ')';
+        source[pos++] = ';';
+        source[pos] = '\0';
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层调用语义"
+        );
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
+    }
+    CC_CASE_END();
+}
+
+static void test_semantic_deep_top_if(void)
+{
+    CC_CASE("SEM-009", "显式顶层 if 栈");
+    char *source = ccalloc(NULL, 200000, "CMK 语义顶层 if 测试");
+    CC_CHECK(source != NULL, "语义顶层 if 缓冲区");
+    if (source)
+    {
+        size_t pos = 0;
+        for (CCUINT32 i = 0; i < 5000; i++)
+        {
+            const char *head = "if (true) {";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+        }
+        const char *target = "target core() {}";
+        memcpy(source + pos, target, strlen(target));
+        pos += strlen(target);
+        for (CCUINT32 i = 0; i < 5000; i++)
+            source[pos++] = '}';
+        source[pos] = '\0';
+
+        CMKTestContext ctx;
+        cmk_test_context_init(&ctx);
+        CC_CHECK(
+            cmk_test_context_load(&ctx, source),
+            "5000 层顶层 if 语义"
+        );
+        cmk_test_context_clear(&ctx);
+        ccalloc(source, 0, NULL);
     }
     CC_CASE_END();
 }

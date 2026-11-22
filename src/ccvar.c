@@ -18,6 +18,17 @@
  * 基础访问
  * ========================================================================== */
 
+static CCINT32 var_dyn_push(
+    CCDyn *dyn, CCUINT32 align, CCINT32 size, const void *data
+)
+{
+    if (!dyn || !data || size <= 0 || align == 0)
+        return -1;
+    if ((CCUINT32)size > (CCUINT32)-1 - dyn->size)
+        return -1;
+    return cc_dyn_core_push(dyn, align, size, (void *)data);
+}
+
 static CCUINT32 var_node_count(const CCVarTree *tree)
 {
     return tree->nodes.size / (CCUINT32)sizeof(CCVarNode);
@@ -258,7 +269,7 @@ static CCVarResult var_node_push(
         node.name_len = name_len;
     }
 
-    if (cc_dyn_core_push(
+    if (var_dyn_push(
             &tree->nodes,
             (CCUINT32)sizeof(CCVarNode),
             (CCINT32)sizeof(CCVarNode),
@@ -382,7 +393,7 @@ static CCVarResult var_path_push_key(CCDyn *segs, const char *key)
     seg.key = key;
     seg.index = 0;
     seg.is_index = CCFALSE;
-    return (cc_dyn_core_push(
+    return (var_dyn_push(
             segs, (CCUINT32)sizeof(CCVarPathSeg),
             (CCINT32)sizeof(CCVarPathSeg), &seg
         ) == 0
@@ -395,7 +406,7 @@ static CCVarResult var_path_push_index(CCDyn *segs, CCUINT32 index)
     seg.key = NULL;
     seg.index = index;
     seg.is_index = CCTRUE;
-    return (cc_dyn_core_push(
+    return (var_dyn_push(
             segs, (CCUINT32)sizeof(CCVarPathSeg),
             (CCINT32)sizeof(CCVarPathSeg), &seg
         ) == 0
@@ -572,7 +583,7 @@ static CCVarResult var_array_element_create(
         return CC_VAR_ERR_PARAM;
     }
 
-    if (cc_dyn_core_push(
+    if (var_dyn_push(
             &arr->elements, (CCUINT32)sizeof(CCUINT32),
             (CCINT32)sizeof(CCUINT32), &idx
         ) != 0
@@ -681,7 +692,7 @@ static void var_reparent_children(CCVarTree *tree, CCUINT32 node, CCUINT32 new_p
         CCDyn stack;
         memset(&stack, 0, sizeof(stack));
         CCUINT32 root = n->children_root;
-        if (cc_dyn_core_push(
+        if (var_dyn_push(
                 &stack, (CCUINT32)sizeof(CCUINT32),
                 (CCINT32)sizeof(CCUINT32), &root
             ) != 0
@@ -699,12 +710,12 @@ static void var_reparent_children(CCVarTree *tree, CCUINT32 node, CCUINT32 new_p
             CCVarNode *c = var_node_at(tree, cur);
             c->parent = new_parent;
             if (c->rbt_left != CC_VAR_NIL)
-                cc_dyn_core_push(
+                var_dyn_push(
                     &stack, (CCUINT32)sizeof(CCUINT32),
                     (CCINT32)sizeof(CCUINT32), &c->rbt_left
                 );
             if (c->rbt_right != CC_VAR_NIL)
-                cc_dyn_core_push(
+                var_dyn_push(
                     &stack, (CCUINT32)sizeof(CCUINT32),
                     (CCINT32)sizeof(CCUINT32), &c->rbt_right
                 );
@@ -958,7 +969,7 @@ static CCINT32 var_collect_kid(void *data, void *user)
     CCVarKidCtx *ctx = (CCVarKidCtx *)user;
     CCVarNode *n = (CCVarNode *)data;
     CCUINT32 idx = var_idx_of(ctx->tree, n);
-    return (cc_dyn_core_push(ctx->kids, (CCUINT32)sizeof(CCUINT32),
+    return (var_dyn_push(ctx->kids, (CCUINT32)sizeof(CCUINT32),
                              (CCINT32)sizeof(CCUINT32), &idx) == 0)
                ? 0 : 1;
 }
@@ -983,7 +994,7 @@ static CCVarResult var_collect_paths(
         return CC_VAR_ERR_NOSPACE;
     memcpy(first.path, root_path, strlen(root_path) + 1);
 
-    if (cc_dyn_core_push(
+    if (var_dyn_push(
             &stack, (CCUINT32)sizeof(CCVarCollectItem),
             (CCINT32)sizeof(CCVarCollectItem), &first
         ) != 0
@@ -1007,7 +1018,7 @@ static CCVarResult var_collect_paths(
             break;
         }
 
-        if (cc_dyn_core_push(
+        if (var_dyn_push(
                 paths, (CCUINT32)sizeof(char *),
                 (CCINT32)sizeof(char *), &item.path
             ) != 0
@@ -1057,7 +1068,7 @@ static CCVarResult var_collect_paths(
                 CCVarCollectItem ci;
                 ci.node = child;
                 ci.path = cp;
-                if (cc_dyn_core_push(
+                if (var_dyn_push(
                         &stack, (CCUINT32)sizeof(CCVarCollectItem),
                         (CCINT32)sizeof(CCVarCollectItem), &ci
                     ) != 0
@@ -1090,7 +1101,7 @@ static CCVarResult var_collect_paths(
                 CCVarCollectItem ci;
                 ci.node = child;
                 ci.path = cp;
-                if (cc_dyn_core_push(
+                if (var_dyn_push(
                         &stack, (CCUINT32)sizeof(CCVarCollectItem),
                         (CCINT32)sizeof(CCVarCollectItem), &ci
                     ) != 0

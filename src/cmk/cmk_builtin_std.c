@@ -9,6 +9,7 @@
 
 #include "cmk_builtin.h"
 #include "cmk_runtime.h"
+#include "cmk_safe.h"
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
@@ -465,10 +466,10 @@ static CCINT32 find_list_callback(void *data, void *user)
     }
     memcpy(item.name, entry->name, len + 1);
     item.type = entry->type;
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             &list->entries, (CCUINT32)sizeof(CMKFindEntry),
             (CCINT32)sizeof(CMKFindEntry), &item
-        ) != 0)
+        ))
     {
         ccalloc(item.name, 0, NULL);
         list->failed = CCTRUE;
@@ -496,6 +497,8 @@ static char *find_join(const char *left, const char *right)
            (left[left_len - 1] == '/' || left[left_len - 1] == '\\'))
         left_len--;
     size_t right_len = right ? strlen(right) : 0;
+    if (left_len > (size_t)-1 - right_len - 3)
+        return NULL;
     size_t need = left_len + (left_len > 0 && right_len > 0 ? 1 : 0) +
         right_len + 1;
     char *out = ccalloc(
@@ -536,10 +539,10 @@ static CCBOOL find_add_result(CCDyn *results, const char *path)
     if (!copy)
         return CCFALSE;
     memcpy(copy, path, len + 1);
-    if (cc_dyn_core_push(
+    if (!cmk_dyn_push(
             results, (CCUINT32)sizeof(char *),
             (CCINT32)sizeof(char *), &copy
-        ) != 0)
+        ))
     {
         ccalloc(copy, 0, NULL);
         return CCFALSE;
@@ -547,60 +550,160 @@ static CCBOOL find_add_result(CCDyn *results, const char *path)
     return CCTRUE;
 }
 
-static CCBOOL find_scan_dir(
-    CCFiles *fs, const char *vpath, const char *rel,
-    const char *pattern, const char *root, CCDyn *results
+typedef struct cmk_find_dir {
+    char *vpath;
+    char *rel;
+    CCUINT32 depth;
+} CMKFindDir;
+
+static void find_dirs_clear(CCDyn *stack)
+{
+    CMKFindDir *dirs = (CMKFindDir *)stack->array;
+    CCUINT32 count = stack->size / (CCUINT32)sizeof(CMKFindDir);
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        if (dirs[i].vpath)
+            ccalloc(dirs[i].vpath, 0, NULL);
+        if (dirs[i].rel)
+            ccalloc(dirs[i].rel, 0, NULL);
+    }
+    if (stack->array)
+        ccalloc(stack->array, 0, NULL);
+    memset(stack, 0, sizeof(*stack));
+}
+
+static CCBOOL find_push_dir(
+    CCDyn *stack, const char *vpath, const char *rel, CCUINT32 depth
 )
 {
-    CMKFindList list;
-    memset(&list, 0, sizeof(list));
-    if (ccfiles_list(fs, vpath, find_list_callback, &list) != CC_FS_OK ||
-        list.failed)
+    CMKFindDir dir;
+    memset(&dir, 0, sizeof(dir));
+    size_t vlen = strlen(vpath);
+    size_t rlen = strlen(rel);
+    if (vlen > (size_t)-1 - 1 || rlen > (size_t)-1 - 1)
+        return CCFALSE;
+    dir.vpath = ccalloc(
+        NULL, (CCUINT64)vlen + 1,
+        CC_DBG_REL_TAG(".cmk find 目录", NULL)
+    );
+    dir.rel = ccalloc(
+        NULL, (CCUINT64)rlen + 1,
+        CC_DBG_REL_TAG(".cmk find 相对路径", NULL)
+    );
+    if (!dir.vpath || !dir.rel)
     {
-        find_entries_clear(&list.entries);
+        if (dir.vpath)
+            ccalloc(dir.vpath, 0, NULL);
+        if (dir.rel)
+            ccalloc(dir.rel, 0, NULL);
         return CCFALSE;
     }
-
-    CMKFindEntry *entries = (CMKFindEntry *)list.entries.array;
-    CCUINT32 count =
-        list.entries.size / (CCUINT32)sizeof(CMKFindEntry);
-    CCBOOL ok = CCTRUE;
-    for (CCUINT32 i = 0; i < count && ok; i++)
+    memcpy(dir.vpath, vpath, vlen + 1);
+    memcpy(dir.rel, rel, rlen + 1);
+    dir.depth = depth;
+    if (!cmk_dyn_push(
+            stack, (CCUINT32)sizeof(CMKFindDir),
+            (CCINT32)sizeof(CMKFindDir), &dir
+        ))
     {
-        if (strcmp(entries[i].name, ".") == 0 ||
-            strcmp(entries[i].name, "..") == 0)
-            continue;
+        ccalloc(dir.vpath, 0, NULL);
+        ccalloc(dir.rel, 0, NULL);
+        return CCFALSE;
+    }
+    return CCTRUE;
+}
 
-        char *child_vpath = find_join(vpath, entries[i].name);
-        char *child_rel = find_join(rel, entries[i].name);
-        if (!child_vpath || !child_rel)
+static CCBOOL find_scan_tree(
+    CCFiles *fs, const char *pattern, const char *root,
+    CCDyn *results, CCUINT32 max_depth
+)
+{
+    CCDyn dirs;
+    memset(&dirs, 0, sizeof(dirs));
+    if (!find_push_dir(&dirs, "/cmk_find_root", "", 0))
+        return CCFALSE;
+
+    CCBOOL ok = CCTRUE;
+    while (dirs.size >= (CCUINT32)sizeof(CMKFindDir) && ok)
+    {
+        CMKFindDir *array = (CMKFindDir *)dirs.array;
+        CCUINT32 count = dirs.size / (CCUINT32)sizeof(CMKFindDir);
+        CMKFindDir dir = array[count - 1];
+        if (cc_dyn_core_pop(
+                &dirs, (CCUINT32)sizeof(CMKFindDir),
+                (CCINT32)sizeof(CMKFindDir), &dir
+            ) != 0)
         {
-            if (child_vpath)
-                ccalloc(child_vpath, 0, NULL);
-            if (child_rel)
-                ccalloc(child_rel, 0, NULL);
             ok = CCFALSE;
             break;
         }
 
-        if (entries[i].type == CC_FS_TYPE_DIR)
+        CMKFindList list;
+        memset(&list, 0, sizeof(list));
+        if (ccfiles_list(fs, dir.vpath, find_list_callback, &list) != CC_FS_OK ||
+            list.failed)
         {
-            ok = find_scan_dir(
-                fs, child_vpath, child_rel, pattern, root, results
-            );
+            find_entries_clear(&list.entries);
+            ok = CCFALSE;
         }
-        else if (cc_wildcard(pattern, entries[i].name))
+        else
         {
-            char *full = find_join(root, child_rel);
-            if (!full || !find_add_result(results, full))
-                ok = CCFALSE;
-            if (full)
-                ccalloc(full, 0, NULL);
+            CMKFindEntry *entries = (CMKFindEntry *)list.entries.array;
+            CCUINT32 entry_count =
+                list.entries.size / (CCUINT32)sizeof(CMKFindEntry);
+            for (CCUINT32 i = 0; i < entry_count && ok; i++)
+            {
+                if (strcmp(entries[i].name, ".") == 0 ||
+                    strcmp(entries[i].name, "..") == 0)
+                    continue;
+
+                if (entries[i].type == CC_FS_TYPE_DIR)
+                {
+                    if (max_depth != 0 && dir.depth >= max_depth)
+                    {
+                        ok = CCFALSE;
+                        break;
+                    }
+                    char *child_vpath = find_join(
+                        dir.vpath, entries[i].name
+                    );
+                    char *child_rel = find_join(
+                        dir.rel, entries[i].name
+                    );
+                    if (!child_vpath || !child_rel ||
+                        !find_push_dir(
+                            &dirs, child_vpath, child_rel,
+                            dir.depth + 1
+                        ))
+                        ok = CCFALSE;
+                    if (child_vpath)
+                        ccalloc(child_vpath, 0, NULL);
+                    if (child_rel)
+                        ccalloc(child_rel, 0, NULL);
+                }
+                else if (cc_wildcard(pattern, entries[i].name))
+                {
+                    char *child_rel = find_join(
+                        dir.rel, entries[i].name
+                    );
+                    char *full = child_rel
+                        ? find_join(root, child_rel) : NULL;
+                    if (!child_rel || !full ||
+                        !find_add_result(results, full))
+                        ok = CCFALSE;
+                    if (child_rel)
+                        ccalloc(child_rel, 0, NULL);
+                    if (full)
+                        ccalloc(full, 0, NULL);
+                }
+            }
+            find_entries_clear(&list.entries);
         }
-        ccalloc(child_vpath, 0, NULL);
-        ccalloc(child_rel, 0, NULL);
+        ccalloc(dir.vpath, 0, NULL);
+        ccalloc(dir.rel, 0, NULL);
     }
-    find_entries_clear(&list.entries);
+
+    find_dirs_clear(&dirs);
     return ok;
 }
 
@@ -744,14 +847,20 @@ static CCBOOL builtin_find_files(CMKBuiltinCall *call)
             );
             goto Failed;
         }
-        CCBOOL ok = find_scan_dir(
-            fs, "/cmk_find_root", "", pattern->as.string.data,
-            root->as.string.data, &results
+        const CMKExecutionPolicy *policy =
+            cmk_runtime_get_policy(call->runtime);
+        CCUINT32 max_depth =
+            policy ? policy->max_find_depth : 0;
+        CCBOOL ok = find_scan_tree(
+            fs, pattern->as.string.data, root->as.string.data,
+            &results, max_depth
         );
         ccfiles_destroy(fs);
         if (!ok)
         {
-            cmk_builtin_error(call, "find_files 目录遍历失败");
+            cmk_builtin_error(
+                call, "find_files 目录遍历失败或超过查找深度"
+            );
             goto Failed;
         }
     }

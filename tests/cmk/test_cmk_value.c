@@ -6,6 +6,7 @@
 #include "test_harness.h"
 
 #include "cmk/cmk_value.h"
+#include "cmk/cmk_safe.h"
 
 #include <string.h>
 
@@ -191,6 +192,60 @@ void test_cmk_value(void)
         cmk_value_clear(&item);
         cmk_value_clear(&value);
         cmk_string_clear(&text);
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * VAL-006 尺寸运算与动态追加边界
+     * ---------------------------------------------------------------- */
+    CC_CASE("VAL-006", "尺寸运算与动态追加边界");
+    {
+        CCUINT64 out = 0;
+        CC_CHECK(
+            !cmk_safe_add_u64((CCUINT64)-1, 1, &out),
+            "u64 加法溢出拒绝"
+        );
+        CC_CHECK(
+            cmk_safe_add_u64(2, 3, &out) && out == 5,
+            "u64 加法正常"
+        );
+        CC_CHECK(
+            !cmk_safe_mul_u64((CCUINT64)-1, 2, &out),
+            "u64 乘法溢出拒绝"
+        );
+        CC_CHECK(
+            cmk_safe_mul_u64(6, 7, &out) && out == 42,
+            "u64 乘法正常"
+        );
+
+        CCDyn dyn;
+        memset(&dyn, 0, sizeof(dyn));
+        dyn.size = (CCUINT32)-1 - 1;
+        CCUINT32 value = 1;
+        CC_CHECK(
+            !cmk_dyn_push(
+                &dyn, (CCUINT32)sizeof(value),
+                (CCINT32)sizeof(value), &value
+            ),
+            "动态追加尺寸溢出拒绝"
+        );
+        CC_CHECK(dyn.array == NULL, "溢出失败不分配数组");
+        CC_CHECK(
+            !cmk_dyn_push(NULL, 1, 1, &value),
+            "空动态数组拒绝"
+        );
+        CC_CHECK(
+            !cmk_dyn_push(&dyn, 0, 1, &value),
+            "零对齐拒绝"
+        );
+        CC_CHECK(
+            !cmk_dyn_push(&dyn, 1, 0, &value),
+            "零尺寸拒绝"
+        );
+        CC_CHECK(
+            !cmk_dyn_push(&dyn, 1, 1, NULL),
+            "空元素指针拒绝"
+        );
     }
     CC_CASE_END();
 }

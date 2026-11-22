@@ -952,8 +952,8 @@ void cmk_limits_init(CMKLimits *limits);
 |---|---:|---|---|
 | `max_tokens` | 0（不限制） | Parser 每次从 Lexer 取 Token 前 | `Token 数量超过限制` |
 | `max_ast_nodes` | 0（不限制） | Parser 创建 AST 节点前（含根节点） | `AST 节点数量超过限制` |
-| `max_syntax_depth` | 1024 | 进入 block/if/while/for/function/target/type 嵌套前 | `语法嵌套深度超过限制` |
-| `max_expression_depth` | 512 | 进入表达式递归、括号、一元、列表字面量前 | `表达式嵌套深度超过限制` |
+| `max_syntax_depth` | 0 | 进入 block/if/while/for/function/target/type 嵌套前 | `语法嵌套深度超过限制` |
+| `max_expression_depth` | 0 | 进入表达式递归、括号、一元、列表字面量前 | `表达式嵌套深度超过限制` |
 | `max_function_params` | 0（不限制） | 函数参数追加前 | `函数参数数量超过限制` |
 | `max_list_elements` | 0（不限制） | 列表元素追加前 | `列表元素数量超过限制` |
 | `max_declarations` | 0（不限制） | 模块顶层项追加前（import/include/decl/top-if） | `模块顶层声明数量超过限制` |
@@ -963,7 +963,8 @@ void cmk_limits_init(CMKLimits *limits);
 [CMK 实现细则](CMK实现细则.md) §10 规定 CMK 不设置语言层的 token、AST 节点、列表长度等配额。M2 的 `CMKLimits` 是 **Parser 的实现资源预算**，不是语言语义限制：
 
 - 计数类预算（Token、AST 节点、函数参数、列表元素、顶层声明）默认全部为 0，即只受内存与 `CCUINT32`/`CCDyn` 表示边界约束；分配失败由 Parser 转换成明确诊断；
-- 深度类预算（语法嵌套、表达式递归）默认开启，因为递归下降直接消耗 C 调用栈，栈溢出不是可移植、可恢复的错误，不能靠内存分配失败兜底；
+- 深度类预算（语法嵌套、表达式递归）默认 0，即不设置语言能力上限；它们只作为可配置执行策略保留；
+- Parser 的类型、一元链、表达式（括号/列表/调用/索引/成员）、语句/块/if/while/for、target 顶层 if 均已迁移到显式栈；Parser 常规路径不再依赖 C 递归；
 - 深度默认值按 Windows 默认 1 MiB 栈保守取值；如果 M2.5 在 Windows/Linux/Android 完成压测，并确认目标平台统一使用更大栈，可以提高默认值；
 - 所有字段都可以显式设为 0 关闭；正常项目的 AST 结构不依赖这些数字，M3/M4 不读取预算作为语义信息。
 
@@ -1036,11 +1037,11 @@ M3/M4 状态：已完成。语义与运行时边界见 [CMK 语义与运行时�
 | `CMKSTMT` | `STMT-001` 至 `STMT-007` | 语句、控制流、悬空 else、赋值 |
 | `CMKDECL` | `DECL-001` 至 `DECL-006` | 导入/包含、函数、target、顶层 if、完整模块 |
 | `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式/类型深度、预算、大量声明、失败复用、确定性随机输入 |
-| `CMKVALUE` | `VAL-001` 至 `VAL-005` | 类型、字符串/列表/动作所有权、目标引用、文本化 |
+| `CMKVALUE` | `VAL-001` 至 `VAL-006` | 类型、字符串/列表/动作所有权、目标引用、文本化、尺寸运算与动态追加边界 |
 | `CMKBUILTIN` | `BLT-001` 至 `BLT-005` | 注册表、纯计算、host_info、动作构造、find_files、错误格式 |
-| `CMKSEMANTIC` | `SEM-001` 至 `SEM-006` | 作用域、类型、函数、内建、target、配置、控制流 |
-| `CMKRUNTIME` | `RT-001` 至 `RT-007` | 表达式、函数/递归、while/for、内建、target draft、运行时错误 |
-| `CMKPROGRAM` | `PRG-001` 至 `PRG-005` | 模块加载、导入函数/target、通配/别名、@include、循环导入 |
+| `CMKSEMANTIC` | `SEM-001` 至 `SEM-009` | 作用域、类型、函数、内建、target、配置、控制流、5000 层显式语句/表达式/顶层 if 栈 |
+| `CMKRUNTIME` | `RT-001` 至 `RT-023` | 表达式、函数/递归、while/for、内建、target draft、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、非 return 表达式递归策略、托管执行栈与余量检查、5000 层非 return 深递归 |
+| `CMKPROGRAM` | `PRG-001` 至 `PRG-010` | 模块加载、导入函数/target、通配/别名、@include、循环导入、Program 执行策略、环境变量策略、并发策略继承、进程/捕获策略、非法环境变量回退 |
 
 现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS`、`CMKVALUE`、`CMKBUILTIN`、`CMKSEMANTIC`、`CMKRUNTIME`、`CMKPROGRAM` 套件入口。
 

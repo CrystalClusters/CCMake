@@ -8,6 +8,7 @@
  */
 
 #include "ccm_internal.h"
+#include "ccm_safe.h"
 
 #include <ctype.h>
 
@@ -126,13 +127,12 @@ static CCBOOL scan_push_include(
     item.column = column;
     item.child = CC_CCM_NIL;
 
-    if (cc_dyn_core_push(
+    if (!ccm_dyn_push(
             out_includes,
             (CCUINT32)sizeof(CCMakeCCMInclude),
             (CCINT32)sizeof(CCMakeCCMInclude),
             &item
-        ) != 0
-    )
+        ))
         return CCFALSE;
     return CCTRUE;
 }
@@ -274,7 +274,9 @@ CCBOOL ccm_scan_includes(
 
                 if (depth != 0)
                     return scan_fail(display_path, at_line, "@include 只能出现在顶层");
-                if (out_includes->size / (CCUINT32)sizeof(CCMakeCCMInclude) >= max_edges)
+                if (max_edges != 0 &&
+                    out_includes->size /
+                    (CCUINT32)sizeof(CCMakeCCMInclude) >= max_edges)
                     return scan_fail(display_path, at_line, "include 数量超过限制");
 
                 column += (CCUINT32)(ident_end - index);

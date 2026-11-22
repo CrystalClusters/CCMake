@@ -6,6 +6,8 @@
 #include "test_harness.h"
 #include "cmk_parser_test_util.h"
 
+#include <ccalloc.h>
+
 #include <stdio.h>
 #include <string.h>
 
@@ -99,6 +101,57 @@ void test_cmk_parser_stress(void)
         check_limited_error(
             deep_type, &limits, "语法嵌套深度超过限制"
         );
+
+        // 默认 0 预算下，类型与一元运算使用显式栈，不消耗宿主 C 栈
+        char *wide_type = ccalloc(
+            NULL, 64000, "CMK 深类型测试"
+        );
+        CC_CHECK(wide_type != NULL, "深类型缓冲区");
+        if (wide_type)
+        {
+            size_t wpos = 0;
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                memcpy(wide_type + wpos, "list<", 5);
+                wpos += 5;
+            }
+            memcpy(wide_type + wpos, "int", 3);
+            wpos += 3;
+            for (CCUINT32 i = 0; i < 5000; i++)
+                wide_type[wpos++] = '>';
+            memcpy(wide_type + wpos, " x = {};", 8);
+            wpos += 8;
+            wide_type[wpos] = '\0';
+
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, wide_type, NULL),
+                "默认预算解析 5000 层类型"
+            );
+            cmk_test_parse_end(&ctx);
+            ccalloc(wide_type, 0, NULL);
+        }
+
+        char *wide_unary = ccalloc(
+            NULL, 64000, "CMK 深一元测试"
+        );
+        CC_CHECK(wide_unary != NULL, "深一元缓冲区");
+        if (wide_unary)
+        {
+            memcpy(wide_unary, "bool x = ", 9);
+            size_t upos = 9;
+            for (CCUINT32 i = 0; i < 5000; i++)
+                wide_unary[upos++] = '!';
+            memcpy(wide_unary + upos, "true;", 5);
+            upos += 5;
+            wide_unary[upos] = '\0';
+
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, wide_unary, NULL),
+                "默认预算解析 5000 层一元"
+            );
+            cmk_test_parse_end(&ctx);
+            ccalloc(wide_unary, 0, NULL);
+        }
     }
     CC_CASE_END();
 
@@ -139,30 +192,175 @@ void test_cmk_parser_stress(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * STRESS-003 默认预算下的嵌套块
+     * STRESS-003 默认预算下的嵌套块与语句
      * ---------------------------------------------------------------- */
-    CC_CASE("STRESS-003", "默认预算下的嵌套块");
+    CC_CASE("STRESS-003", "默认预算下的嵌套块与语句");
     {
-        char source[4096];
-        size_t pos = 0;
-        const char *head = "func f() -> void {";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 100; i++)
-            source[pos++] = '{';
-        for (CCUINT32 i = 0; i < 100; i++)
-            source[pos++] = '}';
-        source[pos++] = '}';
-        source[pos] = '\0';
-
-        CMKTestParse ctx;
-        CC_CHECK(cmk_test_parse_begin(&ctx, source, NULL), "解析深嵌套块");
-        if (ctx.ast)
+        char *source = ccalloc(NULL, 200000, "CMK 深语句测试");
+        CC_CHECK(source != NULL, "深语句缓冲区");
+        if (source)
         {
-            const char *reason = NULL;
-            CC_CHECK(cmk_ast_validate(ctx.ast, &reason), "深嵌套 AST 校验");
+            size_t pos = 0;
+            const char *head = "func f() -> void {";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '{';
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '}';
+            source[pos++] = '}';
+            source[pos] = '\0';
+
+            CMKTestParse ctx;
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层嵌套块"
+            );
+            if (ctx.ast)
+            {
+                const char *reason = NULL;
+                CC_CHECK(
+                    cmk_ast_validate(ctx.ast, &reason),
+                    "5000 层块 AST 校验"
+                );
+            }
+            cmk_test_parse_end(&ctx);
+            ccalloc(source, 0, NULL);
         }
-        cmk_test_parse_end(&ctx);
+
+        source = ccalloc(NULL, 200000, "CMK 深 if 测试");
+        CC_CHECK(source != NULL, "深 if 缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            const char *head = "func g() -> void {";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                const char *if_head = "if (true) {";
+                memcpy(source + pos, if_head, strlen(if_head));
+                pos += strlen(if_head);
+            }
+            const char *body = "int x = 1;";
+            memcpy(source + pos, body, strlen(body));
+            pos += strlen(body);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '}';
+            source[pos++] = '}';
+            source[pos] = '\0';
+
+            CMKTestParse ctx;
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层 if"
+            );
+            if (ctx.ast)
+            {
+                const char *reason = NULL;
+                CC_CHECK(
+                    cmk_ast_validate(ctx.ast, &reason),
+                    "5000 层 if AST 校验"
+                );
+            }
+            cmk_test_parse_end(&ctx);
+            ccalloc(source, 0, NULL);
+        }
+
+        source = ccalloc(NULL, 200000, "CMK 深表达式测试");
+        CC_CHECK(source != NULL, "深表达式缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            const char *head = "int __expr = ";
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '(';
+            source[pos++] = '1';
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = ')';
+            source[pos++] = ';';
+            source[pos] = '\0';
+
+            CMKTestParse ctx;
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层括号"
+            );
+            cmk_test_parse_end(&ctx);
+
+            pos = 0;
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '{';
+            source[pos++] = '1';
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '}';
+            source[pos++] = ';';
+            source[pos] = '\0';
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层列表"
+            );
+            cmk_test_parse_end(&ctx);
+
+            pos = 0;
+            memcpy(source + pos, head, strlen(head));
+            pos += strlen(head);
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                memcpy(source + pos, "f(", 2);
+                pos += 2;
+            }
+            source[pos++] = '1';
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = ')';
+            source[pos++] = ';';
+            source[pos] = '\0';
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层调用"
+            );
+            cmk_test_parse_end(&ctx);
+            ccalloc(source, 0, NULL);
+        }
+
+        source = ccalloc(NULL, 200000, "CMK 深顶层 if 测试");
+        CC_CHECK(source != NULL, "深顶层 if 缓冲区");
+        if (source)
+        {
+            size_t pos = 0;
+            for (CCUINT32 i = 0; i < 5000; i++)
+            {
+                const char *head = "if (true) {";
+                memcpy(source + pos, head, strlen(head));
+                pos += strlen(head);
+            }
+            const char *target = "target core() {}";
+            memcpy(source + pos, target, strlen(target));
+            pos += strlen(target);
+            for (CCUINT32 i = 0; i < 5000; i++)
+                source[pos++] = '}';
+            source[pos] = '\0';
+
+            CMKTestParse ctx;
+            CC_CHECK(
+                cmk_test_parse_begin(&ctx, source, NULL),
+                "解析 5000 层顶层 if"
+            );
+            if (ctx.ast)
+            {
+                const char *reason = NULL;
+                CC_CHECK(
+                    cmk_ast_validate(ctx.ast, &reason),
+                    "5000 层顶层 if AST 校验"
+                );
+            }
+            cmk_test_parse_end(&ctx);
+            ccalloc(source, 0, NULL);
+        }
     }
     CC_CASE_END();
 

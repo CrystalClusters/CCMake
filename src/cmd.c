@@ -19,6 +19,17 @@ static int g_index = 0;
 static int g_argc = 0;
 static char **g_argv = NULL;
 
+static CCINT32 cmd_dyn_push(
+    CCDyn *dyn, CCUINT32 align, CCINT32 size, const void *data
+)
+{
+    if (!dyn || !data || size <= 0 || align == 0)
+        return -1;
+    if ((CCUINT32)size > (CCUINT32)-1 - dyn->size)
+        return -1;
+    return cc_dyn_core_push(dyn, align, size, (void *)data);
+}
+
 struct ccmake_global_var_struct ccmake_global_var;
 
 // -D 动态数组：先释放每条键值对的字符串，再释放数组本体
@@ -315,7 +326,7 @@ static CCBOOL _define_add_(const char *key, CCUINT32 key_len, const char *value,
         ccalloc(def.key, 0, NULL);
         return CCFALSE;
     }
-    if (cc_dyn_core_push(
+    if (cmd_dyn_push(
             &ccmake_global_var.defines,
             (CCUINT32)sizeof(CCMakeDefine),
             (CCINT32)sizeof(CCMakeDefine),
