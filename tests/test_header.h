@@ -17,5 +17,10 @@ void test_ccm_parse(void);
 void test_ccvar(void);
 void test_cmk_lexer(void);
 void test_cmk_ast(void);
+void test_cmk_parser_base(void);
+void test_cmk_parser_expr(void);
+void test_cmk_parser_stmt(void);
+void test_cmk_parser_decl(void);
+void test_cmk_parser_stress(void);
 
 #endif

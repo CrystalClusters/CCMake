@@ -777,6 +777,7 @@ func log(string msg) -> void {
 ```c
 typedef struct cmk_parser {
     CMKLexer *lexer;             // 借用，不释放
+    CMKAST *ast;                 // 解析期间借用；发布/失败后置空
     CMKToken current;            // 当前 Token
     CMKToken previous;           // 最近消费的 Token，用于 span
     CMKToken lookahead;          // 单 Token 前瞻
@@ -788,6 +789,7 @@ typedef struct cmk_parser {
     CCUINT32 expression_depth;
     CCUINT32 declaration_count;
     CCBOOL failed;
+    CCBOOL used;                 // 已调用过 parse；clear + init 后才能复用
 } CMKParser;
 
 CCBOOL cmk_parser_init(
@@ -1008,7 +1010,9 @@ tests/cmk/
 
 每个子阶段先写测试，再实现功能；不得跨阶段合并。M2.0 的本文档是编码前置条件。
 
-M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（9 个用例）已落地；下一步 M2.1 Parser 基础设施。
+M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（9 个用例）已落地。
+M2.1 状态：已完成。`cmk_parser.h`、`cmk_parser_internal.h`、`cmk_parser.c` 与 `CMKPARSER` 套件（11 个用例）已落地。
+M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/Fuzz 测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。下一步进入 M3。
 
 ## 9. 测试计划
 
@@ -1016,14 +1020,14 @@ M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件�
 
 | 套件 | 用例编号 | 内容 |
 |---|---|---|
-| `CMKAST` | `AST-001` 起 | AST 模型、所有权、校验、visitor |
-| `CMKPARSER` | `PARSER-001` 起 | 基础设施 |
-| `CMKPARSER` | `PARSER-1xx` | 表达式 |
-| `CMKPARSER` | `PARSER-2xx` | 语句 |
-| `CMKPARSER` | `PARSER-3xx` | 顶层声明 |
-| `CMKPARSER` | `PARSER-9xx` | 压力、限制、Fuzz |
+| `CMKAST` | `AST-001` 至 `AST-009` | AST 模型、所有权、校验、visitor |
+| `CMKPARSER` | `PARSER-001` 至 `PARSER-011` | 基础设施、诊断、预算、Token 缓冲 |
+| `CMKEXPR` | `EXPR-001` 至 `EXPR-008` | 表达式、优先级、调用/索引/成员、配置引用 |
+| `CMKSTMT` | `STMT-001` 至 `STMT-007` | 语句、控制流、悬空 else、赋值 |
+| `CMKDECL` | `DECL-001` 至 `DECL-006` | 导入/包含、函数、target、顶层 if、完整模块 |
+| `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 深度、预算、大量声明、失败复用、Fuzz |
 
-现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER` 两个套件入口。
+现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件入口。
 
 ### 9.2 AST 测试
 
@@ -1071,4 +1075,6 @@ M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件�
 - [CMK 词法与语法](CMK词法与语法.md)：已同步更新本文 §4 的 EBNF、优先级、赋值语句化、链式比较、调用限制与顶层 if；
 - [CMK 实现细则](CMK实现细则.md)：文件布局加入 `cmk_limits.h` 与拆分后的 Parser 文件；§10 增加 Parser 资源预算说明；
 - [开发手册](开发手册.md)：挂接本文链接；
-- M2.0 的 `cmk_ast`、`cmk_limits` 与 `CMKAST` 测试已按本文落地；下一步是 M2.1 Parser 基础设施。
+- M2.0 的 `cmk_ast`、`cmk_limits` 与 `CMKAST` 测试已按本文落地；
+- M2.1 的 Parser 基础设施与 `CMKPARSER` 测试已落地；
+- M2.2–M2.5 的表达式、语句、声明、预算/压力/Fuzz 测试已落地；M2 完成，下一步进入 M3。

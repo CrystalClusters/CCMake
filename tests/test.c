@@ -19,7 +19,12 @@ static const test_suite g_suites[] = {
     { "PARSE", "CCM 内容解析", test_ccm_parse },
     { "VARS", "全局变量树", test_ccvar },
     { "CMK", "CMK 词法分析", test_cmk_lexer },
-    { "CMKAST", "CMK AST 模型", test_cmk_ast }
+    { "CMKAST", "CMK AST 模型", test_cmk_ast },
+    { "CMKPARSER", "CMK Parser 基础设施", test_cmk_parser_base },
+    { "CMKEXPR", "CMK 表达式解析", test_cmk_parser_expr },
+    { "CMKSTMT", "CMK 语句解析", test_cmk_parser_stmt },
+    { "CMKDECL", "CMK 声明解析", test_cmk_parser_decl },
+    { "CMKSTRESS", "CMK Parser 压力测试", test_cmk_parser_stress }
 };
 
 #define SUITE_COUNT ((CCUINT32)(sizeof(g_suites) / sizeof(g_suites[0])))

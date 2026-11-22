@@ -338,11 +338,16 @@ M1 已落地：
 
 `CMK-027` 是确定性的随机字节输入测试，固定种子、固定轮数，用于保证 Lexer 在各种字节组合下不崩溃、不越界；后续可以在同一入口接 libFuzzer 做长时间覆盖引导测试。
 
-M2.0 的 AST 数据模型与预算默认值已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`CMKAST` 测试套件）；Parser 尚未开始。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
+M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶层声明和完整模块解析均已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`cmk_parser*.c/h`）。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
 
 | 套件 | 用例 | 覆盖 |
 |---|---|---|
 | `CMKAST` | `AST-001` 至 `AST-009` | 根节点与生命周期、文件/字符串复制、节点与字符串越界、父/子/兄弟链接、挂接规则、visitor、校验失败路径、函数/target/导入节点布局、类型分类、预算默认值 |
+| `CMKPARSER` | `PARSER-001` 至 `PARSER-011` | 空模块事务发布、注释 EOF 位置、未支持顶层 Token、Lexer 诊断复制、初始化参数、Token/深度/AST 节点/声明预算、单 Token 前瞻、`expect` 错误 |
+| `CMKEXPR` | `EXPR-001` 至 `EXPR-008` | 字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界、一元与丢弃符、赋值不是表达式 |
+| `CMKSTMT` | `STMT-001` 至 `STMT-007` | 变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误 |
+| `CMKDECL` | `DECL-001` 至 `DECL-006` | include/import、变量/函数、target 字段、顶层 if、完整模块、声明错误 |
+| `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式深度、各类预算、深嵌套块、大量声明、失败后复用、随机字节输入 |
 
 ### 8.1 Lexer 输入契约
 
