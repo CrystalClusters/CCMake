@@ -1,5 +1,5 @@
 /*
- * @Description: CMK Parser 压力与集成测试：深嵌套、预算、随机输入与失败后复用。
+ * @Description: CMK Parser 压力与集成测试：深嵌套、预算、确定性随机输入与失败后复用。
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -57,6 +57,48 @@ void test_cmk_parser_stress(void)
             "默认预算解析嵌套表达式"
         );
         cmk_test_parse_end(&ctx);
+
+        // 类型递归也必须消耗语法深度预算
+        cmk_limits_init(&limits);
+        limits.max_syntax_depth = 4;
+        CC_CHECK(
+            cmk_test_parse_begin(
+                &ctx, "list<list<int>> x = {};", &limits
+            ),
+            "类型深度恰好达到限制"
+        );
+        if (ctx.ast)
+        {
+            const char *reason = NULL;
+            CC_CHECK(cmk_ast_validate(ctx.ast, &reason), "类型深度 AST 校验");
+        }
+        cmk_test_parse_end(&ctx);
+
+        check_limited_error(
+            "list<list<list<int>>> x = {};",
+            &limits, "语法嵌套深度超过限制"
+        );
+
+        char deep_type[512];
+        size_t pos = 0;
+        for (CCUINT32 i = 0; i < 32; i++)
+        {
+            memcpy(deep_type + pos, "list<", 5);
+            pos += 5;
+        }
+        memcpy(deep_type + pos, "int", 3);
+        pos += 3;
+        for (CCUINT32 i = 0; i < 32; i++)
+            deep_type[pos++] = '>';
+        memcpy(deep_type + pos, " x = {};", 8);
+        pos += 8;
+        deep_type[pos] = '\0';
+
+        cmk_limits_init(&limits);
+        limits.max_syntax_depth = 8;
+        check_limited_error(
+            deep_type, &limits, "语法嵌套深度超过限制"
+        );
     }
     CC_CASE_END();
 
@@ -212,7 +254,7 @@ void test_cmk_parser_stress(void)
             CMKLexer lexer;
             CMKParser parser;
             CMKAST *ast = NULL;
-            if (!cmk_lexer_init(&lexer, "fuzz.cmk", buffer, len))
+            if (!cmk_lexer_init(&lexer, "random.cmk", buffer, len))
             {
                 cmk_lexer_clear(&lexer);
                 bad_cases++;

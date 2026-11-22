@@ -272,7 +272,12 @@ typedef struct cmk_ast_node {
         } member;
 
         struct {
+            CCBOOL is_top_level;
+        } block;
+
+        struct {
             CCBOOL has_else;
+            CCBOOL is_top_level;
         } if_stmt;
 
         struct {
@@ -321,9 +326,9 @@ typedef struct cmk_ast {
 
 | 节点 | 子节点 | 载荷 | 说明 |
 |---|---|---|---|
-| `CMK_AST_BLOCK` | 块项列表（变量声明或语句） | 无 | 函数体、普通块、if/while/for 分支、顶层 if 分支块 |
+| `CMK_AST_BLOCK` | 块项列表（变量声明或普通语句；顶层分支块为目标声明） | `is_top_level` | 函数体、普通块、if/while/for 分支、顶层 if 分支块 |
 | `CMK_AST_EXPR_STMT` | `[0]` 表达式 | 无 | 非赋值表达式语句 |
-| `CMK_AST_IF` | `[0]` 条件，`[1]` then，`[2]` else（可选） | `has_else` | 顶层 if 与普通 if 共用节点；Parser 入口不同 |
+| `CMK_AST_IF` | `[0]` 条件，`[1]` then，`[2]` else（可选） | `has_else`、`is_top_level` | 顶层 if 与普通 if 共用节点；由 `is_top_level` 区分结构约束 |
 | `CMK_AST_WHILE` | `[0]` 条件，`[1]` 循环体 | 无 | `while (expr) statement` |
 | `CMK_AST_FOR_IN` | `[0]` 元素类型，`[1]` 可迭代表达式，`[2]` 循环体 | `name` | 循环变量类型与名字 |
 | `CMK_AST_RETURN` | `[0]` 返回值（可选） | `has_value` | `return;` 无子节点 |
@@ -423,9 +428,11 @@ CCBOOL cmk_ast_visit(
    - `VAR_DECL[0]`、`PARAM[0]`、`TARGET_FIELD[0]`、`FOR_IN[0]` 必须是 `TYPE`；
    - `FUNC_DECL[0]` 是返回类型 `TYPE`，最后一个子节点是 `BLOCK`，中间是 `PARAM`；
    - `ASSIGN[0]` 是 `IDENT` 或 `DISCARD`；`ASSIGN` 只能作为语句节点，不能作为表达式子节点；
-   - `IF` 的条件是表达式，分支是语句/顶层 target；
-   - `MODULE` 只允许顶层声明、导入、包含与顶层 if；
-   - `BLOCK` 允许语句与局部变量声明；顶层 if 分支块还允许 `TARGET_DECL` / `IF`，上下文由 Parser 入口保证，校验不重复判断；
+   - `IF` 的条件是表达式；`is_top_level == CCFALSE` 时分支只能是普通语句，`is_top_level == CCTRUE` 时分支只能是 `TARGET_DECL`、顶层 `IF` 或顶层 `BLOCK`；
+   - `WHILE` / `FOR_IN` 的循环体只能是普通语句，不能是 target 或顶层结构；
+   - `MODULE` 只允许顶层声明、导入、包含与顶层 if；出现在 module 的 `IF` 必须带 `is_top_level == CCTRUE`；
+   - 普通 `BLOCK` 只允许块项中的变量声明与普通语句，拒绝 `TARGET_DECL` 和顶层 `IF` / 顶层 `BLOCK`；
+   - 顶层 `BLOCK` 只允许 `TARGET_DECL` 与顶层 `IF`；
 6. 类型节点 `list` 有且只有一个元素类型；标量/void 没有子节点；
 7. 字符串引用非 NIL 且有效；`literal` 的字符串只在 `CMK_LITERAL_STRING` 时使用；
 8. 节点 payload 与 kind 匹配。
@@ -697,7 +704,7 @@ f()()                // 语法错误：第二个 () 没有语法入口
 
 - 顶层 `if` 使用 `top_if` 语法，分支只允许 `target_decl` 或嵌套 `top_if`；
 - 函数/块内的 `if` 使用普通 `if_statement`，分支是任意语句；
-- 顶层 `if` 的 AST 仍是 `CMK_AST_IF`，但 Parser 入口保证分支节点类型；
+- 顶层 `if` 的 AST 仍是 `CMK_AST_IF`，由 `is_top_level == CCTRUE` 标记；顶层分支的 `BLOCK` 同样标记 `is_top_level`，AST 校验据此拒绝普通上下文中的 target/顶层结构；
 - 顶层 `if` 条件中的函数调用只构建 AST，不在 Parser 阶段执行。
 
 允许的场景是“按 Configure 条件选择目标”：
@@ -910,8 +917,10 @@ Parser 只把字面量 Token 转成 AST 字面量值，不做表达式求值：
 | `true` / `false` | `CMK_LITERAL_BOOL` / `CCBOOL` | 直接写入 |
 
 - 浮点转换不依赖进程区域设置，沿用 `.ccm` 解析器的十进制累积方案；
-- 负号是 `CMK_AST_UNARY`，不并入整数字面量；
-- 正整数字面量范围是 `0..CCINT64_MAX`；`CCINT64_MIN` 不能通过“负号 + 正字面量”直接表示，这是 M2 的已知字面量边界，后续可在常量求值阶段特殊处理；
+- 负号通常是 `CMK_AST_UNARY`，不并入整数字面量；
+- 正整数字面量范围是 `0..CCINT64_MAX`；
+- `-9223372036854775808` 是唯一例外：Parser 在一元负号上下文中识别该幅值，直接构造值为 `CCINT64_MIN` 的 `CMK_AST_LITERAL`，不先转换为超范围正数，也不产生有符号溢出；
+- 其他绝对值超过 `CCINT64_MAX` 的负数字面量（如 `-9223372036854775809`）报“整数超出范围”；
 - 字面量转换失败属于语法层错误，Parser 报位置明确的诊断。
 
 ## 6. 资源预算 `CMKLimits`
@@ -943,7 +952,7 @@ void cmk_limits_init(CMKLimits *limits);
 |---|---:|---|---|
 | `max_tokens` | 0（不限制） | Parser 每次从 Lexer 取 Token 前 | `Token 数量超过限制` |
 | `max_ast_nodes` | 0（不限制） | Parser 创建 AST 节点前（含根节点） | `AST 节点数量超过限制` |
-| `max_syntax_depth` | 1024 | 进入 block/if/while/for/function/target 嵌套前 | `语法嵌套深度超过限制` |
+| `max_syntax_depth` | 1024 | 进入 block/if/while/for/function/target/type 嵌套前 | `语法嵌套深度超过限制` |
 | `max_expression_depth` | 512 | 进入表达式递归、括号、一元、列表字面量前 | `表达式嵌套深度超过限制` |
 | `max_function_params` | 0（不限制） | 函数参数追加前 | `函数参数数量超过限制` |
 | `max_list_elements` | 0（不限制） | 列表元素追加前 | `列表元素数量超过限制` |
@@ -991,7 +1000,7 @@ tests/cmk/
   test_cmk_parser_expr.c    表达式优先级、结合性、调用/索引/成员、列表
   test_cmk_parser_stmt.c    变量声明、赋值、块、if/while/for/return
   test_cmk_parser_decl.c    函数、target、导入/包含、顶层 if、完整模块
-  test_cmk_parser_stress.c  大型源码、深嵌套、限制、Fuzz
+  test_cmk_parser_stress.c  大型源码、深嵌套、限制、确定性随机输入
   cmk_ast_test_util.c/h     测试侧 S-expression 序列化与 AST 构造辅助
 ```
 
@@ -1006,13 +1015,13 @@ tests/cmk/
 | M2.2 | 表达式 Parser：literal、ident、config ref、list、call、index、member、unary、binary | 优先级/结合性矩阵全部通过；链式比较拒绝；赋值不进入表达式 |
 | M2.3 | 语句 Parser：变量声明、赋值、block、if/while/for-in/return/break/continue | 函数体内全部语句可解析；嵌套块与 else-if 正确 |
 | M2.4 | 顶层声明：函数、target、target 字段、`@import`、`@include`、顶层 if | 完整模块文件可解析；导入/包含只记录不加载 |
-| M2.5 | 集成与压力测试：文档示例、深嵌套、限制、失败回滚、Fuzz | 失败路径不发布 AST、无泄漏；Debug/Release 全通过 |
+| M2.5 | 集成与压力测试：文档示例、深嵌套、限制、失败回滚、确定性随机输入 | 失败路径不发布 AST、无泄漏；Debug/Release 全通过 |
 
 每个子阶段先写测试，再实现功能；不得跨阶段合并。M2.0 的本文档是编码前置条件。
 
-M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（9 个用例）已落地。
+M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（10 个用例）已落地。
 M2.1 状态：已完成。`cmk_parser.h`、`cmk_parser_internal.h`、`cmk_parser.c` 与 `CMKPARSER` 套件（11 个用例）已落地。
-M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/Fuzz 测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。下一步进入 M3。
+M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/确定性随机输入测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。下一步进入 M3。
 
 ## 9. 测试计划
 
@@ -1020,12 +1029,12 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 
 | 套件 | 用例编号 | 内容 |
 |---|---|---|
-| `CMKAST` | `AST-001` 至 `AST-009` | AST 模型、所有权、校验、visitor |
+| `CMKAST` | `AST-001` 至 `AST-010` | AST 模型、所有权、校验、visitor、顶层上下文约束 |
 | `CMKPARSER` | `PARSER-001` 至 `PARSER-011` | 基础设施、诊断、预算、Token 缓冲 |
-| `CMKEXPR` | `EXPR-001` 至 `EXPR-008` | 表达式、优先级、调用/索引/成员、配置引用 |
+| `CMKEXPR` | `EXPR-001` 至 `EXPR-009` | 表达式、优先级、调用/索引/成员、配置引用、INT64 边界、复杂组合 |
 | `CMKSTMT` | `STMT-001` 至 `STMT-007` | 语句、控制流、悬空 else、赋值 |
 | `CMKDECL` | `DECL-001` 至 `DECL-006` | 导入/包含、函数、target、顶层 if、完整模块 |
-| `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 深度、预算、大量声明、失败复用、Fuzz |
+| `CMKSTRESS` | `STRESS-001` 至 `STRESS-006` | 语法/表达式/类型深度、预算、大量声明、失败复用、确定性随机输入 |
 
 现有 `CMK` 词法套件保持不变。`tests/test.c` 增加 `CMKAST`、`CMKPARSER`、`CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件入口。
 
@@ -1038,22 +1047,26 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 - `cmk_ast_append_child` 拒绝重复挂接、拒绝根节点作为子节点、拒绝 `parent == child`、拒绝形成祖先环、拒绝无效 ID；
 - 节点/字符串 ID 越界返回 NIL；
 - `cmk_ast_validate` 检测孤儿、环、子节点数量错误、类型节点子节点错误；
+- 顶层上下文：普通 `IF` / `BLOCK` 拒绝 target，顶层 `IF` / 顶层 `BLOCK` 接受 target；`MODULE` 中的 `IF` 必须为顶层结构；
 - AST 销毁后重复销毁不允许（调用方契约）。
 
 ### 9.3 Parser 测试
 
 - 基础：空文件、只有注释、EOF、非法首 Token、Parser init 失败、重复 parse、out_ast 置空；
 - 表达式：表驱动优先级/结合性；`a + b * c`、`a * b + c`、`a - b - c`、`!-a`、`-a * b`、`a == b == c`、`a < b < c` 拒绝、`a == b < c` 允许；
+- 复杂组合：`a.b[1].c + f(1, 2) * -3`、`a < b && c >= d || e == f` 的结构断言；
+- 整数边界：`INT64_MAX`、`-9223372036854775808` 作为 `INT64_MIN` 字面量、`9223372036854775808` 与 `-9223372036854775809` 拒绝；
 - 调用：`f()`、`f(a, b)`、`f()[0]`、`common.core`、`(f)()` 拒绝、`f()()` 拒绝；
 - 列表：`{}`、`{a}`、`{a, b,}`、嵌套列表；
 - 配置引用：`@{a}`、`@{a.b[0]}`、`@{a..b}` 拒绝、`@{a[1x]}` 拒绝；
 - 语句：变量声明、赋值、`_ = f()`、block、if/else if/else、while、for-in、return、break/continue；
 - 声明：函数（void/非 void、参数）、target 字段、`@import func`、`@import func *`、`@import target ... as`、`@include`、顶层 if；
 - 错误：`a = b = c` 拒绝、`if (x = 1)` 拒绝、target 内出现函数声明拒绝、顶层 if 分支出现非 target 声明拒绝；
+- 类型深度：`list<list<int>>` 恰好达到限制、`list<list<list<int>>>` 超过限制、32 层 `list<>` 极端输入不崩溃；
 - 诊断：Lexer 错误复制、Parser 错误位置、首错终止、Parser 不修改 Lexer 诊断；
 - 失败路径：任何失败 `*out_ast == NULL`，成功 AST 可 validate；
 - 预算：逐项把限制设小，检查固定错误消息；0 关闭限制；
-- Fuzz：固定种子随机字节 → Lexer → Parser；失败不崩溃、不发布 AST，成功 AST validate 并销毁。
+- 随机输入：固定种子随机字节 → Lexer → Parser；失败不崩溃、不发布 AST，成功 AST validate 并销毁。
 
 ### 9.4 测试侧序列化
 
@@ -1066,7 +1079,7 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 - M2 不把配置路径拆成 AST 段；M3 解析 `CMK_AST_CONFIG_REF.path`；如果 M3 需要共享段结构，再在不改变 `CONFIG_REF` 节点的前提下增加段表，M2 不提前引入；
 - M2 不加载 `@include`/`@import` 文件；M3/Program 负责模块加载、循环检测和符号表；
 - M2 不做常量折叠、类型检查、目标闭包；
-- `CCINT64_MIN` 以字面量直接书写时超出正字面量范围；如需支持，后续在常量求值阶段特殊处理；
+- `CCINT64_MIN` 已通过 `-9223372036854775808` 的特殊字面量路径支持，不再是已知限制；
 - Parser 预算默认值如果与项目实际规模冲突，在 M2.0 编码前调整本表；
 - AST 公开访问接口稳定；节点内部布局允许后续在保持 API 的前提下调整。
 
@@ -1077,4 +1090,4 @@ M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压�
 - [开发手册](开发手册.md)：挂接本文链接；
 - M2.0 的 `cmk_ast`、`cmk_limits` 与 `CMKAST` 测试已按本文落地；
 - M2.1 的 Parser 基础设施与 `CMKPARSER` 测试已落地；
-- M2.2–M2.5 的表达式、语句、声明、预算/压力/Fuzz 测试已落地；M2 完成，下一步进入 M3。
+- M2.2–M2.5 的表达式、语句、声明、预算/压力/确定性随机输入测试已落地；M2 完成，下一步进入 M3。

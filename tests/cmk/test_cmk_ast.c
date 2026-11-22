@@ -663,9 +663,205 @@ void test_cmk_ast(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * AST-009 预算默认值
+     * AST-010 顶层上下文与普通块约束
      * ---------------------------------------------------------------- */
-    CC_CASE("AST-009", "预算默认值");
+    CC_CASE("AST-009", "顶层上下文与普通块约束");
+    {
+        // 顶层 if + target 直接分支合法
+        CMKAST *ast = cmk_ast_create("top-if.cmk");
+        CC_CHECK(ast != NULL, "创建顶层 if AST");
+        if (ast)
+        {
+            CMKASTStringId app = add_text(ast, "app");
+            CMKASTNodeId condition = add_node(ast, CMK_AST_LITERAL);
+            CMKASTNodeId target = add_node(ast, CMK_AST_TARGET_DECL);
+            CMKASTNodeId if_node = add_node(ast, CMK_AST_IF);
+            CMKASTNode *cond_node = cmk_ast_node_mut(ast, condition);
+            CMKASTNode *target_node = cmk_ast_node_mut(ast, target);
+            CMKASTNode *if_data = cmk_ast_node_mut(ast, if_node);
+            if (app != CMK_AST_STRING_NIL && cond_node &&
+                target_node && if_data)
+            {
+                cond_node->as.literal.kind = CMK_LITERAL_INT;
+                cond_node->as.literal.value.integer = 1;
+                target_node->as.target_decl.name = app;
+                if_data->as.if_stmt.has_else = CCFALSE;
+                if_data->as.if_stmt.is_top_level = CCTRUE;
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, condition),
+                    "顶层 if 条件"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, target),
+                    "顶层 if target 分支"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, ast->root, if_node),
+                    "挂接顶层 if"
+                );
+                expect_valid(ast);
+            }
+            cmk_ast_destroy(ast);
+        }
+
+        // 普通 if 的 target 分支非法
+        ast = cmk_ast_create("normal-if.cmk");
+        CC_CHECK(ast != NULL, "创建普通 if AST");
+        if (ast)
+        {
+            CMKASTStringId func_name = add_text(ast, "f");
+            CMKASTStringId app = add_text(ast, "app");
+            CMKASTNodeId func = add_node(ast, CMK_AST_FUNC_DECL);
+            CMKASTNodeId ret = add_node(ast, CMK_AST_TYPE);
+            CMKASTNodeId block = add_node(ast, CMK_AST_BLOCK);
+            CMKASTNodeId condition = add_node(ast, CMK_AST_LITERAL);
+            CMKASTNodeId target = add_node(ast, CMK_AST_TARGET_DECL);
+            CMKASTNodeId if_node = add_node(ast, CMK_AST_IF);
+            CMKASTNode *func_node = cmk_ast_node_mut(ast, func);
+            CMKASTNode *ret_node = cmk_ast_node_mut(ast, ret);
+            CMKASTNode *block_node = cmk_ast_node_mut(ast, block);
+            CMKASTNode *cond_node = cmk_ast_node_mut(ast, condition);
+            CMKASTNode *target_node = cmk_ast_node_mut(ast, target);
+            CMKASTNode *if_data = cmk_ast_node_mut(ast, if_node);
+            if (func_name != CMK_AST_STRING_NIL &&
+                app != CMK_AST_STRING_NIL &&
+                func_node && ret_node && block_node &&
+                cond_node && target_node && if_data)
+            {
+                func_node->as.func_decl.name = func_name;
+                func_node->as.func_decl.param_count = 0;
+                ret_node->as.type.kind = CMK_TYPE_VOID;
+                block_node->as.block.is_top_level = CCFALSE;
+                cond_node->as.literal.kind = CMK_LITERAL_INT;
+                cond_node->as.literal.value.integer = 1;
+                target_node->as.target_decl.name = app;
+                if_data->as.if_stmt.has_else = CCFALSE;
+                if_data->as.if_stmt.is_top_level = CCFALSE;
+
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, condition),
+                    "普通 if 条件"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, target),
+                    "普通 if target 分支"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, block, if_node),
+                    "普通块挂接 if"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, func, ret),
+                    "函数返回类型"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, func, block),
+                    "函数体"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, ast->root, func),
+                    "挂接函数"
+                );
+                expect_invalid(ast, "普通 if 分支类型错误");
+            }
+            cmk_ast_destroy(ast);
+        }
+
+        // 普通 block 的 target 子节点非法
+        ast = cmk_ast_create("normal-block.cmk");
+        CC_CHECK(ast != NULL, "创建普通 block AST");
+        if (ast)
+        {
+            CMKASTStringId func_name = add_text(ast, "f");
+            CMKASTStringId app = add_text(ast, "app");
+            CMKASTNodeId func = add_node(ast, CMK_AST_FUNC_DECL);
+            CMKASTNodeId ret = add_node(ast, CMK_AST_TYPE);
+            CMKASTNodeId block = add_node(ast, CMK_AST_BLOCK);
+            CMKASTNodeId target = add_node(ast, CMK_AST_TARGET_DECL);
+            CMKASTNode *func_node = cmk_ast_node_mut(ast, func);
+            CMKASTNode *ret_node = cmk_ast_node_mut(ast, ret);
+            CMKASTNode *block_node = cmk_ast_node_mut(ast, block);
+            CMKASTNode *target_node = cmk_ast_node_mut(ast, target);
+            if (func_name != CMK_AST_STRING_NIL &&
+                app != CMK_AST_STRING_NIL &&
+                func_node && ret_node && block_node && target_node)
+            {
+                func_node->as.func_decl.name = func_name;
+                func_node->as.func_decl.param_count = 0;
+                ret_node->as.type.kind = CMK_TYPE_VOID;
+                block_node->as.block.is_top_level = CCFALSE;
+                target_node->as.target_decl.name = app;
+                CC_CHECK(
+                    cmk_ast_append_child(ast, block, target),
+                    "普通块挂接 target"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, func, ret),
+                    "函数返回类型"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, func, block),
+                    "函数体"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, ast->root, func),
+                    "挂接函数"
+                );
+                expect_invalid(ast, "普通 block 子节点类型非法");
+            }
+            cmk_ast_destroy(ast);
+        }
+
+        // 顶层 if 的顶层 block + target 分支合法
+        ast = cmk_ast_create("top-block.cmk");
+        CC_CHECK(ast != NULL, "创建顶层 block AST");
+        if (ast)
+        {
+            CMKASTStringId app = add_text(ast, "app");
+            CMKASTNodeId condition = add_node(ast, CMK_AST_LITERAL);
+            CMKASTNodeId target = add_node(ast, CMK_AST_TARGET_DECL);
+            CMKASTNodeId block = add_node(ast, CMK_AST_BLOCK);
+            CMKASTNodeId if_node = add_node(ast, CMK_AST_IF);
+            CMKASTNode *cond_node = cmk_ast_node_mut(ast, condition);
+            CMKASTNode *target_node = cmk_ast_node_mut(ast, target);
+            CMKASTNode *block_node = cmk_ast_node_mut(ast, block);
+            CMKASTNode *if_data = cmk_ast_node_mut(ast, if_node);
+            if (app != CMK_AST_STRING_NIL && cond_node &&
+                target_node && block_node && if_data)
+            {
+                cond_node->as.literal.kind = CMK_LITERAL_INT;
+                cond_node->as.literal.value.integer = 1;
+                target_node->as.target_decl.name = app;
+                block_node->as.block.is_top_level = CCTRUE;
+                if_data->as.if_stmt.has_else = CCFALSE;
+                if_data->as.if_stmt.is_top_level = CCTRUE;
+                CC_CHECK(
+                    cmk_ast_append_child(ast, block, target),
+                    "顶层块挂接 target"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, condition),
+                    "顶层 if 条件"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, if_node, block),
+                    "顶层 if 块分支"
+                );
+                CC_CHECK(
+                    cmk_ast_append_child(ast, ast->root, if_node),
+                    "挂接顶层 if"
+                );
+                expect_valid(ast);
+            }
+            cmk_ast_destroy(ast);
+        }
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * AST-010 预算默认值
+     * ---------------------------------------------------------------- */
+    CC_CASE("AST-010", "预算默认值");
     {
         CMKLimits limits;
         memset(&limits, 0xAA, sizeof(limits));

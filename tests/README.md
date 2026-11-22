@@ -18,7 +18,7 @@ tests/
   cmk/test_cmk_parser_expr.c CMK 表达式解析用例
   cmk/test_cmk_parser_stmt.c CMK 语句解析用例
   cmk/test_cmk_parser_decl.c CMK 声明解析用例
-  cmk/test_cmk_parser_stress.c CMK Parser 压力与 Fuzz 用例
+  cmk/test_cmk_parser_stress.c CMK Parser 压力与随机输入用例
   cmk/cmk_parser_test_util.c/.h Parser 测试辅助
   vars/test_ccvar.c       全局变量树用例
   data/ccm/               CCM 用例 fixture（不参与测试程序编译）
@@ -74,12 +74,12 @@ bash test.sh CMKSTRESS
 - CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键，以及值深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用；
 - 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用；
 - CMK 词法：token 序列、位置与 `offset`/`width` 边界、关键字/运算符、注释与 EOF、字符串转义与解码缓冲生命周期、空字符串、数字与指数错误位置、`@include`/`@import` 与 `@{...}` 配置引用、指令名称边界、NUL/CRLF、源码缓冲区所有权与尺寸边界、非法初始化参数、行号/列号表示上限、确定性随机字节输入健壮性；
-- CMK AST：根节点与生命周期、文件路径/字符串复制、节点与字符串 ID 越界、父子/兄弟链接、重复挂接与祖先环拒绝、visitor 先序遍历与中断、post-parse 校验的孤儿/环/子节点类型/字符串引用/类型节点错误、函数/target/导入节点布局、类型分类，以及 `CMKLimits` 默认值；
+- CMK AST：根节点与生命周期、文件路径/字符串复制、节点与字符串 ID 越界、父子/兄弟链接、重复挂接与祖先环拒绝、visitor 先序遍历与中断、post-parse 校验的孤儿/环/子节点类型/字符串引用/类型节点错误、函数/target/导入节点布局、类型分类、顶层上下文约束，以及 `CMKLimits` 默认值；
 - CMK Parser 基础设施：空模块解析与事务发布、注释后的 EOF 位置、未支持顶层 Token、Lexer 诊断复制、初始化参数、Token/深度/AST 节点/声明预算、单 Token 前瞻、`expect` 错误、Parser 清理；
-- CMK 表达式：字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界、一元与丢弃符、赋值语句化；
+- CMK 表达式：字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界与 INT64_MIN、复杂表达式结构、一元与丢弃符、赋值语句化；
 - CMK 语句：变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误；
 - CMK 声明：include/import、变量/函数、target 字段、顶层 if、完整模块与声明错误；
-- CMK Parser 压力：语法/表达式深度、各类预算、深嵌套块、大量声明、失败后复用、确定性随机字节输入。
+- CMK Parser 压力：语法/表达式/类型深度、各类预算、深嵌套块、大量声明、失败后复用、确定性随机字节输入。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
 

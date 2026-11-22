@@ -418,6 +418,16 @@ void test_cmk_parser_expr(void)
         );
         cmk_test_parse_end(&ctx);
 
+        expr = parse_expression(&ctx, "-9223372036854775808");
+        node = cmk_test_node(&ctx, expr);
+        CC_CHECK(
+            node && node->as.literal.kind == CMK_LITERAL_INT &&
+            node->as.literal.value.integer ==
+                -((CCINT64)0x7FFFFFFFFFFFFFFF) - 1,
+            "INT64 最小值"
+        );
+        cmk_test_parse_end(&ctx);
+
         expr = parse_expression(&ctx, ".5");
         node = cmk_test_node(&ctx, expr);
         CC_CHECK(
@@ -436,6 +446,7 @@ void test_cmk_parser_expr(void)
         cmk_test_parse_end(&ctx);
 
         check_expr_error("9223372036854775808;", "整数超出范围");
+        check_expr_error("-9223372036854775809;", "整数超出范围");
         check_expr_error("1e309;", "浮点数超出范围");
         check_expr_error("1e-400;", "浮点数下溢");
     }
@@ -469,6 +480,72 @@ void test_cmk_parser_expr(void)
         check_func_error("if (x = 1) {}", "右圆括号");
         check_func_error("f(x = 1);", "右圆括号");
         check_func_error("a = b = 1;", "分号");
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * EXPR-009 复杂表达式结构
+     * ---------------------------------------------------------------- */
+    CC_CASE("EXPR-009", "复杂表达式结构");
+    {
+        CMKTestParse ctx;
+        CMKASTNodeId expr = parse_expression(
+            &ctx, "a.b[1].c + f(1, 2) * -3"
+        );
+        CC_CHECK(node_binary_is(&ctx, expr, CMK_BINARY_ADD), "外层加法");
+
+        CMKASTNodeId left = cmk_test_child(&ctx, expr, 0);
+        CC_CHECK(node_kind_is(&ctx, left, CMK_AST_MEMBER), "左侧成员链");
+        CMKASTNodeId index = cmk_test_child(&ctx, left, 0);
+        CC_CHECK(node_kind_is(&ctx, index, CMK_AST_INDEX), "成员链中的索引");
+        CMKASTNodeId member_b = cmk_test_child(&ctx, index, 0);
+        CC_CHECK(
+            node_kind_is(&ctx, member_b, CMK_AST_MEMBER),
+            "索引基成员"
+        );
+        CC_CHECK(
+            node_kind_is(&ctx, cmk_test_child(&ctx, member_b, 0), CMK_AST_IDENT),
+            "成员链根标识符"
+        );
+        CC_CHECK(
+            node_kind_is(&ctx, cmk_test_child(&ctx, index, 1), CMK_AST_LITERAL),
+            "索引字面量"
+        );
+
+        CMKASTNodeId right = cmk_test_child(&ctx, expr, 1);
+        CC_CHECK(node_binary_is(&ctx, right, CMK_BINARY_MUL), "右侧乘法");
+        CMKASTNodeId call = cmk_test_child(&ctx, right, 0);
+        CC_CHECK(node_kind_is(&ctx, call, CMK_AST_CALL), "乘法左调用");
+        CC_CHECK_EQ_I64(
+            "调用实参数", 2, (CCINT64)cmk_test_child_count(&ctx, call)
+        );
+        CMKASTNodeId neg = cmk_test_child(&ctx, right, 1);
+        CC_CHECK(node_unary_is(&ctx, neg, CMK_UNARY_NEG), "乘法右一元负号");
+        cmk_test_parse_end(&ctx);
+
+        expr = parse_expression(&ctx, "a < b && c >= d || e == f");
+        CC_CHECK(node_binary_is(&ctx, expr, CMK_BINARY_OR), "外层逻辑或");
+        CMKASTNodeId and_node = cmk_test_child(&ctx, expr, 0);
+        CC_CHECK(node_binary_is(&ctx, and_node, CMK_BINARY_AND), "逻辑与");
+        CC_CHECK(
+            node_binary_is(
+                &ctx, cmk_test_child(&ctx, and_node, 0), CMK_BINARY_LT
+            ),
+            "逻辑与左比较"
+        );
+        CC_CHECK(
+            node_binary_is(
+                &ctx, cmk_test_child(&ctx, and_node, 1), CMK_BINARY_GE
+            ),
+            "逻辑与右比较"
+        );
+        CC_CHECK(
+            node_binary_is(
+                &ctx, cmk_test_child(&ctx, expr, 1), CMK_BINARY_EQ
+            ),
+            "逻辑或右相等"
+        );
+        cmk_test_parse_end(&ctx);
     }
     CC_CASE_END();
 }

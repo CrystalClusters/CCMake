@@ -206,6 +206,7 @@ static CMKASTNodeId parser_parse_if(CMKParser *parser)
         if (!if_node)
             goto Failed;
         if_node->as.if_stmt.has_else = has_else;
+        if_node->as.if_stmt.is_top_level = CCFALSE;
         if (!parser_append_child(parser, node, condition) ||
             !parser_append_child(parser, node, then_branch) ||
             (has_else && !parser_append_child(parser, node, else_branch)))
@@ -340,6 +341,10 @@ CMKASTNodeId parser_parse_block(CMKParser *parser)
     CMKASTNodeId block = parser_new_node(parser, CMK_AST_BLOCK, NULL);
     if (block == CMK_AST_NODE_NIL)
         goto Failed;
+    CMKASTNode *block_node = cmk_ast_node_mut(parser->ast, block);
+    if (!block_node)
+        goto Failed;
+    block_node->as.block.is_top_level = CCFALSE;
 
     while (parser->current.type != CMK_TOK_RBRACE)
     {

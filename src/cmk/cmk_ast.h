@@ -225,7 +225,12 @@ typedef struct cmk_ast_node {
         } member;
 
         struct {
+            CCBOOL is_top_level;
+        } block;
+
+        struct {
             CCBOOL has_else;
+            CCBOOL is_top_level;
         } if_stmt;
 
         struct {

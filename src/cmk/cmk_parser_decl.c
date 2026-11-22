@@ -19,6 +19,7 @@ static CMKASTNodeId parser_parse_import(CMKParser *parser);
 static CMKASTNodeId parser_parse_func_decl(CMKParser *parser);
 static CMKASTNodeId parser_parse_target_decl(CMKParser *parser);
 static CMKASTNodeId parser_parse_top_if(CMKParser *parser);
+static CMKASTNodeId parser_parse_type_inner(CMKParser *parser);
 
 /* ============================================================================
  * 类型
@@ -65,6 +66,18 @@ static CMKASTNodeId parser_make_scalar_type(
 }
 
 CMKASTNodeId parser_parse_type(CMKParser *parser)
+{
+    if (!parser || parser->failed)
+        return CMK_AST_NODE_NIL;
+    if (!parser_enter_syntax(parser))
+        return CMK_AST_NODE_NIL;
+
+    CMKASTNodeId type = parser_parse_type_inner(parser);
+    parser_leave_syntax(parser);
+    return type;
+}
+
+static CMKASTNodeId parser_parse_type_inner(CMKParser *parser)
 {
     if (!parser || parser->failed)
         return CMK_AST_NODE_NIL;
@@ -687,6 +700,7 @@ static CMKASTNodeId parser_parse_top_if(CMKParser *parser)
         if (!if_node)
             goto Failed;
         if_node->as.if_stmt.has_else = has_else;
+        if_node->as.if_stmt.is_top_level = CCTRUE;
         if (!parser_append_child(parser, node, condition) ||
             !parser_append_child(parser, node, then_branch) ||
             (has_else && !parser_append_child(parser, node, else_branch)))
@@ -723,6 +737,10 @@ static CMKASTNodeId parser_parse_top_branch(CMKParser *parser)
         );
         if (block == CMK_AST_NODE_NIL)
             goto Failed;
+        CMKASTNode *block_node = cmk_ast_node_mut(parser->ast, block);
+        if (!block_node)
+            goto Failed;
+        block_node->as.block.is_top_level = CCTRUE;
 
         while (parser->current.type != CMK_TOK_RBRACE)
         {

@@ -76,13 +76,12 @@ static CCBOOL parser_config_path_ok(const char *text, CCUINT32 len)
  * 字面量转换
  * ========================================================================== */
 
-static CCBOOL parser_int_value(
-    CMKParser *parser, const CMKToken *token, CCINT64 *out
+static CCBOOL parser_int_magnitude(
+    CMKParser *parser, const CMKToken *token,
+    CCUINT64 limit, CCUINT64 *out
 )
 {
-    const CCUINT64 limit = (CCUINT64)0x7FFFFFFFFFFFFFFFu;
     CCUINT64 value = 0;
-
     for (CCUINT32 i = 0; i < token->len; i++)
     {
         char c = token->text[i];
@@ -98,6 +97,19 @@ static CCBOOL parser_int_value(
         value = value * 10 + digit;
     }
 
+    *out = value;
+    return CCTRUE;
+}
+
+static CCBOOL parser_int_value(
+    CMKParser *parser, const CMKToken *token, CCINT64 *out
+)
+{
+    CCUINT64 value = 0;
+    if (!parser_int_magnitude(
+            parser, token, (CCUINT64)0x7FFFFFFFFFFFFFFFu, &value
+        ))
+        return CCFALSE;
     *out = (CCINT64)value;
     return CCTRUE;
 }
@@ -679,6 +691,37 @@ static CMKASTNodeId parser_parse_unary(CMKParser *parser)
         : (type == CMK_TOK_MINUS) ? CMK_UNARY_NEG : CMK_UNARY_POS;
     if (!parser_advance(parser))
         return CMK_AST_NODE_NIL;
+
+    // -9223372036854775808 直接构造 INT64_MIN，避免正向字面量越界
+    if (op == CMK_UNARY_NEG && parser->current.type == CMK_TOK_INT)
+    {
+        CCUINT64 magnitude = 0;
+        if (!parser_int_magnitude(
+                parser, &parser->current,
+                (CCUINT64)0x8000000000000000u, &magnitude
+            ))
+            return CMK_AST_NODE_NIL;
+
+        if (magnitude == (CCUINT64)0x8000000000000000u)
+        {
+            CMKToken int_token = parser->current;
+            CMKSourceSpan span = parser_make_span(&start, &int_token);
+            CMKASTNodeId node = parser_new_node(
+                parser, CMK_AST_LITERAL, &span
+            );
+            if (node == CMK_AST_NODE_NIL)
+                return CMK_AST_NODE_NIL;
+            CMKASTNode *literal = cmk_ast_node_mut(parser->ast, node);
+            if (!literal)
+                return CMK_AST_NODE_NIL;
+            literal->as.literal.kind = CMK_LITERAL_INT;
+            literal->as.literal.value.integer =
+                -((CCINT64)0x7FFFFFFFFFFFFFFF) - 1;
+            if (!parser_advance(parser))
+                return CMK_AST_NODE_NIL;
+            return node;
+        }
+    }
 
     if (!parser_enter_expression(parser))
         return CMK_AST_NODE_NIL;

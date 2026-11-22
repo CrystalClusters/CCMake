@@ -230,12 +230,6 @@ CCBOOL cmk_ast_kind_is_declaration(CMKASTKind kind)
     }
 }
 
-static CCBOOL ast_is_block_item_kind(CMKASTKind kind)
-{
-    return (kind == CMK_AST_VAR_DECL || cmk_ast_kind_is_statement(kind))
-        ? CCTRUE : CCFALSE;
-}
-
 static CCBOOL ast_is_top_item_kind(CMKASTKind kind)
 {
     switch (kind)
@@ -253,10 +247,35 @@ static CCBOOL ast_is_top_item_kind(CMKASTKind kind)
     }
 }
 
-static CCBOOL ast_is_branch_kind(CMKASTKind kind)
+static CCBOOL ast_is_normal_statement(
+    const CMKAST *ast, CMKASTNodeId id
+)
 {
-    if (cmk_ast_kind_is_statement(kind) || kind == CMK_AST_TARGET_DECL)
+    const CMKASTNode *node = ast_node_at_const(ast, id);
+    if (!node || !cmk_ast_kind_is_statement(node->kind))
+        return CCFALSE;
+    if (node->kind == CMK_AST_IF)
+        return node->as.if_stmt.is_top_level == CCFALSE
+            ? CCTRUE : CCFALSE;
+    if (node->kind == CMK_AST_BLOCK)
+        return node->as.block.is_top_level == CCFALSE
+            ? CCTRUE : CCFALSE;
+    return CCTRUE;
+}
+
+static CCBOOL ast_is_top_branch(
+    const CMKAST *ast, CMKASTNodeId id
+)
+{
+    const CMKASTNode *node = ast_node_at_const(ast, id);
+    if (!node)
+        return CCFALSE;
+    if (node->kind == CMK_AST_TARGET_DECL)
         return CCTRUE;
+    if (node->kind == CMK_AST_IF)
+        return node->as.if_stmt.is_top_level;
+    if (node->kind == CMK_AST_BLOCK)
+        return node->as.block.is_top_level;
     return CCFALSE;
 }
 
@@ -577,13 +596,20 @@ static CCBOOL ast_child_is_expression(
         ? CCTRUE : CCFALSE;
 }
 
-static CCBOOL ast_child_is_branch(
+static CCBOOL ast_child_is_normal_branch(
     const CMKAST *ast, CMKASTNodeId id, CCUINT32 index
 )
 {
     CMKASTNodeId child = ast_nth_child(ast, id, index);
-    const CMKASTNode *node = ast_node_at_const(ast, child);
-    return (node && ast_is_branch_kind(node->kind)) ? CCTRUE : CCFALSE;
+    return ast_is_normal_statement(ast, child);
+}
+
+static CCBOOL ast_child_is_top_branch(
+    const CMKAST *ast, CMKASTNodeId id, CCUINT32 index
+)
+{
+    CMKASTNodeId child = ast_nth_child(ast, id, index);
+    return ast_is_top_branch(ast, child);
 }
 
 static CCBOOL ast_children_all_expression(
@@ -651,6 +677,9 @@ static CCBOOL ast_validate_node(
             const CMKASTNode *child_node = ast_node_at_const(ast, child);
             if (!child_node || !ast_is_top_item_kind(child_node->kind))
                 return ast_fail(reason, "module 子节点类型非法");
+            if (child_node->kind == CMK_AST_IF &&
+                !child_node->as.if_stmt.is_top_level)
+                return ast_fail(reason, "module 中的 if 必须是顶层条件");
             child = child_node->next_sibling;
         }
         break;
@@ -784,17 +813,32 @@ static CCBOOL ast_validate_node(
         break;
 
     case CMK_AST_BLOCK:
+    {
+        CCBOOL top_level = node->as.block.is_top_level;
         for (CCUINT32 i = 0; i < child_count; i++)
         {
             CMKASTNodeId child = ast_nth_child(ast, id, i);
             const CMKASTNode *child_node = ast_node_at_const(ast, child);
             if (!child_node)
                 return ast_fail(reason, "block 子节点无效");
-            if (!ast_is_block_item_kind(child_node->kind) &&
-                child_node->kind != CMK_AST_TARGET_DECL)
-                return ast_fail(reason, "block 子节点类型非法");
+
+            if (top_level)
+            {
+                if (child_node->kind == CMK_AST_TARGET_DECL)
+                    continue;
+                if (child_node->kind == CMK_AST_IF &&
+                    child_node->as.if_stmt.is_top_level)
+                    continue;
+                return ast_fail(reason, "顶层 block 子节点类型非法");
+            }
+
+            if (child_node->kind == CMK_AST_VAR_DECL)
+                continue;
+            if (!ast_is_normal_statement(ast, child))
+                return ast_fail(reason, "普通 block 子节点类型非法");
         }
         break;
+    }
 
     case CMK_AST_EXPR_STMT:
         if (child_count != 1 || !ast_child_is_expression(ast, id, 0))
@@ -802,6 +846,7 @@ static CCBOOL ast_validate_node(
         break;
 
     case CMK_AST_IF:
+    {
         if (node->as.if_stmt.has_else)
         {
             if (child_count != 3)
@@ -809,17 +854,31 @@ static CCBOOL ast_validate_node(
         }
         else if (child_count != 2)
             return ast_fail(reason, "if 子节点数量错误");
-        if (!ast_child_is_expression(ast, id, 0) ||
-            !ast_child_is_branch(ast, id, 1) ||
-            (node->as.if_stmt.has_else &&
-             !ast_child_is_branch(ast, id, 2)))
-            return ast_fail(reason, "if 子节点类型错误");
+
+        if (!ast_child_is_expression(ast, id, 0))
+            return ast_fail(reason, "if 条件类型错误");
+
+        if (node->as.if_stmt.is_top_level)
+        {
+            if (!ast_child_is_top_branch(ast, id, 1) ||
+                (node->as.if_stmt.has_else &&
+                 !ast_child_is_top_branch(ast, id, 2)))
+                return ast_fail(reason, "顶层 if 分支类型错误");
+        }
+        else
+        {
+            if (!ast_child_is_normal_branch(ast, id, 1) ||
+                (node->as.if_stmt.has_else &&
+                 !ast_child_is_normal_branch(ast, id, 2)))
+                return ast_fail(reason, "普通 if 分支类型错误");
+        }
         break;
+    }
 
     case CMK_AST_WHILE:
         if (child_count != 2 ||
             !ast_child_is_expression(ast, id, 0) ||
-            !ast_child_is_branch(ast, id, 1))
+            !ast_child_is_normal_branch(ast, id, 1))
             return ast_fail(reason, "while 节点错误");
         break;
 
@@ -827,7 +886,7 @@ static CCBOOL ast_validate_node(
         if (child_count != 3 ||
             !ast_child_is_kind(ast, id, 0, CMK_AST_TYPE) ||
             !ast_child_is_expression(ast, id, 1) ||
-            !ast_child_is_branch(ast, id, 2))
+            !ast_child_is_normal_branch(ast, id, 2))
             return ast_fail(reason, "for-in 节点错误");
         if (!ast_string_ok(ast, node->as.for_in.name))
             return ast_fail(reason, "for-in 变量名无效");

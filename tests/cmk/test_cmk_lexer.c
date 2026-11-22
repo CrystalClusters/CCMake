@@ -1063,7 +1063,7 @@ void test_cmk_lexer(void)
 
             CMKLexer lex;
             CMKToken tok;
-            if (!cmk_lexer_init(&lex, "fuzz.cmk", buffer, len))
+            if (!cmk_lexer_init(&lex, "random.cmk", buffer, len))
             {
                 init_failures++;
                 cmk_lexer_clear(&lex);
