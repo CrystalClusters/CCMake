@@ -29,6 +29,7 @@ if errorlevel 1 (
 set "SRCS=tests\test.c tests\test_harness.c"
 for /r tests\cmd %%s in (*.c) do set "SRCS=!SRCS! %%s"
 for /r tests\ccm %%s in (*.c) do set "SRCS=!SRCS! %%s"
+for /r tests\cmk %%s in (*.c) do set "SRCS=!SRCS! %%s"
 for /r tests\vars %%s in (*.c) do set "SRCS=!SRCS! %%s"
 if "!SRCS!"=="" (
     echo [错误] tests\ 下没有找到测试源文件。

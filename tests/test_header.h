@@ -15,5 +15,6 @@ void test_cmd(void);
 void test_ccm_locate(void);
 void test_ccm_parse(void);
 void test_ccvar(void);
+void test_cmk_lexer(void);
 
 #endif

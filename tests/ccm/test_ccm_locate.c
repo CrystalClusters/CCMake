@@ -5,7 +5,7 @@
  */
 
 #include "test_harness.h"
-#include "ccm_internal.h"
+#include "ccm/ccm_internal.h"
 
 #include <errno.h>
 #include <stdio.h>

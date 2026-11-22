@@ -46,11 +46,11 @@ parse_ccm
 
 | 文件 | 职责 |
 |---|---|
-| `src/ccm_internal.h` | 内部数据结构、状态枚举、接口声明 |
-| `src/ccm_path.c` | 路径规范化、目录提取、路径比较、宿主文件类型、进程工作目录 |
-| `src/ccm_scan.c` | `ccm_scan_includes`：从文件内容提取 include 指令 |
-| `src/ccm_locate.c` | `ccm_locate`：VFS 装载、注册表、DFS、错误诊断、资源清理 |
-| `src/ccm.c` | `parse_ccm` 编排与阶段一结果输出 |
+| `src/ccm/ccm_internal.h` | 内部数据结构、状态枚举、接口声明 |
+| `src/ccm/ccm_path.c` | 路径规范化、目录提取、路径比较、宿主文件类型、进程工作目录 |
+| `src/ccm/ccm_scan.c` | `ccm_scan_includes`：从文件内容提取 include 指令 |
+| `src/ccm/ccm_locate.c` | `ccm_locate`：VFS 装载、注册表、DFS、错误诊断、资源清理 |
+| `src/ccm/ccm.c` | `parse_ccm` 编排与阶段一结果输出 |
 
 ---
 

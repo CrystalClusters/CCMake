@@ -12,6 +12,7 @@ tests/
   cmd/test_cmd.c          命令行解析用例
   ccm/test_ccm_locate.c   CCM 文件检查与定位用例
   ccm/test_ccm_parse.c    CCM 内容解析用例
+  cmk/test_cmk_lexer.c    CMK 词法分析用例
   vars/test_ccvar.c       全局变量树用例
   data/ccm/               CCM 用例 fixture（不参与测试程序编译）
 ```
@@ -27,6 +28,7 @@ test.bat CMD
 test.bat CCM
 test.bat PARSE
 test.bat VARS
+test.bat CMK
 ```
 
 ```bash
@@ -36,6 +38,7 @@ bash test.sh CMD
 bash test.sh CCM
 bash test.sh PARSE
 bash test.sh VARS
+bash test.sh CMK
 ```
 
 `test.bat` / `test.sh` 只检查产物是否存在并运行，不负责编译。
@@ -50,7 +53,8 @@ bash test.sh VARS
 - `--list-targets` / `--dump-config` 的动作请求字段；
 - CCM 定位：单文件、链式/菱形/重复 include、循环、注释与字符串、非法指令、缺失目标、任意后缀、根错误、BOM/CRLF/NUL/UTF-16、`-C`、绝对路径、空格路径、Windows 大小写去重、路径规范化与资源清理；
 - CCM 解析：基本类型、嵌套对象、文件顺序、对象浅合并、`${ref}`、嵌套数组、数组对象、重复键、空容器、语法错误、`${find}`、内嵌 `${ref}`、注释、`-D` 覆盖与非法键，以及值深度边界、token/数组/对象预算、include 文件/边/深度预算、`${find}` 结果预算、浮点范围、引号内建函数、失败后复用；
-- 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用。
+- 全局变量树：路径写入、覆盖、对象合并、数组、子树删除、键名规则、大量同层键、清空复用；
+- CMK 词法：token 序列与位置、关键字/运算符、注释、字符串转义、数字、`@include`/`@import` 与 `@{...}` 配置引用、NUL/CRLF、EOF、诊断输出、源码缓冲区所有权。
 
 测试直接调用 `parse_cmd` / `ccm_locate` / `ccm_parse`，不经过 `main`；命令行用例不受 `.ccm` 解析影响。
 

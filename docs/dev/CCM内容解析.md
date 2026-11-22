@@ -8,13 +8,13 @@
 
 | 模块 | 职责 |
 |---|---|
-| `ccm_scan_util.c` | 共享字符串边界与 `${...}` 花括号配对扫描 |
-| `ccm_scan.c` | 第一阶段扫描 `@include`，提取路径字面量 |
-| `ccm_locate.c` | 文件注册表、include 闭包、环检测、后序 `order[]` |
-| `ccm_parse.c` | 第二阶段词法、语法解析、写全局变量树 |
-| `ccvar.c` | 全局变量树：路径、对象红黑树、数组、删除 |
-| `ccm_builtin.c` | `${ref}` / `${find}` 分派与序列化 |
-| `ccm_find.c` | `${find}` 的 VFS 目录遍历与通配符匹配 |
+| `src/ccm/ccm_scan_util.c` | 共享字符串边界与 `${...}` 花括号配对扫描 |
+| `src/ccm/ccm_scan.c` | 第一阶段扫描 `@include`，提取路径字面量 |
+| `src/ccm/ccm_locate.c` | 文件注册表、include 闭包、环检测、后序 `order[]` |
+| `src/ccm/ccm_parse.c` | 第二阶段词法、语法解析、写全局变量树 |
+| `src/ccvar.c` | 全局变量树：路径、对象红黑树、数组、删除 |
+| `src/ccm/ccm_builtin.c` | `${ref}` / `${find}` 分派与序列化 |
+| `src/ccm/ccm_find.c` | `${find}` 的 VFS 目录遍历与通配符匹配 |
 
 | 项 | 内容 |
 |---|---|
@@ -183,7 +183,7 @@ typedef struct cc_make_parser {
 
 ### 4.6 共享扫描基元
 
-`ccm_scan_util.c` 提供两个不依赖业务状态的边界函数：
+`src/ccm/ccm_scan_util.c` 提供两个不依赖业务状态的边界函数：
 
 | 函数 | 用途 |
 |---|---|
