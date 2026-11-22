@@ -13,6 +13,7 @@
 #include <ccalloc.h>
 #include <cc_dyn.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #ifdef CC_WINDOWS
@@ -36,6 +37,9 @@ struct cmk_scheduler {
     CCUINT32 executed;
     CCUINT32 failed;
     CCUINT32 jobs;
+    const CMKCacheOps *cache;
+    void *cache_user;
+    CCBOOL force;
 };
 
 #if 0
@@ -76,6 +80,7 @@ CMKScheduler *cmk_scheduler_create(
     );
     if (!scheduler)
         return NULL;
+    memset(scheduler, 0, sizeof(*scheduler));
     scheduler->plan = plan;
     scheduler->ops = ops;
     scheduler->user = user;
@@ -354,6 +359,22 @@ static CCBOOL cmk_scheduler_run_legacy(CMKScheduler *scheduler, CCBOOL keep_goin
                 continue;
             }
 
+            if (scheduler->cache && !scheduler->force &&
+                scheduler->cache->should_skip)
+            {
+                CCBOOL skip = CCFALSE;
+                if (scheduler->cache->should_skip(
+                        scheduler->cache_user, target, &skip
+                    ) && skip)
+                {
+                    cmk_plan_set_target_state(
+                        scheduler->plan, i, CMK_TARGET_SKIPPED
+                    );
+                    executed_any = CCTRUE;
+                    continue;
+                }
+            }
+
             cmk_plan_set_target_state(
                 scheduler->plan, i, CMK_TARGET_RUNNING
             );
@@ -368,6 +389,10 @@ static CCBOOL cmk_scheduler_run_legacy(CMKScheduler *scheduler, CCBOOL keep_goin
                 cmk_plan_set_target_state(
                     scheduler->plan, i, CMK_TARGET_SUCCESS
                 );
+                if (scheduler->cache && scheduler->cache->record)
+                    (void)scheduler->cache->record(
+                        scheduler->cache_user, target
+                    );
             }
             else
             {
@@ -380,6 +405,15 @@ static CCBOOL cmk_scheduler_run_legacy(CMKScheduler *scheduler, CCBOOL keep_goin
                     result.message ? result.message : "目标执行失败"
                 );
             }
+            if (result.output.len > 0)
+            {
+                fwrite(
+                    result.output.data, 1,
+                    result.output.len, stdout
+                );
+                fflush(stdout);
+            }
+            cmk_executor_result_clear(&result);
             executed_any = CCTRUE;
             break;
         }
@@ -455,6 +489,21 @@ static CCBOOL cmk_scheduler_run_serial(CMKScheduler *scheduler, CCBOOL keep_goin
             continue;
         }
 
+        if (scheduler->cache && !scheduler->force &&
+            scheduler->cache->should_skip)
+        {
+            CCBOOL skip = CCFALSE;
+            if (scheduler->cache->should_skip(
+                    scheduler->cache_user, target, &skip
+                ) && skip)
+            {
+                cmk_plan_set_target_state(
+                    scheduler->plan, id, CMK_TARGET_SKIPPED
+                );
+                continue;
+            }
+        }
+
         cmk_plan_set_target_state(
             scheduler->plan, id, CMK_TARGET_RUNNING
         );
@@ -469,6 +518,10 @@ static CCBOOL cmk_scheduler_run_serial(CMKScheduler *scheduler, CCBOOL keep_goin
             cmk_plan_set_target_state(
                 scheduler->plan, id, CMK_TARGET_SUCCESS
             );
+            if (scheduler->cache && scheduler->cache->record)
+                (void)scheduler->cache->record(
+                    scheduler->cache_user, target
+                );
         }
         else
         {
@@ -520,6 +573,22 @@ void cmk_scheduler_set_jobs(CMKScheduler *scheduler, CCUINT32 jobs)
 {
     if (scheduler)
         scheduler->jobs = jobs > 0 ? jobs : 1;
+}
+
+void cmk_scheduler_set_cache(
+    CMKScheduler *scheduler, const CMKCacheOps *ops, void *user
+)
+{
+    if (!scheduler)
+        return;
+    scheduler->cache = ops;
+    scheduler->cache_user = user;
+}
+
+void cmk_scheduler_set_force(CMKScheduler *scheduler, CCBOOL force)
+{
+    if (scheduler)
+        scheduler->force = force;
 }
 
 CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
@@ -607,6 +676,21 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
                 aggregates = CCTRUE;
                 continue;
             }
+            if (scheduler->cache && !scheduler->force &&
+                scheduler->cache->should_skip)
+            {
+                CCBOOL skip = CCFALSE;
+                if (scheduler->cache->should_skip(
+                        scheduler->cache_user, target, &skip
+                    ) && skip)
+                {
+                    cmk_plan_set_target_state(
+                        scheduler->plan, i, CMK_TARGET_SKIPPED
+                    );
+                    aggregates = CCTRUE;
+                    continue;
+                }
+            }
             cmk_plan_set_target_state(
                 scheduler->plan, i, CMK_TARGET_RUNNING
             );
@@ -672,9 +756,15 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
             CMKTargetId id = batch[i].id;
             scheduler->executed++;
             if (batch[i].ok && batch[i].result.success)
+            {
                 cmk_plan_set_target_state(
                     scheduler->plan, id, CMK_TARGET_SUCCESS
                 );
+                if (scheduler->cache && scheduler->cache->record)
+                    (void)scheduler->cache->record(
+                        scheduler->cache_user, batch[i].target
+                    );
+            }
             else
             {
                 scheduler->failed++;
@@ -689,6 +779,15 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
                 if (!keep_going)
                     triggered = CCTRUE;
             }
+            if (batch[i].result.output.len > 0)
+            {
+                fwrite(
+                    batch[i].result.output.data, 1,
+                    batch[i].result.output.len, stdout
+                );
+            }
+            cmk_executor_result_clear(&batch[i].result);
+            fflush(stdout);
         }
     }
 

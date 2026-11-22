@@ -302,6 +302,8 @@ CCBOOL cmk_cache_should_skip(
     CMKString *outputs = (CMKString *)target->outputs.array;
     CCUINT32 output_count = target->outputs.size /
         (CCUINT32)sizeof(CMKString);
+    if (output_count == 0)
+        return CCTRUE;
     for (CCUINT32 i = 0; i < output_count; i++)
     {
         if (!cmk_cache_file_exists(outputs[i].data))

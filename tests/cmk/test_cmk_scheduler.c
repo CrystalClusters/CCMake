@@ -45,6 +45,34 @@ static void fake_cancel(void *user, CMKTargetId target)
     (void)target;
 }
 
+typedef struct fake_cache {
+    const char *skip_name;
+    CCUINT32 records;
+} FakeCache;
+
+static CCBOOL fake_cache_should_skip(
+    void *user, const CMKPlanTarget *target, CCBOOL *skip
+)
+{
+    FakeCache *cache = (FakeCache *)user;
+    *skip = (cache->skip_name &&
+             target->key.name.len == strlen(cache->skip_name) &&
+             memcmp(target->key.name.data, cache->skip_name,
+                    target->key.name.len) == 0)
+        ? CCTRUE : CCFALSE;
+    return CCTRUE;
+}
+
+static CCBOOL fake_cache_record(
+    void *user, const CMKPlanTarget *target
+)
+{
+    (void)target;
+    FakeCache *cache = (FakeCache *)user;
+    cache->records++;
+    return CCTRUE;
+}
+
 static CCBOOL sched_build_plan(
     CMKPlan **out, CMKTargetInfo *info_a,
     CMKTargetInfo *info_b, CMKTargetInfo *info_c
@@ -256,10 +284,58 @@ static void sched_case_parallel(void)
     CC_CASE_END();
 }
 
+static void sched_case_cache(void)
+{
+    CC_CASE("SCH-005", "缓存 SKIPPED");
+    CMKPlan *plan = NULL;
+    CMKTargetInfo a, b, c;
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&c, 0, sizeof(c));
+    CC_CHECK(sched_build_plan(&plan, &a, &b, &c), "构建计划");
+    FakeExecutor fake;
+    memset(&fake, 0, sizeof(fake));
+    FakeCache cache;
+    memset(&cache, 0, sizeof(cache));
+    cache.skip_name = "B";
+    CMKExecutorOps ops;
+    ops.run = fake_run;
+    ops.cancel = fake_cancel;
+    CMKCacheOps cache_ops;
+    cache_ops.should_skip = fake_cache_should_skip;
+    cache_ops.record = fake_cache_record;
+    CMKDiagnostic diagnostic;
+    cmk_diagnostic_init(&diagnostic);
+    CMKScheduler *sched = cmk_scheduler_create(
+        plan, &ops, &fake, &diagnostic
+    );
+    CC_CHECK(sched != NULL, "Scheduler 创建");
+    cmk_scheduler_set_cache(sched, &cache_ops, &cache);
+    CC_CHECK(cmk_scheduler_run(sched, CCFALSE), "缓存调度成功");
+    CC_CHECK(
+        cmk_scheduler_target_state(sched, 1) == CMK_TARGET_SKIPPED,
+        "B 缓存跳过"
+    );
+    CC_CHECK_EQ_I64("执行次数", 1, (CCINT64)fake.count);
+    CC_CHECK(
+        cmk_scheduler_target_state(sched, 2) == CMK_TARGET_SUCCESS,
+        "C 执行成功"
+    );
+    CC_CHECK_EQ_I64("缓存记录次数", 1, (CCINT64)cache.records);
+    cmk_scheduler_destroy(sched);
+    cmk_plan_destroy(plan);
+    cmk_diagnostic_clear(&diagnostic);
+    cmk_string_clear(&a.name);
+    cmk_string_clear(&b.name);
+    cmk_string_clear(&c.name);
+    CC_CASE_END();
+}
+
 void test_cmk_scheduler(void)
 {
     sched_case_success();
     sched_case_failure(CCFALSE);
     sched_case_failure(CCTRUE);
     sched_case_parallel();
+    sched_case_cache();
 }

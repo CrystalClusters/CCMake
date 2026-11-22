@@ -18,6 +18,7 @@ typedef struct cmk_executor_result {
     CCBOOL success;
     CCINT32 exit_code;
     const char *message;
+    CMKString output;
 } CMKExecutorResult;
 
 /*
@@ -45,5 +46,6 @@ CMKExecutor *cmk_executor_create(
 );
 void cmk_executor_destroy(CMKExecutor *executor);
 const CMKExecutorOps *cmk_executor_ops(void);
+void cmk_executor_result_clear(CMKExecutorResult *result);
 
 #endif

@@ -22,6 +22,7 @@ struct cmk_process {
     void *process_handle;
     void *read_handle;
     void *write_handle;
+    void *job_handle;
 #else
     int pid;
     int read_fd;
@@ -165,9 +166,22 @@ CCBOOL cmk_process_start(CMKProcess *process)
     startup.hStdError = write_handle;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
+    HANDLE job = CreateJobObjectA(NULL, NULL);
+    if (job)
+    {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+        memset(&limits, 0, sizeof(limits));
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job, JobObjectExtendedLimitInformation,
+            &limits, sizeof(limits)
+        );
+    }
+
     BOOL ok = CreateProcessA(
         NULL, command.data, NULL, NULL, TRUE,
-        CREATE_NO_WINDOW, env_block,
+        CREATE_NO_WINDOW | CREATE_SUSPENDED, env_block,
         process->spec.working_dir, &startup, &info
     );
     if (env_block)
@@ -175,14 +189,28 @@ CCBOOL cmk_process_start(CMKProcess *process)
     cmk_string_clear(&command);
     if (!ok)
     {
+        if (job)
+            CloseHandle(job);
         CloseHandle(read_handle);
         CloseHandle(write_handle);
         return CCFALSE;
     }
+    if (job && !AssignProcessToJobObject(job, info.hProcess))
+    {
+        TerminateProcess(info.hProcess, 1);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        CloseHandle(job);
+        CloseHandle(read_handle);
+        CloseHandle(write_handle);
+        return CCFALSE;
+    }
+    ResumeThread(info.hThread);
     CloseHandle(write_handle);
     CloseHandle(info.hThread);
     process->process_handle = info.hProcess;
     process->read_handle = read_handle;
+    process->job_handle = job;
     process->started = CCTRUE;
     return CCTRUE;
 }
@@ -199,6 +227,8 @@ CCBOOL cmk_process_wait(CMKProcess *process, CMKProcessResult *out)
     out->started = CCTRUE;
     out->exited = CCTRUE;
     out->exit_code = (CCINT32)code;
+    if (process->job_handle)
+        TerminateJobObject((HANDLE)process->job_handle, 0);
 
     char buffer[4096];
     DWORD read = 0;
@@ -226,6 +256,11 @@ CCBOOL cmk_process_wait(CMKProcess *process, CMKProcessResult *out)
     }
     CloseHandle((HANDLE)process->read_handle);
     CloseHandle((HANDLE)process->process_handle);
+    if (process->job_handle)
+    {
+        CloseHandle((HANDLE)process->job_handle);
+        process->job_handle = NULL;
+    }
     process->read_handle = NULL;
     process->process_handle = NULL;
     process->waited = CCTRUE;
@@ -236,7 +271,10 @@ void cmk_process_terminate(CMKProcess *process)
 {
     if (!process || !process->started || process->waited)
         return;
-    TerminateProcess((HANDLE)process->process_handle, 1);
+    if (process->job_handle)
+        TerminateJobObject((HANDLE)process->job_handle, 1);
+    else
+        TerminateProcess((HANDLE)process->process_handle, 1);
 }
 
 void cmk_process_destroy(CMKProcess *process)
@@ -247,10 +285,15 @@ void cmk_process_destroy(CMKProcess *process)
     {
         if (process->process_handle)
         {
-            TerminateProcess((HANDLE)process->process_handle, 1);
+            if (process->job_handle)
+                TerminateJobObject((HANDLE)process->job_handle, 1);
+            else
+                TerminateProcess((HANDLE)process->process_handle, 1);
             WaitForSingleObject((HANDLE)process->process_handle, 1000);
             CloseHandle((HANDLE)process->process_handle);
         }
+        if (process->job_handle)
+            CloseHandle((HANDLE)process->job_handle);
         if (process->read_handle)
             CloseHandle((HANDLE)process->read_handle);
         if (process->write_handle)
@@ -299,6 +342,7 @@ CCBOOL cmk_process_start(CMKProcess *process)
     }
     if (pid == 0)
     {
+        setpgid(0, 0);
         close(fds[0]);
         dup2(fds[1], STDOUT_FILENO);
         dup2(fds[1], STDERR_FILENO);
@@ -343,6 +387,7 @@ CCBOOL cmk_process_start(CMKProcess *process)
         _exit(127);
     }
     close(fds[1]);
+    setpgid(pid, pid);
     process->pid = (int)pid;
     process->read_fd = fds[0];
     process->started = CCTRUE;
@@ -358,6 +403,7 @@ CCBOOL cmk_process_wait(CMKProcess *process, CMKProcessResult *out)
     int status = 0;
     if (waitpid((pid_t)process->pid, &status, 0) < 0)
         return CCFALSE;
+    kill(-(pid_t)process->pid, SIGKILL);
     out->started = CCTRUE;
     out->exited = CCTRUE;
     if (WIFEXITED(status))
@@ -400,6 +446,7 @@ void cmk_process_terminate(CMKProcess *process)
 {
     if (!process || !process->started || process->waited)
         return;
+    kill(-(pid_t)process->pid, SIGTERM);
     kill((pid_t)process->pid, SIGTERM);
 }
 
@@ -411,7 +458,8 @@ void cmk_process_destroy(CMKProcess *process)
     {
         if (process->started)
         {
-            kill((pid_t)process->pid, SIGTERM);
+            kill(-(pid_t)process->pid, SIGKILL);
+            kill((pid_t)process->pid, SIGKILL);
             waitpid((pid_t)process->pid, NULL, 0);
         }
         if (process->read_fd >= 0)

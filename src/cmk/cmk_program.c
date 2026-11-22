@@ -8,6 +8,7 @@
  */
 
 #include "cmk_program.h"
+#include "cmk_cache.h"
 #include "cmk_executor.h"
 #include "cmk_safe.h"
 #include "cmk_scheduler.h"
@@ -1348,6 +1349,39 @@ const CMKTargetDraft *cmk_program_target_at(
  * main 入口
  * ========================================================================== */
 
+typedef struct program_cache_ctx {
+    CMKCache *cache;
+    CMKPlan *plan;
+} ProgramCacheCtx;
+
+static CCBOOL program_cache_should_skip(
+    void *user, const CMKPlanTarget *target, CCBOOL *skip
+)
+{
+    ProgramCacheCtx *ctx = (ProgramCacheCtx *)user;
+    CMKTargetId id = cmk_plan_find_target(
+        ctx->plan,
+        target->key.module.data, target->key.module.len,
+        target->key.name.data, target->key.name.len
+    );
+    return cmk_cache_should_skip(
+        ctx->cache, ctx->plan, id, CCFALSE, skip
+    );
+}
+
+static CCBOOL program_cache_record(
+    void *user, const CMKPlanTarget *target
+)
+{
+    ProgramCacheCtx *ctx = (ProgramCacheCtx *)user;
+    CMKTargetId id = cmk_plan_find_target(
+        ctx->plan,
+        target->key.module.data, target->key.module.len,
+        target->key.name.data, target->key.name.len
+    );
+    return cmk_cache_record(ctx->cache, ctx->plan, id);
+}
+
 CCBOOL parse_cmk(void)
 {
     if (!ccmake_global_var.cmk_path)
@@ -1451,6 +1485,24 @@ CCBOOL parse_cmk(void)
         policy.max_processes != 0
             ? policy.max_processes : ccmake_global_var.jobs
     );
+    CMKCache *cache = cmk_cache_create(
+        ".ccmake-cache", &diagnostic
+    );
+    ProgramCacheCtx cache_ctx;
+    cache_ctx.cache = cache;
+    cache_ctx.plan = cmk_program_plan_mut(program);
+    CMKCacheOps cache_ops;
+    cache_ops.should_skip = program_cache_should_skip;
+    cache_ops.record = program_cache_record;
+    if (cache)
+    {
+        cmk_scheduler_set_cache(
+            scheduler, &cache_ops, &cache_ctx
+        );
+        cmk_scheduler_set_force(
+            scheduler, ccmake_global_var.always_build
+        );
+    }
     ok = cmk_scheduler_run(
         scheduler, ccmake_global_var.keep_going
     );
@@ -1458,6 +1510,8 @@ CCBOOL parse_cmk(void)
         cmk_diagnostic_print(&diagnostic, "构建");
     cmk_scheduler_destroy(scheduler);
     cmk_executor_destroy(executor);
+    if (cache)
+        cmk_cache_destroy(cache);
 
     cmk_program_destroy(program);
     cmk_diagnostic_clear(&diagnostic);

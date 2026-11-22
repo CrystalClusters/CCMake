@@ -210,15 +210,21 @@ static CCBOOL cmk_executor_exec(
     }
     else
     {
+        CCBOOL output_failed = CCFALSE;
         if (process_result.output.len > 0)
         {
-            fwrite(
-                process_result.output.data, 1,
-                process_result.output.len, stdout
-            );
-            fflush(stdout);
+            if (!cmk_string_append(
+                    &result->output, process_result.output.data,
+                    process_result.output.len
+                ))
+                output_failed = CCTRUE;
         }
-        if (process_result.capture_failed)
+        if (output_failed)
+        {
+            result->success = CCFALSE;
+            result->message = "输出缓存失败";
+        }
+        else if (process_result.capture_failed)
         {
             result->success = CCFALSE;
             result->message = "输出捕获超过限制";
@@ -315,4 +321,12 @@ const CMKExecutorOps *cmk_executor_ops(void)
         cmk_executor_run, cmk_executor_cancel
     };
     return &ops;
+}
+
+void cmk_executor_result_clear(CMKExecutorResult *result)
+{
+    if (!result)
+        return;
+    cmk_string_clear(&result->output);
+    memset(result, 0, sizeof(*result));
 }

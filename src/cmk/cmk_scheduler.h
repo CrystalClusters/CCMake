@@ -15,6 +15,18 @@
 
 typedef struct cmk_scheduler CMKScheduler;
 
+/* Scheduler 只依赖抽象缓存接口，不直接依赖 cmk_cache */
+typedef CCBOOL (*CMKSchedCacheShouldSkip)(
+    void *user, const CMKPlanTarget *target, CCBOOL *skip
+);
+typedef CCBOOL (*CMKSchedCacheRecord)(
+    void *user, const CMKPlanTarget *target
+);
+typedef struct cmk_cache_ops {
+    CMKSchedCacheShouldSkip should_skip;
+    CMKSchedCacheRecord record;
+} CMKCacheOps;
+
 CMKScheduler *cmk_scheduler_create(
     CMKPlan *plan,
     const CMKExecutorOps *ops, void *user,
@@ -33,6 +45,13 @@ CCBOOL cmk_scheduler_run(
 /* M9：READY 批次并发上限；0/1 表示串行 */
 void cmk_scheduler_set_jobs(
     CMKScheduler *scheduler, CCUINT32 jobs
+);
+/* 可选缓存；force 对应 -B */
+void cmk_scheduler_set_cache(
+    CMKScheduler *scheduler, const CMKCacheOps *ops, void *user
+);
+void cmk_scheduler_set_force(
+    CMKScheduler *scheduler, CCBOOL force
 );
 CMKTargetState cmk_scheduler_target_state(
     const CMKScheduler *scheduler, CMKTargetId id

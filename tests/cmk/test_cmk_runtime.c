@@ -978,7 +978,7 @@ static void test_runtime_deep_statements(void)
     }
     CC_CASE_END();
 
-    CC_CASE("RT-022", "托管执行栈创建");
+    CC_CASE("RT-022", "执行入口检查");
     {
         CCBOOL flags[2] = {CCFALSE, CCFALSE};
         CCBOOL result = CCFALSE;
@@ -986,10 +986,10 @@ static void test_runtime_deep_statements(void)
             cmk_exec_stack_run(
                 exec_stack_probe, flags, &result
             ),
-            "托管执行栈运行"
+            "执行入口运行"
         );
-        CC_CHECK(flags[0] && result, "托管执行栈回调结果");
-        CC_CHECK(flags[1], "托管执行栈余量检查");
+        CC_CHECK(flags[0] && result, "执行入口回调结果");
+        CC_CHECK(flags[1], "执行入口余量检查");
     }
     CC_CASE_END();
 

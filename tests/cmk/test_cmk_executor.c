@@ -129,8 +129,52 @@ static void exec_case_process(void)
     CC_CASE_END();
 }
 
+static void exec_case_output(void)
+{
+    CC_CASE("EXEC-003", "输出缓冲");
+    CMKPlanTarget target;
+    cmk_plan_target_init(&target);
+    CMKPlanAction action;
+    cmk_plan_action_init(&action);
+    action.type = CMK_PLAN_ACTION_EXEC;
+#ifdef CC_WINDOWS
+    cmk_string_set(&action.program, "cmd.exe", 7);
+    cmk_plan_action_append_arg(&action, "/c", 2);
+    cmk_plan_action_append_arg(&action, "echo", 4);
+    cmk_plan_action_append_arg(&action, "hello", 5);
+#else
+    cmk_string_set(&action.program, "/bin/sh", 7);
+    cmk_plan_action_append_arg(&action, "-c", 2);
+    cmk_plan_action_append_arg(&action, "echo hello", 10);
+#endif
+    CC_CHECK(
+        cmk_plan_target_add_action(&target, &action), "追加输出 exec"
+    );
+    cmk_plan_action_clear(&action);
+
+    CMKDiagnostic diagnostic;
+    cmk_diagnostic_init(&diagnostic);
+    CMKExecutor *executor = cmk_executor_create(NULL, &diagnostic);
+    CMKExecutorResult result;
+    CC_CHECK(
+        cmk_executor_ops()->run(executor, &target, &result),
+        "输出动作执行"
+    );
+    CC_CHECK(
+        result.output.data &&
+        strstr(result.output.data, "hello") != NULL,
+        "输出已缓冲"
+    );
+    cmk_executor_result_clear(&result);
+    cmk_plan_target_clear(&target);
+    cmk_executor_destroy(executor);
+    cmk_diagnostic_clear(&diagnostic);
+    CC_CASE_END();
+}
+
 void test_cmk_executor(void)
 {
     exec_case_files();
     exec_case_process();
+    exec_case_output();
 }

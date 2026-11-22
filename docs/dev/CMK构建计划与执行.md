@@ -34,22 +34,32 @@
 - 状态：PENDING/READY/RUNNING/SUCCESS/FAILED/BLOCKED/SKIPPED/CANCELLED；
 - 只执行 root 依赖闭包；
 - 聚合目标不调用 Executor；
-- fail-fast 取消无关任务，依赖失败目标进入 BLOCKED；
+- fail-fast 是**批次粒度**：已启动批次允许完成，失败后不再启动后续任务；
 - keep-going 继续独立任务；
-- Executor 通过 `CMKExecutorOps` 注入，测试使用 fake Executor。
+- Executor 通过 `CMKExecutorOps` 注入，测试使用 fake Executor；
+- 可选 `CMKCacheOps`：
+  - READY 时查询缓存；
+  - 命中且输出有效则 SKIPPED；
+  - 成功执行后记录签名；
+  - `-B` 通过 force 绕过。
 
 ## M7：Process / Executor
 
-- Windows `CreateProcessA`，POSIX `fork + execvp`；
+- Windows `CreateProcessA` + Job Object：
+  - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`；
+  - 挂起创建、加入 Job 后恢复，避免竞态；
+  - 取消/回收时终止整个 Job。
+- POSIX `fork + execvp` + 独立进程组：
+  - 子进程 `setpgid(0,0)`；
+  - 取消向进程组发送信号；
+  - 回收后清理仍存活的后代，避免管道 EOF 挂起。
 - argv 不经过 shell；
 - 支持 cwd、envp、stdout/stderr 合并捕获；
 - `capture_limit` 超限返回 `capture_failed`；
 - Executor 顺序执行目标动作：
-  - exec；
-  - copy；
-  - move；
-  - remove；
-  - mkdir。
+  - exec/copy/move/remove/mkdir；
+- Executor 不直接写日志：进程输出写入 `CMKExecutorResult.output`；
+- Scheduler 在批次完成后按稳定批次顺序统一输出，保证并发日志确定性；
 - 文件动作直接使用宿主文件系统；进程动作经 `cmk_process`。
 
 ## M8：增量缓存
@@ -67,23 +77,24 @@
 - 聚合目标直接 SUCCESS；
 - 独立目标通过 Windows `CreateThread` / POSIX `pthread` 并行调用 Executor；
 - 主线程统一写目标状态，避免并发写 Plan；
+- Executor 不直接输出；Scheduler 在批次完成后按稳定顺序输出 `CMKExecutorResult.output`；
 - fail-fast 在批次结束后取消 PENDING/READY，依赖失败目标进入 BLOCKED；
 - keep-going 继续独立 READY；
-- 测试 `SCH-004` 覆盖 `jobs=2` 并发批次。
+- 测试 `SCH-004` 覆盖 `jobs=2` 并发批次，`SCH-005` 覆盖缓存 SKIPPED。
+
+## 未完成
+
+- 立即取消正在运行的批次（当前 fail-fast 为批次粒度）；
+- 进程组/Job Object 的宽限期与强制终止策略细化；
+- 下游目标签名对依赖输出的自动传播（当前需显式列入 inputs）。
 
 ## 测试
 
 | 套件 | 覆盖 |
 |---|---|
 | `CMKIR` | 目标、动作、依赖、拓扑序、缺失依赖 |
-| `CMKSCHED` | 成功、fail-fast、keep-going、聚合目标、并发 READY |
+| `CMKSCHED` | 成功、fail-fast、keep-going、聚合目标、并发 READY、缓存 SKIPPED |
 | `CMKPROC` | 进程输出、退出码、捕获上限 |
-| `CMKEXEC` | 文件动作、进程动作 |
+| `CMKEXEC` | 文件动作、进程动作、输出缓冲 |
 | `CMKCACHE` | 命中、输入变化、输出缺失、`-B` |
-| `CMKPROGRAM` | Program Lowering 与计划所有权 |
-
-## 未完成
-
-- CLI 是否把 Cache 结果接入 Scheduler 的 SKIPPED；
-- 进程组/Job Object 取消树；
-- 增量缓存与 Scheduler 的 SKIPPED 集成。
+| `CMKPROGRAM` | Program Lowering、CLI 构建与计划所有权 |
