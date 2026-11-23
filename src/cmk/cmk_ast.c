@@ -639,36 +639,11 @@ static CCBOOL ast_children_all_kind(
     return CCTRUE;
 }
 
-static CCBOOL ast_validate_node(
-    const CMKAST *ast, CMKASTNodeId id, const char **reason
+static CCBOOL ast_validate_decl(
+    const CMKAST *ast, CMKASTNodeId id, const CMKASTNode *node,
+    CCUINT32 child_count, const char **reason
 )
 {
-    const CMKASTNode *node = ast_node_at_const(ast, id);
-    if (!node)
-        return ast_fail(reason, "节点 ID 越界");
-    if ((unsigned int)node->kind >= (unsigned int)CMK_AST_KIND_COUNT)
-        return ast_fail(reason, "节点类型非法");
-
-    if (id == ast->root)
-    {
-        if (node->kind != CMK_AST_MODULE)
-            return ast_fail(reason, "根节点不是 module");
-        if (node->parent != CMK_AST_NODE_NIL)
-            return ast_fail(reason, "根节点父链接非空");
-    }
-    else
-    {
-        if (node->kind == CMK_AST_MODULE)
-            return ast_fail(reason, "module 只能作为根节点");
-        if (node->parent == CMK_AST_NODE_NIL ||
-            node->parent >= ast_node_count_internal(ast))
-            return ast_fail(reason, "节点父链接无效");
-    }
-
-    CCUINT32 child_count = 0;
-    if (!ast_check_children(ast, id, node, &child_count))
-        return ast_fail(reason, "子节点链接错误");
-
     switch (node->kind)
     {
     case CMK_AST_MODULE:
@@ -814,6 +789,19 @@ static CCBOOL ast_validate_node(
             return ast_fail(reason, "标量类型不应有子节点");
         break;
 
+    default:
+        return ast_fail(reason, "未知节点类型");
+    }
+    return CCTRUE;
+}
+
+static CCBOOL ast_validate_stmt(
+    const CMKAST *ast, CMKASTNodeId id, const CMKASTNode *node,
+    CCUINT32 child_count, const char **reason
+)
+{
+    switch (node->kind)
+    {
     case CMK_AST_BLOCK:
     {
         CCBOOL top_level = node->as.block.is_top_level;
@@ -924,6 +912,19 @@ static CCBOOL ast_validate_node(
             return ast_fail(reason, "赋值运算符非法");
         break;
 
+    default:
+        return ast_fail(reason, "未知节点类型");
+    }
+    return CCTRUE;
+}
+
+static CCBOOL ast_validate_expr(
+    const CMKAST *ast, CMKASTNodeId id, const CMKASTNode *node,
+    CCUINT32 child_count, const char **reason
+)
+{
+    switch (node->kind)
+    {
     case CMK_AST_LITERAL:
         if (child_count != 0)
             return ast_fail(reason, "字面量不应有子节点");
@@ -1003,10 +1004,72 @@ static CCBOOL ast_validate_node(
     default:
         return ast_fail(reason, "未知节点类型");
     }
-
     return CCTRUE;
 }
 
+static CCBOOL ast_validate_node(
+    const CMKAST *ast, CMKASTNodeId id, const char **reason
+)
+{
+    const CMKASTNode *node = ast_node_at_const(ast, id);
+    if (!node)
+        return ast_fail(reason, "节点 ID 越界");
+    if ((unsigned int)node->kind >= (unsigned int)CMK_AST_KIND_COUNT)
+        return ast_fail(reason, "节点类型非法");
+
+    if (id == ast->root)
+    {
+        if (node->kind != CMK_AST_MODULE)
+            return ast_fail(reason, "根节点不是 module");
+        if (node->parent != CMK_AST_NODE_NIL)
+            return ast_fail(reason, "根节点父链接非空");
+    }
+    else
+    {
+        if (node->kind == CMK_AST_MODULE)
+            return ast_fail(reason, "module 只能作为根节点");
+        if (node->parent == CMK_AST_NODE_NIL ||
+            node->parent >= ast_node_count_internal(ast))
+            return ast_fail(reason, "节点父链接无效");
+    }
+
+    CCUINT32 child_count = 0;
+    if (!ast_check_children(ast, id, node, &child_count))
+        return ast_fail(reason, "子节点链接错误");
+
+    switch (node->kind)
+    {
+    case CMK_AST_MODULE:
+    case CMK_AST_INCLUDE_DECL:
+    case CMK_AST_IMPORT_DECL:
+    case CMK_AST_IMPORT_ITEM:
+    case CMK_AST_VAR_DECL:
+    case CMK_AST_FUNC_DECL:
+    case CMK_AST_PARAM:
+    case CMK_AST_TARGET_DECL:
+    case CMK_AST_TARGET_FIELD:
+    case CMK_AST_TYPE:
+        return ast_validate_decl(
+            ast, id, node, child_count, reason
+        );
+    case CMK_AST_BLOCK:
+    case CMK_AST_EXPR_STMT:
+    case CMK_AST_IF:
+    case CMK_AST_WHILE:
+    case CMK_AST_FOR_IN:
+    case CMK_AST_RETURN:
+    case CMK_AST_BREAK:
+    case CMK_AST_CONTINUE:
+    case CMK_AST_ASSIGN:
+        return ast_validate_stmt(
+            ast, id, node, child_count, reason
+        );
+    default:
+        return ast_validate_expr(
+            ast, id, node, child_count, reason
+        );
+    }
+}
 CCBOOL cmk_ast_validate(const CMKAST *ast, const char **reason)
 {
     if (reason)

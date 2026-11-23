@@ -371,9 +371,9 @@ typedef struct ccmake_ccm_frame_struct {
 
 | 状态 | 含义 |
 |---|---|
-| `UNSEEN` | 已登记，尚未装载 |
+| `UNSEEN` | 已登记，未装载 |
 | `VISITING` | 位于 DFS 栈上，正在处理其 include |
-| `VISITED` | 已完成，已追加到 `order[]` |
+| `VISITED` | 已装载，已追加到 `order[]` |
 
 遍历按以下规则推进：
 

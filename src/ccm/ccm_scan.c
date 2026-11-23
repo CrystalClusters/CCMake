@@ -137,6 +137,121 @@ static CCBOOL scan_push_include(
     return CCTRUE;
 }
 
+static CCBOOL scan_handle_include(
+    const char *content, CCUINT64 size,
+    const char *display_path,
+    CCUINT64 *index, CCUINT32 *line, CCUINT32 *column,
+    CCUINT32 depth, CCDyn *out_includes, CCUINT32 max_edges
+)
+{
+    CCUINT32 at_line = *line;
+    CCUINT32 at_column = *column;
+    CCUINT64 ident_begin = *index + 1;
+    CCUINT64 ident_end = ident_begin;
+    while (ident_end < size &&
+           (isalnum((unsigned char)content[ident_end]) ||
+            content[ident_end] == '_'))
+        ident_end++;
+
+    size_t ident_len = (size_t)(ident_end - ident_begin);
+    CCBOOL is_include = (ident_len == 7 &&
+        memcmp(content + ident_begin, "include", 7) == 0)
+        ? CCTRUE : CCFALSE;
+    if (!is_include)
+    {
+        *column += (CCUINT32)(ident_end - *index);
+        *index = ident_end;
+        return CCTRUE;
+    }
+
+    if (depth != 0)
+        return scan_fail(
+            display_path, at_line, "@include 只能出现在顶层"
+        );
+    if (max_edges != 0 &&
+        out_includes->size /
+        (CCUINT32)sizeof(CCMakeCCMInclude) >= max_edges)
+        return scan_fail(
+            display_path, at_line, "include 数量超过限制"
+        );
+
+    *column += (CCUINT32)(ident_end - *index);
+    *index = ident_end;
+    if (!scan_skip_trivia(
+            content, size, index, line, column, display_path
+        ))
+        return CCFALSE;
+    if (*index >= size || content[*index] != '"')
+        return scan_fail(
+            display_path, at_line, "@include 后缺少双引号路径"
+        );
+
+    (*index)++;
+    (*column)++;
+    CCUINT64 path_begin = *index;
+    while (*index < size && content[*index] != '"')
+    {
+        unsigned char pc = (unsigned char)content[*index];
+        if (pc == '\0')
+            return scan_fail(
+                display_path, at_line,
+                "文件中包含 NUL 字节，疑似二进制文件"
+            );
+        if (pc < 0x20)
+            return scan_fail(
+                display_path, at_line,
+                "@include 路径包含非法控制字符"
+            );
+        (*index)++;
+        (*column)++;
+    }
+    if (*index >= size)
+        return scan_fail(
+            display_path, at_line, "@include 路径字符串未闭合"
+        );
+
+    CCUINT64 path_len = *index - path_begin;
+    if (path_len == 0)
+        return scan_fail(display_path, at_line, "@include 路径为空");
+
+    char *literal = ccalloc(
+        NULL, path_len + 1,
+        CC_DBG_REL_TAG("@include 路径", NULL)
+    );
+    if (!literal)
+        return scan_fail(display_path, at_line, "内存分配失败");
+    memcpy(literal, content + path_begin, (size_t)path_len);
+    literal[path_len] = '\0';
+    (*index)++;
+    (*column)++;
+
+    if (!scan_skip_trivia(
+            content, size, index, line, column, display_path
+        ))
+    {
+        ccalloc(literal, 0, NULL);
+        return CCFALSE;
+    }
+    if (*index >= size || content[*index] != ';')
+    {
+        ccalloc(literal, 0, NULL);
+        return scan_fail(
+            display_path, at_line, "@include 语句缺少分号"
+        );
+    }
+    (*index)++;
+    (*column)++;
+
+    if (!scan_push_include(
+            out_includes, at_line, at_column, literal
+        ))
+    {
+        ccalloc(literal, 0, NULL);
+        return scan_fail(display_path, at_line, "内存分配失败");
+    }
+    return CCTRUE;
+}
+
 CCBOOL ccm_scan_includes(
     const char *content,
     CCUINT64 size,
@@ -252,93 +367,12 @@ CCBOOL ccm_scan_includes(
             }
             else if (c == '@')
             {
-                CCUINT32 at_line = line;
-                CCUINT32 at_column = column;
-                CCUINT64 ident_begin = index + 1;
-                CCUINT64 ident_end = ident_begin;
-                while (ident_end < size &&
-                       (isalnum((unsigned char)content[ident_end]) || content[ident_end] == '_'))
-                    ident_end++;
-
-                size_t ident_len = (size_t)(ident_end - ident_begin);
-                CCBOOL is_include =
-                    (ident_len == 7 && memcmp(content + ident_begin, "include", 7) == 0)
-                        ? CCTRUE : CCFALSE;
-
-                if (!is_include)
-                {
-                    column += (CCUINT32)(ident_end - index);
-                    index = ident_end;
-                    break;
-                }
-
-                if (depth != 0)
-                    return scan_fail(display_path, at_line, "@include 只能出现在顶层");
-                if (max_edges != 0 &&
-                    out_includes->size /
-                    (CCUINT32)sizeof(CCMakeCCMInclude) >= max_edges)
-                    return scan_fail(display_path, at_line, "include 数量超过限制");
-
-                column += (CCUINT32)(ident_end - index);
-                index = ident_end;
-
-                if (!scan_skip_trivia(content, size, &index, &line, &column, display_path))
+                if (!scan_handle_include(
+                        content, size, display_path,
+                        &index, &line, &column, depth,
+                        out_includes, max_edges
+                    ))
                     return CCFALSE;
-
-                if (index >= size || content[index] != '"')
-                    return scan_fail(display_path, at_line, "@include 后缺少双引号路径");
-
-                index++;
-                column++;
-
-                CCUINT64 path_begin = index;
-                while (index < size && content[index] != '"')
-                {
-                    unsigned char pc = (unsigned char)content[index];
-                    if (pc == '\0')
-                        return scan_fail(display_path, at_line, "文件中包含 NUL 字节，疑似二进制文件");
-                    if (pc < 0x20)
-                        return scan_fail(display_path, at_line, "@include 路径包含非法控制字符");
-                    index++;
-                    column++;
-                }
-                if (index >= size)
-                    return scan_fail(display_path, at_line, "@include 路径字符串未闭合");
-
-                CCUINT64 path_len = index - path_begin;
-                if (path_len == 0)
-                    return scan_fail(display_path, at_line, "@include 路径为空");
-
-                char *literal = ccalloc(
-                    NULL, path_len + 1,
-                    CC_DBG_REL_TAG("@include 路径", NULL)
-                );
-                if (!literal)
-                    return scan_fail(display_path, at_line, "内存分配失败");
-                memcpy(literal, content + path_begin, (size_t)path_len);
-                literal[path_len] = '\0';
-
-                index++;
-                column++;
-
-                if (!scan_skip_trivia(content, size, &index, &line, &column, display_path))
-                {
-                    ccalloc(literal, 0, NULL);
-                    return CCFALSE;
-                }
-                if (index >= size || content[index] != ';')
-                {
-                    ccalloc(literal, 0, NULL);
-                    return scan_fail(display_path, at_line, "@include 语句缺少分号");
-                }
-                index++;
-                column++;
-
-                if (!scan_push_include(out_includes, at_line, at_column, literal))
-                {
-                    ccalloc(literal, 0, NULL);
-                    return scan_fail(display_path, at_line, "内存分配失败");
-                }
             }
             else
             {

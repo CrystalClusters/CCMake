@@ -613,171 +613,124 @@ static CCBOOL parser_expr_finish_unary(
     return CCTRUE;
 }
 
-static CCBOOL parser_expr_step(
+static CCBOOL parser_expr_task_expr(
     CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
     CCBOOL has_input, CMKASTNodeId input,
     CMKASTNodeId *completed, CCBOOL *done
 )
 {
-    switch (frame->task)
+    if (!has_input)
     {
-    case CMK_EXPR_TASK_EXPR:
-        if (!has_input)
+        if (!parser_enter_expression(parser))
+            return CCFALSE;
+        frame->entered++;
+        frame->stage = CMK_EXPR_STAGE_LEFT;
+        CMKExprFrame child;
+        memset(&child, 0, sizeof(child));
+        child.task = CMK_EXPR_TASK_BINARY;
+        child.stage = CMK_EXPR_STAGE_START;
+        child.min_bp = 0;
+        child.start = parser->current;
+        if (!parser_expr_push(parser, frames, &child))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+    *completed = input;
+    *done = CCTRUE;
+    return CCTRUE;
+}
+
+static CCBOOL parser_expr_task_binary(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+    if (!has_input)
+    {
+        CMKExprFrame child;
+        memset(&child, 0, sizeof(child));
+        child.task = CMK_EXPR_TASK_UNARY;
+        child.stage = CMK_EXPR_STAGE_START;
+        frame->stage = CMK_EXPR_STAGE_LEFT;
+        if (!parser_expr_push(parser, frames, &child))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+    if (frame->stage == CMK_EXPR_STAGE_LEFT)
+    {
+        frame->node = input;
+        frame->stage = CMK_EXPR_STAGE_LOOP;
+        return parser_expr_binary_loop(
+            parser, frame, frames, completed, done
+        );
+    }
+    if (frame->stage == CMK_EXPR_STAGE_RIGHT)
+    {
+        CMKSourceSpan span =
+            parser_make_span(&frame->start, &parser->previous);
+        CMKASTNodeId node = parser_new_node(
+            parser, CMK_AST_BINARY, &span
+        );
+        if (node == CMK_AST_NODE_NIL)
+            return CCFALSE;
+        CMKASTNode *binary = cmk_ast_node_mut(parser->ast, node);
+        if (!binary)
+            return CCFALSE;
+        binary->as.binary.op = frame->op;
+        if (!parser_append_child(parser, node, frame->node) ||
+            !parser_append_child(parser, node, input))
+            return CCFALSE;
+        frame->node = node;
+        frame->stage = CMK_EXPR_STAGE_LOOP;
+        return parser_expr_binary_loop(
+            parser, frame, frames, completed, done
+        );
+    }
+    return CCFALSE;
+}
+
+static CCBOOL parser_expr_task_unary(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+{
+    if (!has_input)
+    {
+        while (parser->current.type == CMK_TOK_NOT ||
+               parser->current.type == CMK_TOK_MINUS ||
+               parser->current.type == CMK_TOK_PLUS)
         {
+            CMKTokenType type = parser->current.type;
+            CMKUnaryPrefix prefix;
+            memset(&prefix, 0, sizeof(prefix));
+            prefix.token = parser->current;
+            prefix.op = (type == CMK_TOK_NOT) ? CMK_UNARY_NOT
+                : (type == CMK_TOK_MINUS) ? CMK_UNARY_NEG
+                : CMK_UNARY_POS;
             if (!parser_enter_expression(parser))
                 return CCFALSE;
             frame->entered++;
-            frame->stage = CMK_EXPR_STAGE_LEFT;
-            CMKExprFrame child;
-            memset(&child, 0, sizeof(child));
-            child.task = CMK_EXPR_TASK_BINARY;
-            child.stage = CMK_EXPR_STAGE_START;
-            child.min_bp = 0;
-            child.start = parser->current;
-            if (!parser_expr_push(parser, frames, &child))
-                return CCFALSE;
-            *done = CCFALSE;
-            return CCTRUE;
-        }
-        *completed = input;
-        *done = CCTRUE;
-        return CCTRUE;
-
-    case CMK_EXPR_TASK_BINARY:
-        if (!has_input)
-        {
-            CMKExprFrame child;
-            memset(&child, 0, sizeof(child));
-            child.task = CMK_EXPR_TASK_UNARY;
-            child.stage = CMK_EXPR_STAGE_START;
-            frame->stage = CMK_EXPR_STAGE_LEFT;
-            if (!parser_expr_push(parser, frames, &child))
-                return CCFALSE;
-            *done = CCFALSE;
-            return CCTRUE;
-        }
-        if (frame->stage == CMK_EXPR_STAGE_LEFT)
-        {
-            frame->node = input;
-            frame->stage = CMK_EXPR_STAGE_LOOP;
-            return parser_expr_binary_loop(
-                parser, frame, frames, completed, done
-            );
-        }
-        if (frame->stage == CMK_EXPR_STAGE_RIGHT)
-        {
-            CMKSourceSpan span =
-                parser_make_span(&frame->start, &parser->previous);
-            CMKASTNodeId node = parser_new_node(
-                parser, CMK_AST_BINARY, &span
-            );
-            if (node == CMK_AST_NODE_NIL)
-                return CCFALSE;
-            CMKASTNode *binary = cmk_ast_node_mut(parser->ast, node);
-            if (!binary)
-                return CCFALSE;
-            binary->as.binary.op = frame->op;
-            if (!parser_append_child(parser, node, frame->node) ||
-                !parser_append_child(parser, node, input))
-                return CCFALSE;
-            frame->node = node;
-            frame->stage = CMK_EXPR_STAGE_LOOP;
-            return parser_expr_binary_loop(
-                parser, frame, frames, completed, done
-            );
-        }
-        return CCFALSE;
-
-    case CMK_EXPR_TASK_UNARY:
-    {
-        if (!has_input)
-        {
-            while (parser->current.type == CMK_TOK_NOT ||
-                   parser->current.type == CMK_TOK_MINUS ||
-                   parser->current.type == CMK_TOK_PLUS)
+            if (!cmk_dyn_push(
+                    &frame->prefixes,
+                    (CCUINT32)sizeof(CMKUnaryPrefix),
+                    (CCINT32)sizeof(CMKUnaryPrefix), &prefix
+                ))
             {
-                CMKTokenType type = parser->current.type;
-                CMKUnaryPrefix prefix;
-                memset(&prefix, 0, sizeof(prefix));
-                prefix.token = parser->current;
-                prefix.op = (type == CMK_TOK_NOT) ? CMK_UNARY_NOT
-                    : (type == CMK_TOK_MINUS) ? CMK_UNARY_NEG
-                    : CMK_UNARY_POS;
-                if (!parser_enter_expression(parser))
-                    return CCFALSE;
-                frame->entered++;
-                if (!cmk_dyn_push(
-                        &frame->prefixes,
-                        (CCUINT32)sizeof(CMKUnaryPrefix),
-                        (CCINT32)sizeof(CMKUnaryPrefix), &prefix
-                    ))
-                {
-                    (void)parser_error_current(parser, "内存分配失败");
-                    return CCFALSE;
-                }
-                frame->prefix_count++;
-                if (!parser_advance(parser))
-                    return CCFALSE;
+                (void)parser_error_current(parser, "内存分配失败");
+                return CCFALSE;
             }
+            frame->prefix_count++;
+            if (!parser_advance(parser))
+                return CCFALSE;
+        }
 
-            if (frame->prefix_count == 0)
-            {
-                frame->stage = CMK_EXPR_STAGE_BASE;
-                CMKExprFrame child;
-                memset(&child, 0, sizeof(child));
-                child.task = CMK_EXPR_TASK_POSTFIX;
-                child.stage = CMK_EXPR_STAGE_START;
-                child.start = parser->current;
-                if (!parser_expr_push(parser, frames, &child))
-                    return CCFALSE;
-                *done = CCFALSE;
-                return CCTRUE;
-            }
-
-            CMKUnaryPrefix *items =
-                (CMKUnaryPrefix *)frame->prefixes.array;
-            if (items[frame->prefix_count - 1].op == CMK_UNARY_NEG &&
-                parser->current.type == CMK_TOK_INT)
-            {
-                CCUINT64 magnitude = 0;
-                if (!parser_int_magnitude(
-                        parser, &parser->current,
-                        (CCUINT64)0x8000000000000000u, &magnitude
-                    ))
-                    return CCFALSE;
-                if (magnitude == (CCUINT64)0x8000000000000000u)
-                {
-                    CMKToken int_token = parser->current;
-                    CMKSourceSpan span = parser_make_span(
-                        &items[frame->prefix_count - 1].token,
-                        &int_token
-                    );
-                    CMKASTNodeId base = parser_new_node(
-                        parser, CMK_AST_LITERAL, &span
-                    );
-                    if (base == CMK_AST_NODE_NIL)
-                        return CCFALSE;
-                    CMKASTNode *literal =
-                        cmk_ast_node_mut(parser->ast, base);
-                    if (!literal)
-                        return CCFALSE;
-                    literal->as.literal.kind = CMK_LITERAL_INT;
-                    literal->as.literal.value.integer =
-                        -((CCINT64)0x7FFFFFFFFFFFFFFF) - 1;
-                    if (!parser_advance(parser))
-                        return CCFALSE;
-                    frame->prefix_count--;
-                    parser_leave_expression(parser);
-                    frame->entered--;
-                    if (!parser_expr_finish_unary(
-                            parser, frame, base, completed
-                        ))
-                        return CCFALSE;
-                    *done = CCTRUE;
-                    return CCTRUE;
-                }
-            }
-
+        if (frame->prefix_count == 0)
+        {
             frame->stage = CMK_EXPR_STAGE_BASE;
             CMKExprFrame child;
             memset(&child, 0, sizeof(child));
@@ -790,328 +743,254 @@ static CCBOOL parser_expr_step(
             return CCTRUE;
         }
 
-        if (!parser_expr_finish_unary(parser, frame, input, completed))
+        CMKUnaryPrefix *items =
+            (CMKUnaryPrefix *)frame->prefixes.array;
+        if (items[frame->prefix_count - 1].op == CMK_UNARY_NEG &&
+            parser->current.type == CMK_TOK_INT)
+        {
+            CCUINT64 magnitude = 0;
+            if (!parser_int_magnitude(
+                    parser, &parser->current,
+                    (CCUINT64)0x8000000000000000u, &magnitude
+                ))
+                return CCFALSE;
+            if (magnitude == (CCUINT64)0x8000000000000000u)
+            {
+                CMKToken int_token = parser->current;
+                CMKSourceSpan span = parser_make_span(
+                    &items[frame->prefix_count - 1].token,
+                    &int_token
+                );
+                CMKASTNodeId base = parser_new_node(
+                    parser, CMK_AST_LITERAL, &span
+                );
+                if (base == CMK_AST_NODE_NIL)
+                    return CCFALSE;
+                CMKASTNode *literal =
+                    cmk_ast_node_mut(parser->ast, base);
+                if (!literal)
+                    return CCFALSE;
+                literal->as.literal.kind = CMK_LITERAL_INT;
+                literal->as.literal.value.integer =
+                    -((CCINT64)0x7FFFFFFFFFFFFFFF) - 1;
+                if (!parser_advance(parser))
+                    return CCFALSE;
+                frame->prefix_count--;
+                parser_leave_expression(parser);
+                frame->entered--;
+                if (!parser_expr_finish_unary(
+                        parser, frame, base, completed
+                    ))
+                    return CCFALSE;
+                *done = CCTRUE;
+                return CCTRUE;
+            }
+        }
+
+        frame->stage = CMK_EXPR_STAGE_BASE;
+        CMKExprFrame child;
+        memset(&child, 0, sizeof(child));
+        child.task = CMK_EXPR_TASK_POSTFIX;
+        child.stage = CMK_EXPR_STAGE_START;
+        child.start = parser->current;
+        if (!parser_expr_push(parser, frames, &child))
             return CCFALSE;
-        *done = CCTRUE;
+        *done = CCFALSE;
         return CCTRUE;
     }
 
-    case CMK_EXPR_TASK_POSTFIX:
-        if (!has_input)
+    if (!parser_expr_finish_unary(parser, frame, input, completed))
+        return CCFALSE;
+    *done = CCTRUE;
+    return CCTRUE;
+}
+}
+
+static CCBOOL parser_expr_task_postfix(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+    if (!has_input)
+    {
+        CMKExprFrame child;
+        memset(&child, 0, sizeof(child));
+        child.task = CMK_EXPR_TASK_PRIMARY;
+        child.stage = CMK_EXPR_STAGE_START;
+        child.start = parser->current;
+        frame->stage = CMK_EXPR_STAGE_PRIMARY;
+        if (!parser_expr_push(parser, frames, &child))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+    if (frame->stage == CMK_EXPR_STAGE_PRIMARY)
+    {
+        frame->node = input;
+        frame->stage = CMK_EXPR_STAGE_LOOP;
+    }
+    else if (frame->stage == CMK_EXPR_STAGE_INDEX)
+    {
+        if (!parser_expect(parser, CMK_TOK_RBRACKET, "右方括号"))
+            return CCFALSE;
+        CMKSourceSpan span =
+            parser_make_span(&frame->start, &parser->previous);
+        CMKASTNodeId node = parser_new_node(
+            parser, CMK_AST_INDEX, &span
+        );
+        if (node == CMK_AST_NODE_NIL)
+            return CCFALSE;
+        if (!parser_append_child(parser, node, frame->node) ||
+            !parser_append_child(parser, node, input))
+            return CCFALSE;
+        frame->node = node;
+        frame->stage = CMK_EXPR_STAGE_LOOP;
+    }
+
+    for (;;)
+    {
+        if (parser->current.type == CMK_TOK_LBRACKET)
         {
+            if (!parser_advance(parser))
+                return CCFALSE;
+            frame->stage = CMK_EXPR_STAGE_INDEX;
             CMKExprFrame child;
             memset(&child, 0, sizeof(child));
-            child.task = CMK_EXPR_TASK_PRIMARY;
+            child.task = CMK_EXPR_TASK_EXPR;
             child.stage = CMK_EXPR_STAGE_START;
             child.start = parser->current;
-            frame->stage = CMK_EXPR_STAGE_PRIMARY;
             if (!parser_expr_push(parser, frames, &child))
                 return CCFALSE;
             *done = CCFALSE;
             return CCTRUE;
         }
-        if (frame->stage == CMK_EXPR_STAGE_PRIMARY)
+        if (parser->current.type == CMK_TOK_DOT)
         {
-            frame->node = input;
-            frame->stage = CMK_EXPR_STAGE_LOOP;
-        }
-        else if (frame->stage == CMK_EXPR_STAGE_INDEX)
-        {
-            if (!parser_expect(parser, CMK_TOK_RBRACKET, "右方括号"))
+            if (!parser_advance(parser))
+                return CCFALSE;
+            if (parser->current.type != CMK_TOK_IDENT)
+                return parser_error_current(
+                    parser, "成员访问需要标识符"
+                ), CCFALSE;
+            CMKASTStringId member = parser_new_string(
+                parser, parser->current.text, parser->current.len
+            );
+            if (member == CMK_AST_STRING_NIL)
+                return CCFALSE;
+            if (!parser_advance(parser))
                 return CCFALSE;
             CMKSourceSpan span =
                 parser_make_span(&frame->start, &parser->previous);
             CMKASTNodeId node = parser_new_node(
-                parser, CMK_AST_INDEX, &span
+                parser, CMK_AST_MEMBER, &span
             );
             if (node == CMK_AST_NODE_NIL)
                 return CCFALSE;
-            if (!parser_append_child(parser, node, frame->node) ||
-                !parser_append_child(parser, node, input))
+            CMKASTNode *member_node =
+                cmk_ast_node_mut(parser->ast, node);
+            if (!member_node)
+                return CCFALSE;
+            member_node->as.member.member = member;
+            if (!parser_append_child(parser, node, frame->node))
                 return CCFALSE;
             frame->node = node;
-            frame->stage = CMK_EXPR_STAGE_LOOP;
+            continue;
         }
+        *completed = frame->node;
+        *done = CCTRUE;
+        return CCTRUE;
+    }
+}
 
-        for (;;)
-        {
-            if (parser->current.type == CMK_TOK_LBRACKET)
-            {
-                if (!parser_advance(parser))
-                    return CCFALSE;
-                frame->stage = CMK_EXPR_STAGE_INDEX;
-                CMKExprFrame child;
-                memset(&child, 0, sizeof(child));
-                child.task = CMK_EXPR_TASK_EXPR;
-                child.stage = CMK_EXPR_STAGE_START;
-                child.start = parser->current;
-                if (!parser_expr_push(parser, frames, &child))
-                    return CCFALSE;
-                *done = CCFALSE;
-                return CCTRUE;
-            }
-            if (parser->current.type == CMK_TOK_DOT)
-            {
-                if (!parser_advance(parser))
-                    return CCFALSE;
-                if (parser->current.type != CMK_TOK_IDENT)
-                    return parser_error_current(
-                        parser, "成员访问需要标识符"
-                    ), CCFALSE;
-                CMKASTStringId member = parser_new_string(
-                    parser, parser->current.text, parser->current.len
-                );
-                if (member == CMK_AST_STRING_NIL)
-                    return CCFALSE;
-                if (!parser_advance(parser))
-                    return CCFALSE;
-                CMKSourceSpan span =
-                    parser_make_span(&frame->start, &parser->previous);
-                CMKASTNodeId node = parser_new_node(
-                    parser, CMK_AST_MEMBER, &span
-                );
-                if (node == CMK_AST_NODE_NIL)
-                    return CCFALSE;
-                CMKASTNode *member_node =
-                    cmk_ast_node_mut(parser->ast, node);
-                if (!member_node)
-                    return CCFALSE;
-                member_node->as.member.member = member;
-                if (!parser_append_child(parser, node, frame->node))
-                    return CCFALSE;
-                frame->node = node;
-                continue;
-            }
-            *completed = frame->node;
-            *done = CCTRUE;
-            return CCTRUE;
-        }
+static CCBOOL parser_expr_primary_resume(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+);
 
-    case CMK_EXPR_TASK_PRIMARY:
+static CCBOOL parser_expr_primary_start(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+    (void)input;
+    if (!has_input && frame->stage == CMK_EXPR_STAGE_START)
     {
-        if (!has_input && frame->stage == CMK_EXPR_STAGE_START)
+        switch (parser->current.type)
         {
-            switch (parser->current.type)
-            {
-            case CMK_TOK_INT:
-            case CMK_TOK_FLOAT:
-            case CMK_TOK_STRING:
-            case CMK_TOK_KW_TRUE:
-            case CMK_TOK_KW_FALSE:
-                *completed = parser_parse_literal(parser);
-                *done = CCTRUE;
-                return (*completed != CMK_AST_NODE_NIL)
-                    ? CCTRUE : CCFALSE;
+        case CMK_TOK_INT:
+        case CMK_TOK_FLOAT:
+        case CMK_TOK_STRING:
+        case CMK_TOK_KW_TRUE:
+        case CMK_TOK_KW_FALSE:
+            *completed = parser_parse_literal(parser);
+            *done = CCTRUE;
+            return (*completed != CMK_AST_NODE_NIL)
+                ? CCTRUE : CCFALSE;
 
-            case CMK_TOK_CONFIG_REF:
-                *completed = parser_parse_config_ref(parser);
-                *done = CCTRUE;
-                return (*completed != CMK_AST_NODE_NIL)
-                    ? CCTRUE : CCFALSE;
+        case CMK_TOK_CONFIG_REF:
+            *completed = parser_parse_config_ref(parser);
+            *done = CCTRUE;
+            return (*completed != CMK_AST_NODE_NIL)
+                ? CCTRUE : CCFALSE;
 
-            case CMK_TOK_IDENT:
+        case CMK_TOK_IDENT:
+        {
+            CMKToken token = parser->current;
+            CMKASTStringId name = parser_new_string(
+                parser, token.text, token.len
+            );
+            if (name == CMK_AST_STRING_NIL)
+                return CCFALSE;
+            if (!parser_advance(parser))
+                return CCFALSE;
+
+            if (parser->current.type == CMK_TOK_LPAREN)
             {
-                CMKToken token = parser->current;
-                CMKASTStringId name = parser_new_string(
-                    parser, token.text, token.len
-                );
-                if (name == CMK_AST_STRING_NIL)
-                    return CCFALSE;
                 if (!parser_advance(parser))
                     return CCFALSE;
-
-                if (parser->current.type == CMK_TOK_LPAREN)
-                {
-                    if (!parser_advance(parser))
-                        return CCFALSE;
-                    CMKASTNodeId call = parser_new_node(
-                        parser, CMK_AST_CALL, NULL
-                    );
-                    if (call == CMK_AST_NODE_NIL)
-                        return CCFALSE;
-                    CMKASTNode *node =
-                        cmk_ast_node_mut(parser->ast, call);
-                    if (!node)
-                        return CCFALSE;
-                    node->as.call.callee = name;
-                    frame->node = call;
-                    frame->callee = name;
-                    frame->callee_token = token;
-                    frame->stage = CMK_EXPR_STAGE_CALL;
-                    break;
-                }
-
-                CMKSourceSpan span = parser_token_span(&token);
-                CMKASTNodeId id = parser_new_node(
-                    parser, CMK_AST_IDENT, &span
+                CMKASTNodeId call = parser_new_node(
+                    parser, CMK_AST_CALL, NULL
                 );
-                if (id == CMK_AST_NODE_NIL)
+                if (call == CMK_AST_NODE_NIL)
                     return CCFALSE;
                 CMKASTNode *node =
-                    cmk_ast_node_mut(parser->ast, id);
+                    cmk_ast_node_mut(parser->ast, call);
                 if (!node)
                     return CCFALSE;
-                node->as.ident.name = name;
-                *completed = id;
-                *done = CCTRUE;
-                return CCTRUE;
-            }
-
-            case CMK_TOK_LPAREN:
-            {
-                CMKToken start = parser->current;
-                if (!parser_advance(parser))
-                    return CCFALSE;
-                frame->start = start;
-                frame->stage = CMK_EXPR_STAGE_PAREN;
-                CMKExprFrame child;
-                memset(&child, 0, sizeof(child));
-                child.task = CMK_EXPR_TASK_EXPR;
-                child.stage = CMK_EXPR_STAGE_START;
-                child.start = parser->current;
-                if (!parser_expr_push(parser, frames, &child))
-                    return CCFALSE;
-                *done = CCFALSE;
-                return CCTRUE;
-            }
-
-            case CMK_TOK_LBRACE:
-            {
-                frame->start = parser->current;
-                if (!parser_expect(
-                        parser, CMK_TOK_LBRACE, "左花括号"
-                    ))
-                    return CCFALSE;
-                CMKASTNodeId list = parser_new_node(
-                    parser, CMK_AST_LIST, NULL
-                );
-                if (list == CMK_AST_NODE_NIL)
-                    return CCFALSE;
-                frame->node = list;
-                frame->stage = CMK_EXPR_STAGE_LIST;
+                node->as.call.callee = name;
+                frame->node = call;
+                frame->callee = name;
+                frame->callee_token = token;
+                frame->stage = CMK_EXPR_STAGE_CALL;
                 break;
             }
 
-            case CMK_TOK_UNDERSCORE:
-                return parser_error_current(
-                    parser, "`_` 只能作为赋值目标"
-                ), CCFALSE;
-
-            default:
-                return parser_error_current(
-                    parser, "期望表达式，实际%s",
-                    cmk_token_type_name(parser->current.type)
-                ), CCFALSE;
-            }
-        }
-
-        if (frame->stage == CMK_EXPR_STAGE_PAREN)
-        {
-            if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
+            CMKSourceSpan span = parser_token_span(&token);
+            CMKASTNodeId id = parser_new_node(
+                parser, CMK_AST_IDENT, &span
+            );
+            if (id == CMK_AST_NODE_NIL)
                 return CCFALSE;
-            CMKSourceSpan span =
-                parser_make_span(&frame->start, &parser->previous);
-            if (!parser_set_node_span(parser, input, &span))
+            CMKASTNode *node =
+                cmk_ast_node_mut(parser->ast, id);
+            if (!node)
                 return CCFALSE;
-            *completed = input;
+            node->as.ident.name = name;
+            *completed = id;
             *done = CCTRUE;
             return CCTRUE;
         }
 
-        if (frame->stage == CMK_EXPR_STAGE_CALL ||
-            frame->stage == CMK_EXPR_STAGE_CALL_ARG)
+        case CMK_TOK_LPAREN:
         {
-            if (has_input)
-            {
-                if (!parser_append_child(parser, frame->node, input))
-                    return CCFALSE;
-                frame->count++;
-                if (parser->current.type == CMK_TOK_COMMA)
-                {
-                    if (!parser_advance(parser))
-                        return CCFALSE;
-                    if (parser->current.type == CMK_TOK_RPAREN)
-                        return parser_error_current(
-                            parser, "函数调用实参不允许尾逗号"
-                        ), CCFALSE;
-                    frame->stage = CMK_EXPR_STAGE_CALL_ARG;
-                    CMKExprFrame child;
-                    memset(&child, 0, sizeof(child));
-                    child.task = CMK_EXPR_TASK_EXPR;
-                    child.stage = CMK_EXPR_STAGE_START;
-                    child.start = parser->current;
-                    if (!parser_expr_push(parser, frames, &child))
-                        return CCFALSE;
-                    *done = CCFALSE;
-                    return CCTRUE;
-                }
-            }
-            else if (parser->current.type != CMK_TOK_RPAREN)
-            {
-                frame->stage = CMK_EXPR_STAGE_CALL_ARG;
-                CMKExprFrame child;
-                memset(&child, 0, sizeof(child));
-                child.task = CMK_EXPR_TASK_EXPR;
-                child.stage = CMK_EXPR_STAGE_START;
-                child.start = parser->current;
-                if (!parser_expr_push(parser, frames, &child))
-                    return CCFALSE;
-                *done = CCFALSE;
-                return CCTRUE;
-            }
-
-            if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
+            CMKToken start = parser->current;
+            if (!parser_advance(parser))
                 return CCFALSE;
-            CMKSourceSpan span =
-                parser_make_span(&frame->callee_token, &parser->previous);
-            if (!parser_set_node_span(parser, frame->node, &span))
-                return CCFALSE;
-            *completed = frame->node;
-            *done = CCTRUE;
-            return CCTRUE;
-        }
-
-        if (frame->stage == CMK_EXPR_STAGE_LIST ||
-            frame->stage == CMK_EXPR_STAGE_LIST_ELEM)
-        {
-            if (has_input)
-            {
-                if (!parser_append_child(parser, frame->node, input))
-                    return CCFALSE;
-                frame->count++;
-                if (parser->current.type == CMK_TOK_COMMA)
-                {
-                    if (!parser_advance(parser))
-                        return CCFALSE;
-                }
-                else if (parser->current.type != CMK_TOK_RBRACE)
-                {
-                    return parser_error_current(
-                        parser, "列表元素之间需要逗号或右花括号"
-                    ), CCFALSE;
-                }
-            }
-
-            if (parser->current.type == CMK_TOK_RBRACE)
-            {
-                if (!parser_expect(parser, CMK_TOK_RBRACE, "右花括号"))
-                    return CCFALSE;
-                CMKSourceSpan span =
-                    parser_make_span(&frame->start, &parser->previous);
-                if (!parser_set_node_span(parser, frame->node, &span))
-                    return CCFALSE;
-                *completed = frame->node;
-                *done = CCTRUE;
-                return CCTRUE;
-            }
-
-            if (parser->limits.max_list_elements != 0 &&
-                frame->count >= parser->limits.max_list_elements)
-                return parser_error_current(
-                    parser, "列表元素数量超过限制"
-                ), CCFALSE;
-
-            frame->stage = CMK_EXPR_STAGE_LIST_ELEM;
+            frame->start = start;
+            frame->stage = CMK_EXPR_STAGE_PAREN;
             CMKExprFrame child;
             memset(&child, 0, sizeof(child));
             child.task = CMK_EXPR_TASK_EXPR;
@@ -1123,9 +1002,210 @@ static CCBOOL parser_expr_step(
             return CCTRUE;
         }
 
-        return CCFALSE;
+        case CMK_TOK_LBRACE:
+        {
+            frame->start = parser->current;
+            if (!parser_expect(
+                    parser, CMK_TOK_LBRACE, "左花括号"
+                ))
+                return CCFALSE;
+            CMKASTNodeId list = parser_new_node(
+                parser, CMK_AST_LIST, NULL
+            );
+            if (list == CMK_AST_NODE_NIL)
+                return CCFALSE;
+            frame->node = list;
+            frame->stage = CMK_EXPR_STAGE_LIST;
+            break;
+        }
+
+        case CMK_TOK_UNDERSCORE:
+            return parser_error_current(
+                parser, "`_` 只能作为赋值目标"
+            ), CCFALSE;
+
+        default:
+            return parser_error_current(
+                parser, "期望表达式，实际%s",
+                cmk_token_type_name(parser->current.type)
+            ), CCFALSE;
+        }
+    }
+    return parser_expr_primary_resume(
+        parser, frame, frames, has_input, input, completed, done
+    );
+}
+
+static CCBOOL parser_expr_primary_resume(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+if (frame->stage == CMK_EXPR_STAGE_PAREN)
+    {
+        if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
+            return CCFALSE;
+        CMKSourceSpan span =
+            parser_make_span(&frame->start, &parser->previous);
+        if (!parser_set_node_span(parser, input, &span))
+            return CCFALSE;
+        *completed = input;
+        *done = CCTRUE;
+        return CCTRUE;
     }
 
+    if (frame->stage == CMK_EXPR_STAGE_CALL ||
+        frame->stage == CMK_EXPR_STAGE_CALL_ARG)
+    {
+        if (has_input)
+        {
+            if (!parser_append_child(parser, frame->node, input))
+                return CCFALSE;
+            frame->count++;
+            if (parser->current.type == CMK_TOK_COMMA)
+            {
+                if (!parser_advance(parser))
+                    return CCFALSE;
+                if (parser->current.type == CMK_TOK_RPAREN)
+                    return parser_error_current(
+                        parser, "函数调用实参不允许尾逗号"
+                    ), CCFALSE;
+                frame->stage = CMK_EXPR_STAGE_CALL_ARG;
+                CMKExprFrame child;
+                memset(&child, 0, sizeof(child));
+                child.task = CMK_EXPR_TASK_EXPR;
+                child.stage = CMK_EXPR_STAGE_START;
+                child.start = parser->current;
+                if (!parser_expr_push(parser, frames, &child))
+                    return CCFALSE;
+                *done = CCFALSE;
+                return CCTRUE;
+            }
+        }
+        else if (parser->current.type != CMK_TOK_RPAREN)
+        {
+            frame->stage = CMK_EXPR_STAGE_CALL_ARG;
+            CMKExprFrame child;
+            memset(&child, 0, sizeof(child));
+            child.task = CMK_EXPR_TASK_EXPR;
+            child.stage = CMK_EXPR_STAGE_START;
+            child.start = parser->current;
+            if (!parser_expr_push(parser, frames, &child))
+                return CCFALSE;
+            *done = CCFALSE;
+            return CCTRUE;
+        }
+
+        if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
+            return CCFALSE;
+        CMKSourceSpan span =
+            parser_make_span(&frame->callee_token, &parser->previous);
+        if (!parser_set_node_span(parser, frame->node, &span))
+            return CCFALSE;
+        *completed = frame->node;
+        *done = CCTRUE;
+        return CCTRUE;
+    }
+
+    if (frame->stage == CMK_EXPR_STAGE_LIST ||
+        frame->stage == CMK_EXPR_STAGE_LIST_ELEM)
+    {
+        if (has_input)
+        {
+            if (!parser_append_child(parser, frame->node, input))
+                return CCFALSE;
+            frame->count++;
+            if (parser->current.type == CMK_TOK_COMMA)
+            {
+                if (!parser_advance(parser))
+                    return CCFALSE;
+            }
+            else if (parser->current.type != CMK_TOK_RBRACE)
+            {
+                return parser_error_current(
+                    parser, "列表元素之间需要逗号或右花括号"
+                ), CCFALSE;
+            }
+        }
+
+        if (parser->current.type == CMK_TOK_RBRACE)
+        {
+            if (!parser_expect(parser, CMK_TOK_RBRACE, "右花括号"))
+                return CCFALSE;
+            CMKSourceSpan span =
+                parser_make_span(&frame->start, &parser->previous);
+            if (!parser_set_node_span(parser, frame->node, &span))
+                return CCFALSE;
+            *completed = frame->node;
+            *done = CCTRUE;
+            return CCTRUE;
+        }
+
+        if (parser->limits.max_list_elements != 0 &&
+            frame->count >= parser->limits.max_list_elements)
+            return parser_error_current(
+                parser, "列表元素数量超过限制"
+            ), CCFALSE;
+
+        frame->stage = CMK_EXPR_STAGE_LIST_ELEM;
+        CMKExprFrame child;
+        memset(&child, 0, sizeof(child));
+        child.task = CMK_EXPR_TASK_EXPR;
+        child.stage = CMK_EXPR_STAGE_START;
+        child.start = parser->current;
+        if (!parser_expr_push(parser, frames, &child))
+            return CCFALSE;
+        *done = CCFALSE;
+        return CCTRUE;
+    }
+
+    return CCFALSE;
+}
+
+static CCBOOL parser_expr_task_primary(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+    if (!has_input && frame->stage == CMK_EXPR_STAGE_START)
+        return parser_expr_primary_start(
+            parser, frame, frames, has_input, input, completed, done
+        );
+    return parser_expr_primary_resume(
+        parser, frame, frames, has_input, input, completed, done
+    );
+}
+
+static CCBOOL parser_expr_step(
+    CMKParser *parser, CMKExprFrame *frame, CCDyn *frames,
+    CCBOOL has_input, CMKASTNodeId input,
+    CMKASTNodeId *completed, CCBOOL *done
+)
+{
+    switch (frame->task)
+    {
+    case CMK_EXPR_TASK_EXPR:
+        return parser_expr_task_expr(
+            parser, frame, frames, has_input, input, completed, done
+        );
+    case CMK_EXPR_TASK_BINARY:
+        return parser_expr_task_binary(
+            parser, frame, frames, has_input, input, completed, done
+        );
+    case CMK_EXPR_TASK_UNARY:
+        return parser_expr_task_unary(
+            parser, frame, frames, has_input, input, completed, done
+        );
+    case CMK_EXPR_TASK_POSTFIX:
+        return parser_expr_task_postfix(
+            parser, frame, frames, has_input, input, completed, done
+        );
+    case CMK_EXPR_TASK_PRIMARY:
+        return parser_expr_task_primary(
+            parser, frame, frames, has_input, input, completed, done
+        );
     default:
         return CCFALSE;
     }
@@ -1211,422 +1291,6 @@ Failed:
     return CMK_AST_NODE_NIL;
 }
 
-#if 0
-static CMKASTNodeId parser_parse_list(CMKParser *parser)
-{
-    CMKToken start = parser->current;
-    if (!parser_expect(parser, CMK_TOK_LBRACE, "左花括号"))
-        return CMK_AST_NODE_NIL;
-
-    CMKASTNodeId list = parser_new_node(parser, CMK_AST_LIST, NULL);
-    if (list == CMK_AST_NODE_NIL)
-        return CMK_AST_NODE_NIL;
-
-    CCUINT32 count = 0;
-    if (parser->current.type != CMK_TOK_RBRACE)
-    {
-        for (;;)
-        {
-            if (parser->limits.max_list_elements != 0 &&
-                count >= parser->limits.max_list_elements)
-                return parser_error_current(
-                    parser, "列表元素数量超过限制"
-                ), CMK_AST_NODE_NIL;
-
-            CMKASTNodeId element = parser_parse_expression(parser);
-            if (element == CMK_AST_NODE_NIL)
-                return CMK_AST_NODE_NIL;
-            if (!parser_append_child(parser, list, element))
-                return CMK_AST_NODE_NIL;
-            count++;
-
-            if (parser->current.type == CMK_TOK_COMMA)
-            {
-                if (!parser_advance(parser))
-                    return CMK_AST_NODE_NIL;
-                if (parser->current.type == CMK_TOK_RBRACE)
-                    break;
-                continue;
-            }
-            if (parser->current.type == CMK_TOK_RBRACE)
-                break;
-            return parser_error_current(
-                parser, "列表元素之间需要逗号或右花括号"
-            ), CMK_AST_NODE_NIL;
-        }
-    }
-
-    if (!parser_expect(parser, CMK_TOK_RBRACE, "右花括号"))
-        return CMK_AST_NODE_NIL;
-
-    CMKSourceSpan span = parser_make_span(&start, &parser->previous);
-    if (!parser_set_node_span(parser, list, &span))
-        return CMK_AST_NODE_NIL;
-    return list;
-}
-
-static CCBOOL parser_parse_call_suffix(
-    CMKParser *parser, CMKASTNodeId call
-)
-{
-    if (!parser_expect(parser, CMK_TOK_LPAREN, "左圆括号"))
-        return CCFALSE;
-    if (parser->current.type != CMK_TOK_RPAREN)
-    {
-        for (;;)
-        {
-            CMKASTNodeId arg = parser_parse_expression(parser);
-            if (arg == CMK_AST_NODE_NIL)
-                return CCFALSE;
-            if (!parser_append_child(parser, call, arg))
-                return CCFALSE;
-
-            if (parser->current.type == CMK_TOK_COMMA)
-            {
-                if (!parser_advance(parser))
-                    return CCFALSE;
-                if (parser->current.type == CMK_TOK_RPAREN)
-                    return parser_error_current(
-                        parser, "函数调用实参不允许尾逗号"
-                    );
-                continue;
-            }
-            break;
-        }
-    }
-    return parser_expect(parser, CMK_TOK_RPAREN, "右圆括号");
-}
-
-static CMKASTNodeId parser_parse_ident_or_call(CMKParser *parser)
-{
-    CMKToken token = parser->current;
-    CMKASTStringId name = parser_new_string(
-        parser, token.text, token.len
-    );
-    if (name == CMK_AST_STRING_NIL)
-        return CMK_AST_NODE_NIL;
-
-    if (!parser_advance(parser))
-        return CMK_AST_NODE_NIL;
-
-    if (parser->current.type != CMK_TOK_LPAREN)
-    {
-        CMKSourceSpan span = parser_token_span(&token);
-        CMKASTNodeId id = parser_new_node(
-            parser, CMK_AST_IDENT, &span
-        );
-        if (id == CMK_AST_NODE_NIL)
-            return CMK_AST_NODE_NIL;
-        CMKASTNode *node = cmk_ast_node_mut(parser->ast, id);
-        if (!node)
-            return CMK_AST_NODE_NIL;
-        node->as.ident.name = name;
-        return id;
-    }
-
-    CMKASTNodeId call = parser_new_node(parser, CMK_AST_CALL, NULL);
-    if (call == CMK_AST_NODE_NIL)
-        return CMK_AST_NODE_NIL;
-    CMKASTNode *node = cmk_ast_node_mut(parser->ast, call);
-    if (!node)
-        return CMK_AST_NODE_NIL;
-    node->as.call.callee = name;
-
-    if (!parser_parse_call_suffix(parser, call))
-        return CMK_AST_NODE_NIL;
-
-    CMKSourceSpan span = parser_make_span(&token, &parser->previous);
-    if (!parser_set_node_span(parser, call, &span))
-        return CMK_AST_NODE_NIL;
-    return call;
-}
-
-static CMKASTNodeId parser_parse_primary(CMKParser *parser)
-{
-    switch (parser->current.type)
-    {
-    case CMK_TOK_INT:
-    case CMK_TOK_FLOAT:
-    case CMK_TOK_STRING:
-    case CMK_TOK_KW_TRUE:
-    case CMK_TOK_KW_FALSE:
-        return parser_parse_literal(parser);
-
-    case CMK_TOK_CONFIG_REF:
-        return parser_parse_config_ref(parser);
-
-    case CMK_TOK_IDENT:
-        return parser_parse_ident_or_call(parser);
-
-    case CMK_TOK_LPAREN:
-    {
-        CMKToken start = parser->current;
-        if (!parser_advance(parser))
-            return CMK_AST_NODE_NIL;
-        CMKASTNodeId expression = parser_parse_expression(parser);
-        if (expression == CMK_AST_NODE_NIL)
-            return CMK_AST_NODE_NIL;
-        if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
-            return CMK_AST_NODE_NIL;
-
-        CMKSourceSpan span = parser_make_span(&start, &parser->previous);
-        if (!parser_set_node_span(parser, expression, &span))
-            return CMK_AST_NODE_NIL;
-        return expression;
-    }
-
-    case CMK_TOK_LBRACE:
-        return parser_parse_list(parser);
-
-    case CMK_TOK_UNDERSCORE:
-        return parser_error_current(
-            parser, "`_` 只能作为赋值目标"
-        ), CMK_AST_NODE_NIL;
-
-    default:
-        return parser_error_current(
-            parser, "期望表达式，实际%s",
-            cmk_token_type_name(parser->current.type)
-        );
-    }
-}
-
-static CMKASTNodeId parser_parse_postfix(CMKParser *parser)
-{
-    CMKToken start = parser->current;
-    CMKASTNodeId base = parser_parse_primary(parser);
-    if (base == CMK_AST_NODE_NIL)
-        return CMK_AST_NODE_NIL;
-
-    while (parser->current.type == CMK_TOK_LBRACKET ||
-           parser->current.type == CMK_TOK_DOT)
-    {
-        if (parser->current.type == CMK_TOK_LBRACKET)
-        {
-            if (!parser_advance(parser))
-                return CMK_AST_NODE_NIL;
-            CMKASTNodeId index = parser_parse_expression(parser);
-            if (index == CMK_AST_NODE_NIL)
-                return CMK_AST_NODE_NIL;
-            if (!parser_expect(parser, CMK_TOK_RBRACKET, "右方括号"))
-                return CMK_AST_NODE_NIL;
-
-            CMKSourceSpan span =
-                parser_make_span(&start, &parser->previous);
-            CMKASTNodeId node = parser_new_node(
-                parser, CMK_AST_INDEX, &span
-            );
-            if (node == CMK_AST_NODE_NIL)
-                return CMK_AST_NODE_NIL;
-            if (!parser_append_child(parser, node, base) ||
-                !parser_append_child(parser, node, index))
-                return CMK_AST_NODE_NIL;
-            base = node;
-            continue;
-        }
-
-        if (!parser_advance(parser))
-            return CMK_AST_NODE_NIL;
-        if (parser->current.type != CMK_TOK_IDENT)
-            return parser_error_current(
-                parser, "成员访问需要标识符"
-            ), CMK_AST_NODE_NIL;
-
-        CMKASTStringId member = parser_new_string(
-            parser, parser->current.text, parser->current.len
-        );
-        if (member == CMK_AST_STRING_NIL)
-            return CMK_AST_NODE_NIL;
-        if (!parser_advance(parser))
-            return CMK_AST_NODE_NIL;
-
-        CMKSourceSpan span = parser_make_span(&start, &parser->previous);
-        CMKASTNodeId node = parser_new_node(
-            parser, CMK_AST_MEMBER, &span
-        );
-        if (node == CMK_AST_NODE_NIL)
-            return CMK_AST_NODE_NIL;
-        CMKASTNode *member_node = cmk_ast_node_mut(parser->ast, node);
-        if (!member_node)
-            return CMK_AST_NODE_NIL;
-        member_node->as.member.member = member;
-        if (!parser_append_child(parser, node, base))
-            return CMK_AST_NODE_NIL;
-        base = node;
-    }
-
-    return base;
-}
-
-typedef struct cmk_unary_prefix {
-    CMKToken token;
-    CMKUnaryOp op;
-} CMKUnaryPrefix;
-
-static CMKASTNodeId parser_parse_unary(CMKParser *parser)
-{
-    CCDyn prefixes;
-    memset(&prefixes, 0, sizeof(prefixes));
-    CCUINT32 count = 0;
-    CCUINT32 entered = 0;
-
-    while (parser->current.type == CMK_TOK_NOT ||
-           parser->current.type == CMK_TOK_MINUS ||
-           parser->current.type == CMK_TOK_PLUS)
-    {
-        CMKTokenType type = parser->current.type;
-        CMKUnaryPrefix prefix;
-        memset(&prefix, 0, sizeof(prefix));
-        prefix.token = parser->current;
-        prefix.op = (type == CMK_TOK_NOT) ? CMK_UNARY_NOT
-            : (type == CMK_TOK_MINUS) ? CMK_UNARY_NEG : CMK_UNARY_POS;
-
-        if (!parser_enter_expression(parser))
-            goto Failed;
-        entered++;
-        if (!cmk_dyn_push(
-                &prefixes, (CCUINT32)sizeof(CMKUnaryPrefix),
-                (CCINT32)sizeof(CMKUnaryPrefix), &prefix
-            ))
-        {
-            (void)parser_error_current(parser, "内存分配失败");
-            goto Failed;
-        }
-        count++;
-        if (!parser_advance(parser))
-            goto Failed;
-    }
-
-    if (count == 0)
-        return parser_parse_postfix(parser);
-
-    CMKUnaryPrefix *items = (CMKUnaryPrefix *)prefixes.array;
-    CMKASTNodeId base = CMK_AST_NODE_NIL;
-
-    // 最内层一元负号可直接构造 INT64_MIN；该层不生成 UNARY 节点。
-    if (items[count - 1].op == CMK_UNARY_NEG &&
-        parser->current.type == CMK_TOK_INT)
-    {
-        CCUINT64 magnitude = 0;
-        if (!parser_int_magnitude(
-                parser, &parser->current,
-                (CCUINT64)0x8000000000000000u, &magnitude
-            ))
-            goto Failed;
-        if (magnitude == (CCUINT64)0x8000000000000000u)
-        {
-            CMKToken int_token = parser->current;
-            CMKSourceSpan span = parser_make_span(
-                &items[count - 1].token, &int_token
-            );
-            base = parser_new_node(parser, CMK_AST_LITERAL, &span);
-            if (base == CMK_AST_NODE_NIL)
-                goto Failed;
-            CMKASTNode *literal = cmk_ast_node_mut(parser->ast, base);
-            if (!literal)
-                goto Failed;
-            literal->as.literal.kind = CMK_LITERAL_INT;
-            literal->as.literal.value.integer =
-                -((CCINT64)0x7FFFFFFFFFFFFFFF) - 1;
-            if (!parser_advance(parser))
-                goto Failed;
-            count--;
-            parser_leave_expression(parser);
-            entered--;
-        }
-    }
-
-    if (base == CMK_AST_NODE_NIL && count > 0)
-        base = parser_parse_postfix(parser);
-    if (base == CMK_AST_NODE_NIL)
-        goto Failed;
-
-    for (CCUINT32 i = count; i > 0; i--)
-    {
-        CMKUnaryPrefix *prefix = &items[i - 1];
-        CMKSourceSpan span =
-            parser_make_span(&prefix->token, &parser->previous);
-        CMKASTNodeId node = parser_new_node(
-            parser, CMK_AST_UNARY, &span
-        );
-        if (node == CMK_AST_NODE_NIL)
-            goto Failed;
-        CMKASTNode *unary = cmk_ast_node_mut(parser->ast, node);
-        if (!unary)
-            goto Failed;
-        unary->as.unary.op = prefix->op;
-        if (!parser_append_child(parser, node, base))
-            goto Failed;
-        base = node;
-        parser_leave_expression(parser);
-        entered--;
-    }
-
-    ccalloc(prefixes.array, 0, NULL);
-    return base;
-
-Failed:
-    for (CCUINT32 i = 0; i < entered; i++)
-        parser_leave_expression(parser);
-    if (prefixes.array)
-        ccalloc(prefixes.array, 0, NULL);
-    return CMK_AST_NODE_NIL;
-}
-
-static CMKASTNodeId parser_parse_binary(
-    CMKParser *parser, CCUINT32 min_bp
-)
-{
-    CMKToken start = parser->current;
-    CMKASTNodeId left = parser_parse_unary(parser);
-    if (left == CMK_AST_NODE_NIL)
-        return CMK_AST_NODE_NIL;
-
-    CCBOOL relational_seen = CCFALSE;
-    for (;;)
-    {
-        CMKBinaryOp op;
-        CCUINT32 lbp = 0;
-        CCBOOL relational = CCFALSE;
-        if (!parser_binary_operator(
-                parser->current.type, &op, &lbp, &relational
-            ))
-            break;
-        if (lbp < min_bp)
-            break;
-        if (relational && relational_seen)
-            return parser_error_current(
-                parser, "不支持链式比较"
-            ), CMK_AST_NODE_NIL;
-        if (relational)
-            relational_seen = CCTRUE;
-
-        if (!parser_advance(parser))
-            return CMK_AST_NODE_NIL;
-        CMKASTNodeId right = parser_parse_binary(parser, lbp + 1);
-        if (right == CMK_AST_NODE_NIL)
-            return CMK_AST_NODE_NIL;
-
-        CMKSourceSpan span = parser_make_span(&start, &parser->previous);
-        CMKASTNodeId node = parser_new_node(
-            parser, CMK_AST_BINARY, &span
-        );
-        if (node == CMK_AST_NODE_NIL)
-            return CMK_AST_NODE_NIL;
-        CMKASTNode *binary = cmk_ast_node_mut(parser->ast, node);
-        if (!binary)
-            return CMK_AST_NODE_NIL;
-        binary->as.binary.op = op;
-        if (!parser_append_child(parser, node, left) ||
-            !parser_append_child(parser, node, right))
-            return CMK_AST_NODE_NIL;
-        left = node;
-    }
-
-    return left;
-}
-
-#endif
 
 CMKASTNodeId parser_parse_expression(CMKParser *parser)
 {

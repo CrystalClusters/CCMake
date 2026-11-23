@@ -6,6 +6,7 @@
 #include "test_harness.h"
 #include "cmk_test_context.h"
 #include "cmk/cmk_exec_stack.h"
+#include "cmk/cmk_semantic_internal.h"
 
 #include <ccalloc.h>
 

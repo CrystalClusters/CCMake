@@ -12,34 +12,16 @@
 
 #include "cmk_builtin.h"
 #include "cmk_config.h"
+#include "cmk_policy.h"
 #include "cmk_semantic.h"
+#include "cmk_target_draft.h"
 
 typedef struct cmk_runtime CMKRuntime;
-
-/* 可配置执行策略；0 表示不限制 */
-typedef struct cmk_execution_policy {
-    CCUINT32 max_recursion_depth;
-    CCUINT64 max_steps;
-    CCUINT64 max_configure_time_ms;
-    CCUINT32 max_find_depth;
-    CCUINT32 max_processes;
-    CCUINT64 max_output_capture;
-} CMKExecutionPolicy;
-
-void cmk_execution_policy_init(CMKExecutionPolicy *policy);
 
 /* 跨模块函数调用时由 Program 提供 module -> runtime 映射 */
 typedef CMKRuntime *(*CMKRuntimeModuleResolver)(
     CMKRuntime *runtime, CMKSemanticModule *module
 );
-
-typedef struct cmk_target_draft {
-    const CMKTargetInfo *info;
-    CMKValue depends_on;   /* list<target_ref> */
-    CMKValue inputs;       /* list<string> */
-    CMKValue outputs;      /* list<string> */
-    CMKValue actions;      /* list<action> */
-} CMKTargetDraft;
 
 CMKRuntime *cmk_runtime_create(
     CMKSemanticModule *semantic,

@@ -8,6 +8,7 @@
 #include "ccvar.h"
 #include "ccmake_header.h"
 #include "cmk/cmk_program.h"
+#include "cmk/cmk_semantic_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -296,9 +297,9 @@ void test_cmk_program(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * PRG-008 并发策略继承 -j
+     * PRG-008 并发策略不依赖 CLI 全局状态
      * ---------------------------------------------------------------- */
-    CC_CASE("PRG-008", "并发策略继承");
+    CC_CASE("PRG-008", "并发策略边界");
     {
         CCUINT32 saved_jobs = ccmake_global_var.jobs;
         ccmake_global_var.jobs = 4;
@@ -307,8 +308,8 @@ void test_cmk_program(void)
         CMKExecutionPolicy policy;
         cmk_program_get_policy(ctx.program, &policy);
         CC_CHECK_EQ_I64(
-            "max_processes 继承 -j",
-            4, (CCINT64)policy.max_processes
+            "max_processes 不读取 CLI jobs",
+            0, (CCINT64)policy.max_processes
         );
         program_test_clear(&ctx);
         ccmake_global_var.jobs = saved_jobs;

@@ -1,6 +1,6 @@
-# CMK 构建计划与执行（M5-M9）
+# CMK 构建计划与执行
 
-本文记录 Lowering、IR、Scheduler、Process、Executor、增量缓存与并发调度的模块边界和测试入口。
+本文描述 Lowering、IR、Scheduler、Process、Executor、增量缓存与并发调度的模块边界和测试入口。
 
 ## 模块边界
 
@@ -13,7 +13,7 @@
 | `cmk_executor` | 按目标顺序执行动作，文件与进程动作 | 调度顺序 |
 | `cmk_cache` | 内容签名、命中/失效、原子写 | Parser、Executor |
 
-## M5：Target / Plan
+## Target / Plan
 
 - `CMKTargetKey` 稳定身份为 `module + name`；
 - `CMKPlanAction` 支持 exec/copy/move/remove/mkdir；
@@ -29,7 +29,7 @@
   - root 目标。
 - Program 在 Configure 后通过 `cmk_program_lower` 生成计划，`cmk_program_plan` 借用。
 
-## M6：Scheduler
+## Scheduler
 
 - 状态：PENDING/READY/RUNNING/SUCCESS/FAILED/BLOCKED/SKIPPED/CANCELLED；
 - 只执行 root 依赖闭包；
@@ -43,7 +43,7 @@
   - 成功执行后记录签名；
   - `-B` 通过 force 绕过。
 
-## M7：Process / Executor
+## Process / Executor
 
 - Windows `CreateProcessA` + Job Object：
   - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`；
@@ -62,7 +62,7 @@
 - Scheduler 在批次完成后按稳定批次顺序统一输出，保证并发日志确定性；
 - 文件动作直接使用宿主文件系统；进程动作经 `cmk_process`。
 
-## M8：增量缓存
+## Cache
 
 - 签名包含：目标身份、输入文件内容哈希、输出文件内容哈希、动作 program/argv/env/cwd；
 - 输出缺失或内容变化失效；
@@ -70,10 +70,10 @@
 - 缓存文件使用临时文件重命名，失败时回退直接写入；
 - 缓存不解析脚本，不依赖 Parser。
 
-## M9：并发调度
+## 并发调度
 
 - `cmk_scheduler_set_jobs` 设置 READY 批次并发上限；
-- 每轮收集依赖已完成的 READY 目标；
+- 每轮收集依赖为 SUCCESS/SKIPPED 的 READY 目标；
 - 聚合目标直接 SUCCESS；
 - 独立目标通过 Windows `CreateThread` / POSIX `pthread` 并行调用 Executor；
 - 主线程统一写目标状态，避免并发写 Plan；
@@ -82,11 +82,11 @@
 - keep-going 继续独立 READY；
 - 测试 `SCH-004` 覆盖 `jobs=2` 并发批次，`SCH-005` 覆盖缓存 SKIPPED。
 
-## 未完成
+## 行为边界
 
-- 立即取消正在运行的批次（当前 fail-fast 为批次粒度）；
-- 进程组/Job Object 的宽限期与强制终止策略细化；
-- 下游目标签名对依赖输出的自动传播（当前需显式列入 inputs）。
+- fail-fast 为批次粒度：已启动批次允许完成，失败后取消未启动目标；
+- 进程组/Job Object 的终止宽限期不可配置；
+- 下游目标签名不自动包含依赖目标输出，需显式列入 `inputs`。
 
 ## 测试
 

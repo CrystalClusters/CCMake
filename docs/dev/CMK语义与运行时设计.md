@@ -1,28 +1,28 @@
 # CMK 语义与运行时设计
 
-本文冻结 M3（Scope / Semantic）与 M4（Value / Configure 求值）的模块边界、数据模型、求值规则与验收范围。M3 只回答“名字和类型是否合法”，M4 只回答“合法的 Configure 程序如何求值”；两者都不生成 Build Plan，不执行外部命令。
+本文描述 Semantic 与 Runtime 的模块边界、数据模型、求值规则与测试范围。Semantic 只回答“名字和类型是否合法”，Runtime 只回答“合法的 Configure 程序如何求值”；两者都不生成 Build Plan，不执行外部命令。
 
-M3/M4 状态：已完成。M5-M9 已落地（IR/Plan、Scheduler、Process/Executor、Cache、并发调度），CLI 已串接 Configure → Lower → Scheduler → Executor。实现文件为 `cmk_value.*`、`cmk_config.*`、`cmk_builtin.*`、`cmk_builtin_std.c`、`cmk_semantic.*`、`cmk_runtime.*`、`cmk_program.*`，以及 `cmk_target.*`、`cmk_ir.*`、`cmk_scheduler.*`、`cmk_process.*`、`cmk_executor.*`、`cmk_cache.*`。
+实现范围：`cmk_value.*`、`cmk_config.*`、`cmk_builtin.*`、`cmk_builtin_std.c`、`cmk_semantic.*`、`cmk_runtime.*`、`cmk_program.*`，以及 `cmk_target.*`、`cmk_ir.*`、`cmk_scheduler.*`、`cmk_process.*`、`cmk_executor.*`、`cmk_cache.*`。CLI 路径为 Configure → Lower → Scheduler → Executor。
 
-## 1. 阶段目标与非目标
+## 1. 职责与非目标
 
-### 1.1 M3
+### 1.1 Semantic
 
 - 建立模块、函数、块、循环与 target 的作用域；
 - 检查变量、函数、内建函数、target 字段、配置引用与 target 引用的名称；
 - 检查类型、参数数量、返回类型、const、重复声明与 target 字段结构；
 - 解析配置引用路径并绑定配置树类型；
 - 解析 `@import` 暴露的函数与 target；
-- 为 M4 保存表达式类型、调用绑定和 target 引用绑定。
+- 为 Runtime 保存表达式类型、调用绑定和 target 引用绑定。
 
-### 1.2 M4
+### 1.2 Runtime
 
 - 实现值模型、深复制、列表/字符串/动作/目标引用所有权；
 - 求值算术、比较、逻辑、调用、索引、配置引用与 target 引用；
 - 执行变量声明、赋值、块、if、while、for-in、return、break、continue；
 - 支持用户函数、递归、跨模块函数调用；
 - 执行标准内建与动作构造器；
-- 求值根模块的 target 声明，生成 M4 的 target draft；
+- 求值根模块的 target 声明，生成 target draft；
 - 提供 `.cmk` 模块加载与 Configure 入口。
 
 ### 1.3 非目标
@@ -31,7 +31,7 @@ M3/M4 状态：已完成。M5-M9 已落地（IR/Plan、Scheduler、Process/Execu
 - 不创建进程，不执行 `command` 动作；
 - 不做 Scheduler、Executor、增量缓存；
 - 不做闭包、函数指针、匿名函数、动态调用；
-- 不把 target draft 冻结为稳定 IR；M5 才拥有 Plan。
+- 不把 target draft 冻结为稳定 IR；IR/Plan 拥有 Plan。
 
 ## 2. 模块边界
 
@@ -51,14 +51,14 @@ M3/M4 状态：已完成。M5-M9 已落地（IR/Plan、Scheduler、Process/Execu
   → Program：定位/读取/解析、导入图
   → Semantic：作用域、类型、绑定
   → Runtime：值、函数调用、Configure 求值
-  → CMKTargetDraft（M4 终点）
-  → M5 Lowering / Plan
+  → CMKTargetDraft（Runtime 终点）
+  → IR/Plan Lowering / Plan
 ```
 
 - Program 拥有 `CMKAST`、`CMKSemanticModule`、`CMKRuntime` 与模块表；
 - Semantic 借用 AST、Config、Builtin 注册表与诊断对象；
 - Runtime 借用 Semantic、Config、Builtin 与诊断对象；
-- AST 在 Runtime 完成前不释放；M5 生成 Plan 后才可释放；
+- AST 在 Runtime 完成前不释放；IR/Plan 生成 Plan 后才可释放；
 - Value 不依赖 AST 节点 ID，不借用 AST 字符串；
 - Builtin 处理函数通过 `CMKBuiltinCall` 访问 Runtime，不接触 Parser/AST。
 
@@ -131,7 +131,7 @@ typedef enum cmk_action_kind {
 - `mkdir` / `remove` 生成 path 动作；
 - `copy` / `move` 生成 from/to 动作；
 - 动作构造只复制参数，不创建进程；
-- M5 才把动作值转成 `CMKAction` IR。
+- IR/Plan 才把动作值转成 `CMKAction` IR。
 
 ## 4. Config 适配
 
@@ -169,11 +169,11 @@ typedef enum cmk_action_kind {
 
 | 类别 | 函数 | 状态 |
 |---|---|---|
-| 纯计算 | `len`、`join`、`subst`、`basename`、`dirname` | M4 可用 |
-| 只读查询 | `host_info` | M4 可用（`os`/`arch`/`cpu_count`/`path_separator`） |
-| 只读查询 | `find_files` | M4 可用：递归只读遍历并排序去重 |
-| 动作构造 | `command`、`mkdir`、`copy`、`move`、`remove` | M4 可用，返回动作值 |
-| 诊断 | `info`、`warn`、`error` | M4 可用；`error` 标记 fatal |
+| 纯计算 | `len`、`join`、`subst`、`basename`、`dirname` | Runtime 可用 |
+| 只读查询 | `host_info` | Runtime 可用（`os`/`arch`/`cpu_count`/`path_separator`） |
+| 只读查询 | `find_files` | Runtime 可用：递归只读遍历并排序去重 |
+| 动作构造 | `command`、`mkdir`、`copy`、`move`、`remove` | Runtime 可用，返回动作值 |
+| 诊断 | `info`、`warn`、`error` | Runtime 可用；`error` 标记 fatal |
 
 - `info`/`warn` 直接输出日志；`error` 写诊断并终止 Configure；
 - 格式化支持 `%s`、`%d`、`%f`、`%v`、`%%`；
@@ -304,10 +304,10 @@ typedef struct cmk_target_draft {
 ```
 
 - Configure 先初始化所有模块级全局变量，再求值根模块 target；
-- target draft 是 M4 的临时终点，不是 Plan；
+- target draft 是 Runtime 的临时终点，不是 Plan；
 - 同一配置中选中同名 target 报错；
 - 未导入的模块 target 不自动求值；
-- 导入 target 的闭包、Plan 冻结、目标选择、输出检查属于 M5。
+- 导入 target 的闭包、Plan 冻结、目标选择、输出检查属于 IR/Plan。
 
 ### 7.4 执行策略
 
@@ -326,7 +326,7 @@ typedef struct cmk_execution_policy {
 - Runtime 当前接入 `max_steps`（表达式/语句步数）、`max_recursion_depth`（函数调用深度）与 `max_configure_time_ms`（`clock()` CPU 时间）；`max_find_depth` 接入 `find_files` 目录栈；
 - `CMKProgram` 通过 `cmk_program_set_policy` 在 Configure 前把策略下发到各模块 Runtime；
 - `CMKProgram` 创建时读取 `CCMAKE_CMK_MAX_STEPS`、`CCMAKE_CMK_MAX_RECURSION_DEPTH`、`CCMAKE_CMK_MAX_CONFIGURE_TIME_MS`、`CCMAKE_CMK_MAX_FIND_DEPTH`、`CCMAKE_CMK_MAX_PROCESSES`、`CCMAKE_CMK_MAX_OUTPUT_CAPTURE` 环境变量；`max_processes` 未设置时继承 `-j/--jobs`；
-- `max_recursion_depth`、执行时间、并发、输出捕获字段保留给后续 VM/Scheduler/Executor；
+- `max_recursion_depth`、执行时间、并发、输出捕获字段由 Runtime/Scheduler/Executor 使用；
 - 策略失败写诊断并终止 Configure，不发布半成品 target draft。
 
 ## 8. Program
@@ -365,13 +365,13 @@ typedef struct cmk_execution_policy {
 | `CMKRUNTIME` | 全局变量、while、函数/递归、列表/字符串、target draft、for/break/continue、运行时错误、执行策略（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归/顶层 target 栈、线性/分支递归程序栈、通用语句上下文 VM、5000 层非 return 深递归、循环内递归 |
 | `CMKPROGRAM` | 根模块、跨模块函数、target 导入、通配/别名、@include、循环导入、导入错误、Program 执行策略、环境变量策略、并发策略继承、进程/捕获策略、非法环境变量回退 |
 
-M3/M4 完成后的全量验收：Debug/Release 全通过，`-fanalyzer` 无告警，`git diff --check` 通过。
+Debug/Release 全量测试通过，`-fanalyzer` 无告警，`git diff --check` 通过。
 
-## 11. 已知限制与后续
+## 11. 行为边界
 
-- `find_files` 当前使用 `CCFiles` 只读遍历；后续可扩展到更完整的跨平台路径规则与符号链接策略；
-- M4 只求值根模块 target；导入 target 的闭包与冻结属于 M5；
-- M4 不生成 Plan，不做目标选择/输出检查/依赖环检查；
-- 分配失败注入与覆盖引导 Fuzz 不纳入当前测试体系；
+- `find_files` 使用 `CCFiles` 只读遍历，不处理符号链接策略；
+- Runtime 只求值 Configure 与 target draft，不生成 Plan；导入 target 的闭包与冻结由 IR/Plan 处理；
+- Runtime 不做目标选择、输出检查、依赖环检查；
+- 分配失败注入与覆盖引导 Fuzz 不在测试体系内；
 - 语言层递归无固定配额，实际受宿主栈/内存约束；
 - `@include` 与根 `.ccm` 合并使用同一个配置树；同一字段的覆盖顺序按 `.cmk` 源顺序与 `.ccm` 解析顺序确定。

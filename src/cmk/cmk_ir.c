@@ -8,6 +8,8 @@
  */
 
 #include "cmk_ir.h"
+#include "cmk_semantic_internal.h"
+#include "cmk_target_internal.h"
 #include "cmk_safe.h"
 
 #include <ccalloc.h>

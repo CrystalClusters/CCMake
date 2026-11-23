@@ -8,6 +8,7 @@
  */
 
 #include "cmk_cache.h"
+#include "cmk_target_internal.h"
 #include "cmk_safe.h"
 
 #include <ccalloc.h>

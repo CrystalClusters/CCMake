@@ -306,7 +306,7 @@ Pratt 绑定力：
 
 ### 7.2 语义层拒绝
 
-以下内容语法接受，但由后续阶段拒绝：
+以下内容语法接受，由 Semantic/Program 拒绝：
 
 - 未声明的标识符、重复声明、未定义的函数与内建名覆盖；
 - 变量重赋值类型不匹配、`const` 重新赋值；
@@ -320,7 +320,7 @@ Pratt 绑定力：
 
 ## 8. 实现与测试
 
-M1 已落地：
+M1 实现文件：
 
 | 文件 | 职责 |
 |---|---|
@@ -339,7 +339,7 @@ M1 已落地：
 
 `CMK-027` 是确定性的随机字节输入测试，固定种子、固定轮数，用于保证 Lexer 在各种字节组合下不崩溃、不越界。
 
-M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶层声明和完整模块解析均已实现（`cmk_ast.c/h`、`cmk_limits.c/h`、`cmk_parser*.c/h`）。M3/M4 已完成：Value、Builtin、Semantic、Runtime 与 Program 已落地，详见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)。M2 的设计仍以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
+AST、Parser、Value、Builtin、Semantic、Runtime 与 Program 的实现文件为 `cmk_ast.c/h`、`cmk_limits.c/h`、`cmk_parser*.c/h`、`cmk_value.*`、`cmk_builtin.*`、`cmk_semantic.*`、`cmk_runtime.*`、`cmk_program.*`。设计以 [CMK AST 与解析设计](CMK%20AST与解析设计.md) 为准。
 
 | 套件 | 用例 | 覆盖 |
 |---|---|---|
@@ -377,7 +377,7 @@ M2 已完成：AST 数据模型、Parser 基础设施、表达式、语句、顶
 - 有文件与行号但无列号时省略列号；
 - 无位置信息时只输出消息；
 - 诊断消息动态分配，不设固定长度上限；
-- Lexer 只记录诊断，由调用方决定何时输出，便于后续 Parser 在单次错误中统一打印；
+- Lexer 只记录诊断，由调用方决定何时输出，Parser 在单次错误中统一打印；
 - token 数量、标识符长度、字符串长度不设语言层配额；`CCUINT32` 字段的表示上限在越界时给出明确诊断；
 - Parser 的实现资源预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)，预算可设为 0 关闭，不属于语言语义限制；
 - 行号或列号超过 `CCUINT32` 表示范围时，诊断分别为“行号超出表示上限”“列号超出表示上限”，不允许位置回绕；

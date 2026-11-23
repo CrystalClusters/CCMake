@@ -11,8 +11,8 @@
 #define _INCLUDE_CMK_IR_H_
 
 #include "cmk_diagnostic.h"
-#include "cmk_runtime.h"
 #include "cmk_target.h"
+#include "cmk_target_draft.h"
 
 typedef struct cmk_plan CMKPlan;
 
@@ -51,9 +51,5 @@ CMKTargetId cmk_plan_find_target(
 CMKTargetId cmk_plan_root(const CMKPlan *plan);
 CCUINT32 cmk_plan_order_count(const CMKPlan *plan);
 CMKTargetId cmk_plan_order_at(const CMKPlan *plan, CCUINT32 index);
-/* Scheduler 是状态唯一写入者；IR 只提供受控写入口 */
-void cmk_plan_set_target_state(
-    CMKPlan *plan, CMKTargetId id, CMKTargetState state
-);
 
 #endif

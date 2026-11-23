@@ -8,6 +8,7 @@
  */
 
 #include "cmk_executor.h"
+#include "cmk_target_internal.h"
 #include "cmk_process.h"
 #include "cmk_safe.h"
 

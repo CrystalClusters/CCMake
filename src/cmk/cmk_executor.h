@@ -10,7 +10,8 @@
 #ifndef _INCLUDE_CMK_EXECUTOR_H_
 #define _INCLUDE_CMK_EXECUTOR_H_
 
-#include "cmk_runtime.h"
+#include "cmk_diagnostic.h"
+#include "cmk_policy.h"
 #include "cmk_target.h"
 
 /* Executor 返回的结构化结果；message 由 Executor 持有到下一次 run */

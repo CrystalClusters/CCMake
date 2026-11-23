@@ -1,15 +1,15 @@
 # CMK AST 与解析设计
 
-本文冻结 M2 的 AST 数据模型、语法边界、解析策略、资源所有权与验收顺序。M2 的目标不是“尽快写出一个能跑的 Parser”，而是先让后续 M3 语义分析、M4 Runtime 和 M5 Lowering 依赖的结构稳定下来。
+本文描述 CMK 的 AST 数据模型、语法边界、解析策略、资源所有权与测试边界。
 
 - 语言能力与内建函数见 [CMK 文件规范](CMK文件规范.md)；
-- 模块划分与里程碑见 [CMK 实现细则](CMK实现细则.md)；
+- 模块划分与验证见 [CMK 实现细则](CMK实现细则.md)；
 - Token 与词法边界见 [CMK 词法与语法](CMK词法与语法.md)；
 - 代码风格见 [代码风格指南](代码风格指南.md)。
 
-本文是 M2.0 的设计冻结稿。M2.0 代码、M2.1 到 M2.5 的实现必须按本文执行；实现中发现的偏差先回写本文，再改代码。
+本文是 AST 与 Parser 的设计基线。代码、测试与本文保持一致；实现中发现偏差时先更新本文，再修改代码。
 
-## 1. 阶段边界
+## 1. 处理流程
 
 ```text
 CMKSource
@@ -28,7 +28,7 @@ CMKAST
   完整语法结构、源码位置、AST 级字符串表
         │
         ▼
-M3 Semantic Analysis
+Semantic Analysis
   名称解析、类型检查、作用域、目标闭包
 ```
 
@@ -36,7 +36,7 @@ M3 Semantic Analysis
 
 Parser 只做三件事：
 
-1. 判断 Token 序列是否符合已冻结的语法；
+1. 判断 Token 序列是否符合语法定义；
 2. 构建 AST 节点、字符串表和源码位置；
 3. 在失败时返回一条语法诊断，并且不发布半成品 AST。
 
@@ -45,11 +45,11 @@ Parser 只做三件事：
 | 禁止 | 原因 |
 |---|---|
 | Lexer 不知道 AST 的存在 | 词法阶段只产生 Token，避免层次耦合 |
-| Parser 不执行表达式、不求值 | 求值属于 M4 Configure；Parser 只构造语法树 |
-| Parser 不访问 `.ccm` 配置树 | 配置读取 `@{...}` 只是 AST 叶子，解析/解析后的绑定由 M3/M4 完成 |
-| Parser 不解析 `@import` 指向的模块内容 | 模块加载、循环检测、符号暴露由 M3/Program 负责 |
-| Parser 不创建 Target 或 Build Plan | Target 的语义闭包和 IR 属于 M3/M5 |
-| Parser 不调用任何内建函数 | `command`、`host_info` 等只是普通调用语法，由 M3 绑定内建签名 |
+| Parser 不执行表达式、不求值 | 求值属于 Configure；Parser 只构造语法树 |
+| Parser 不访问 `.ccm` 配置树 | 配置读取 `@{...}` 只是 AST 叶子，路径解析与绑定由 Semantic/Runtime 完成 |
+| Parser 不解析 `@import` 指向的模块内容 | 模块加载、循环检测、符号暴露由 Semantic/Program 负责 |
+| Parser 不创建 Target 或 Build Plan | Target 的语义闭包和 IR 属于 Semantic/IR |
+| Parser 不调用任何内建函数 | `command`、`host_info` 等只是普通调用语法，由 Semantic 绑定内建签名 |
 | Parser 不修改全局构建状态 | Parser 是纯函数式构建过程，输入 Token，输出 AST |
 | Parser 不读写 `CMKLexer.diagnostic` | 双方各持有自己的诊断对象，避免重复释放与状态污染 |
 
@@ -62,7 +62,7 @@ Parser 只做三件事：
 | 所有权 | Parser 借用 Lexer；AST 由 Parser 创建，成功后所有权转移给调用方 |
 | 诊断 | `CMKParser` 拥有自己的 `CMKDiagnostic`；Lexer 诊断只读复制 |
 
-## 2. 冻结决策摘要
+## 2. 设计决策摘要
 
 | 编号 | 决策 | 结论 |
 |---|---|---|
@@ -76,8 +76,8 @@ Parser 只做三件事：
 | D8 | 资源预算 | `CMKLimits` 统一控制 Token、AST 节点、语法深度、表达式深度、参数、列表元素与顶层声明数量 |
 | D9 | 文件拆分 | 不写单一巨型 `cmk_parser.c`；按基础、表达式、语句、声明拆分 |
 | D10 | `@include` | 设 `CMK_AST_INCLUDE_DECL`，Parser 只记录路径，不加载 `.ccm` |
-| D11 | Action | 不设 `CMK_AST_ACTION`；动作构造器按普通 `CMK_AST_CALL` 解析，M3 再分类 |
-| D12 | 配置引用 | `CMK_AST_CONFIG_REF` 保存原始路径字符串；Parser 校验路径语法，M3 解析段并绑定 |
+| D11 | Action | 不设 `CMK_AST_ACTION`；动作构造器按普通 `CMK_AST_CALL` 解析，Semantic 再分类 |
+| D12 | 配置引用 | `CMK_AST_CONFIG_REF` 保存原始路径字符串；Parser 校验路径语法，Semantic 解析段并绑定 |
 
 ## 3. AST 数据模型
 
@@ -349,18 +349,18 @@ typedef struct cmk_ast {
 | `CMK_AST_INDEX` | `[0]` 基表达式，`[1]` 下标表达式 | 无 | `base[index]` |
 | `CMK_AST_MEMBER` | `[0]` 基表达式 | `member` | `base.member`；用于 `别名.目标名` |
 | `CMK_AST_LIST` | 元素表达式列表 | 无 | `{ ... }` 列表字面量 |
-| `CMK_AST_CONFIG_REF` | 无 | `path` | `@{...}` 内部原始路径；Parser 校验语法，M3 解析段 |
+| `CMK_AST_CONFIG_REF` | 无 | `path` | `@{...}` 内部原始路径；Parser 校验语法，Semantic 解析段 |
 
 `CMK_AST_ASSIGN` 属于语句节点，不是表达式节点；它不能出现在 `BINARY`、`VAR_DECL` 初始化、`CALL` 实参等表达式位置。AST 校验按“语句根”处理它。
 
 #### 3.5.4 不设的节点
 
-| 建议节点 | M2 决定 | 原因 |
+| 建议节点 | AST/Parser 决定 | 原因 |
 |---|---|---|
-| `CMK_AST_ACTION` | 不设 | `command`、`mkdir` 等是普通调用；是否形成动作由 M3 按上下文与内建签名判定，Parser 不绑定内建 |
+| `CMK_AST_ACTION` | 不设 | `command`、`mkdir` 等是普通调用；是否形成动作由 Semantic 按上下文与内建签名判定，Parser 不绑定内建 |
 | `CMK_AST_IMPORT_ALIAS` | 不设 | 目标模块别名是 `IMPORT_DECL.alias`，函数别名是 `IMPORT_ITEM.alias`；别名不是独立语法结构 |
 | `CMK_AST_TARGET_BODY` | 不设 | Target 体是独立语法入口，字段直接挂在 `TARGET_DECL` 下，避免无意义包装 |
-| `CMK_AST_CONFIG_SEG` | M2 不设 | 配置路径以原始字符串保存；M3 解析为段并绑定，避免 Parser 与 M3 重复维护路径结构 |
+| `CMK_AST_CONFIG_SEG` | AST/Parser 不设 | 配置路径以原始字符串保存；Semantic 解析为段并绑定，避免 Parser 与 Semantic 重复维护路径结构 |
 
 `CMK_AST_MODULE`、`CMK_AST_INCLUDE_DECL`、`CMK_AST_DISCARD` 是相对建议清单的补充，分别用于 AST 根、`@include` 声明和 `_` 丢弃目标。
 
@@ -410,9 +410,9 @@ CCBOOL cmk_ast_visit(
 - `cmk_ast_create` 创建根 `CMK_AST_MODULE` 节点；根节点 ID 通常为 0，但调用方应使用 `cmk_ast_root`；
 - `cmk_ast_add_node` 返回 `CMK_AST_NODE_NIL` 表示失败；分配的是节点数组容量，不单独分配节点；
 - `cmk_ast_add_string` 返回 `CMK_AST_STRING_NIL` 表示失败；
-- `cmk_ast_append_child` 只接受尚未挂接的节点；子节点已有 parent、child 是根节点、`parent == child`、或 child 是 parent 的祖先时失败；
-- `cmk_ast_node_mut` 供 Parser 构建期和 M2.0 手工测试使用；AST 发布后调用方只使用 `cmk_ast_node`；
-- `cmk_ast_node` / `cmk_ast_string` 返回借用指针；节点指针在后续 `cmk_ast_add_node` 后失效，字符串数据指针在 AST 生命周期内稳定；
+- `cmk_ast_append_child` 只接受未挂接的节点；子节点已有 parent、child 是根节点、`parent == child`、或 child 是 parent 的祖先时失败；
+- `cmk_ast_node_mut` 供 Parser 构建期和手工测试使用；AST 发布后调用方只使用 `cmk_ast_node`；
+- `cmk_ast_node` / `cmk_ast_string` 返回借用指针；节点指针在再次调用 `cmk_ast_add_node` 后失效，字符串数据指针在 AST 生命周期内稳定；
 - `cmk_ast_visit` 先序遍历；visitor 返回 `CCFALSE` 时中断并返回 `CCFALSE`；
 - `cmk_ast_validate` 只读，不改树；失败时 `*reason` 指向静态字符串。
 
@@ -485,7 +485,7 @@ CCBOOL cmk_ast_visit(
 
 ### 4.1 完整 EBNF
 
-以下 EBNF 与 [CMK 词法与语法](CMK词法与语法.md) 保持同步，是 M2 的语法依据：
+以下 EBNF 与 [CMK 词法与语法](CMK词法与语法.md) 保持同步，是 AST/Parser 的语法依据：
 
 ```text
 file            := { import_decl | include_decl | top_item } ;
@@ -557,7 +557,7 @@ discard         := "_" ;
 - `top_if` 是顶层专用入口，分支只允许 `target_decl` 或嵌套 `top_if`；普通 `if_statement` 用于函数/块内；
 - `target_body` 是独立入口，不是普通 `block`；
 - 变量声明是 `block_item`，不是 `statement`：`if (cond) int x = 1;` 语法错误，需要写成 `if (cond) { int x = 1; }`；
-- `target_field` 的值是任意表达式，由 M3 检查是否为 `list<T>`；Parser 不把字段名限制为四个已知字段，未知字段保留 `CMK_TARGET_FIELD_UNKNOWN` 供 M3 报错；
+- `target_field` 的值是任意表达式，由 Semantic 检查是否为 `list<T>`；Parser 不把字段名限制为四个已知字段，未知字段保留 `CMK_TARGET_FIELD_UNKNOWN` 供 Semantic 报错；
 - `@include` 与 `@import` 都只记录路径，不加载文件；
 - `config_ref` 的 `config_path` 由 Parser 校验字符级语法，AST 只保存原始路径字符串；
 - 列表字面量允许尾逗号；函数调用实参不允许尾逗号（第一版）。
@@ -571,7 +571,7 @@ discard         := "_" ;
 | 一元 | `!`、`-` | `!`、`-`、`+` | 与 C 风格一致；一元 `+` 仅用于数值 |
 | 调用 | 任意 postfix 可调用 | 只有裸标识符可调用 | 无函数指针、无闭包；`（f)()` 与 `f()()` 语法拒绝 |
 | 顶层 if | 任意语句 | 只允许 target/top_if | 顶层 if 只用于选择目标声明 |
-| `@include` | 只有声明语义 | 增加 `CMK_AST_INCLUDE_DECL` | M3/Program 需要加载 `.ccm` |
+| `@include` | 只有声明语义 | 增加 `CMK_AST_INCLUDE_DECL` | Semantic/Program 需要加载 `.ccm` |
 | `{}` | 通用 `parse_braces` 风险 | 三个独立入口 | 消除代码块与列表字面量的歧义 |
 
 ### 4.3 优先级与结合性
@@ -583,11 +583,11 @@ discard         := "_" ;
 | 1 | 调用 `()`、索引 `[]`、成员 `.` | 左 | 调用只允许裸标识符；index/member 可叠加 |
 | 2 | 一元 `!` `-` `+` | 右 | `+` 只对数值合法 |
 | 3 | `*` `/` `%` | 左 | |
-| 4 | `+` `-` | 左 | `+` 的字符串/列表分派由 M3 决定 |
+| 4 | `+` `-` | 左 | `+` 的字符串/列表分派由 Semantic 决定 |
 | 5 | `<` `>` `<=` `>=` | 非链式 | 每个关系表达式最多一个关系运算符 |
 | 6 | `==` `!=` | 左 | `a == b == c` 仍按左结合解析 |
-| 7 | `&&` | 左 | 短路求值由 M4 负责 |
-| 8 | `\|\|` | 左 | 短路求值由 M4 负责 |
+| 7 | `&&` | 左 | 短路求值由 Runtime 负责 |
+| 8 | `\|\|` | 左 | 短路求值由 Runtime 负责 |
 | — | `=` `+=` | 语句级 | 不进入表达式优先级表 |
 
 Pratt 绑定力（`lbp`）：
@@ -610,7 +610,7 @@ a + b * c        → a + (b * c)
 a * b + c        → (a * b) + c
 a - b - c        → (a - b) - c
 a < b < c        → 语法错误：不支持链式比较
-a == b == c      → (a == b) == c（允许，类型检查由 M3 负责）
+a == b == c      → (a == b) == c（允许，类型检查由 Semantic 负责）
 a == b < c       → a == (b < c)（允许）
 !-a              → !(-a)
 -a * b           → (-a) * b
@@ -671,7 +671,7 @@ static CMKASTNodeId parser_parse_list(CMKParser *parser, ...);
 f()                  // CALL，callee = "f"
 f(a, b)              // CALL
 f()[0]               // INDEX(CALL(f), 0)
-f().name             // MEMBER(CALL(f), "name")，M3 判断是否合法
+f().name             // MEMBER(CALL(f), "name")，Semantic 判断是否合法
 common.core          // MEMBER(IDENT("common"), "core")
 files[0]             // INDEX(IDENT("files"), 0)
 (f)()                // 语法错误：调用只允许裸标识符
@@ -680,7 +680,7 @@ f()()                // 语法错误：第二个 () 没有语法入口
 
 - 不支持函数指针、匿名函数、闭包、动态调用；
 - 成员访问是静态名字，成员名复制到 AST；
-- 目标引用 `别名.目标名` 与普通成员访问共用 `CMK_AST_MEMBER`，由 M3 判断上下文是否合法。
+- 目标引用 `别名.目标名` 与普通成员访问共用 `CMK_AST_MEMBER`，由 Semantic 判断上下文是否合法。
 
 ### 4.7 `@include` 与 `@import`
 
@@ -690,14 +690,14 @@ f()()                // 语法错误：第二个 () 没有语法入口
 - `@import target ... as 别名` → `CMK_AST_IMPORT_DECL(kind=TARGET)`，`alias` 必填；
 - 函数导入的 `as` 只能用于单个函数名；批量导入带 `as` 由 Parser 报语法错误；
 - 目标导入的 `as` 是模块别名，不是单个目标重命名；
-- Parser 不检查目标是否存在、不检查模块循环、不合并符号；这些属于 M3/Program。
+- Parser 不检查目标是否存在、不检查模块循环、不合并符号；这些属于 Semantic/Program。
 
 ### 4.8 配置引用 `@{...}`
 
 - Lexer 已保证花括号内部只含标识符字符、`.`、`[`、`]`；
 - Parser 校验 `config_path` 形状：至少一个 key，`.` 后必须是 key，`[]` 内必须是十进制数字；
 - AST 保存花括号内部原始字节（`CMK_AST_CONFIG_REF.path`），不拆段；
-- M3 负责按 `.`/`[]` 拆段并查询配置树；
+- Semantic 负责按 `.`/`[]` 拆段并查询配置树；
 - Parser 不访问 `.ccm`，缺失字段属于 Configure 阶段错误。
 
 ### 4.9 顶层 if
@@ -739,7 +739,7 @@ if (@{debug}) {
 }
 ```
 
-条件化函数/变量声明会让模块符号表变成条件相关：导入该模块的其他文件可能看到不同的函数集合，M3 必须先求值配置条件才能做名称解析；模块级变量初始化顺序、函数可见性、目标字段求值环境都会随之不稳定。需要条件行为时，把分支放进无条件声明的函数体：
+条件化函数/变量声明会让模块符号表变成条件相关：导入该模块的其他文件可能看到不同的函数集合，Semantic 必须先求值配置条件才能做名称解析；模块级变量初始化顺序、函数可见性、目标字段求值环境都会随之不稳定。需要条件行为时，把分支放进无条件声明的函数体：
 
 ```c
 func log(string msg) -> void {
@@ -753,7 +753,7 @@ func log(string msg) -> void {
 
 ### 4.10 不设 Action 节点
 
-`command`、`mkdir`、`copy`、`move`、`remove` 在语法上只是普通调用。Parser 不根据名字建立 `CMK_AST_ACTION`，也不检查参数数量。M3 在目标 `actions` 字段的上下文中绑定内建签名，M5 再生成动作 IR。
+`command`、`mkdir`、`copy`、`move`、`remove` 在语法上只是普通调用。Parser 不根据名字建立 `CMK_AST_ACTION`，也不检查参数数量。Semantic 在目标 `actions` 字段的上下文中绑定内建签名，IR/Plan 再生成动作 IR。
 
 这样做的原因：
 
@@ -830,7 +830,7 @@ Parser 保存 `current`、`previous` 和最多一个 `lookahead` Token。Lexer �
 4. `parser_advance` 先把 `current` 记为 `previous`，再取下一个 Token；`previous` 只使用 `offset`/`width`/`line`/`col` 计算 span，不再使用其 `text`/`string`；
 5. Parser 不在 Token 结构中长期保存字符串指针，AST 只保存字符串 ID。
 
-这样既满足 M2 需要的单 Token 前瞻，也避免 `current` 的字符串缓冲被 `lookahead` 覆盖。
+这样既满足 AST/Parser 需要的单 Token 前瞻，也避免 `current` 的字符串缓冲被 `lookahead` 覆盖。
 
 ### 5.4 入口函数拆分
 
@@ -960,15 +960,15 @@ void cmk_limits_init(CMKLimits *limits);
 
 ### 6.3 与“无语言层配额”的关系
 
-[CMK 实现细则](CMK实现细则.md) §10 规定 CMK 不设置语言层的 token、AST 节点、列表长度等配额。M2 的 `CMKLimits` 是 **Parser 的实现资源预算**，不是语言语义限制：
+[CMK 实现细则](CMK实现细则.md) §10 规定 CMK 不设置语言层的 token、AST 节点、列表长度等配额。AST/Parser 的 `CMKLimits` 是 **Parser 的实现资源预算**，不是语言语义限制：
 
 - 计数类预算（Token、AST 节点、函数参数、列表元素、顶层声明）默认全部为 0，即只受内存与 `CCUINT32`/`CCDyn` 表示边界约束；分配失败由 Parser 转换成明确诊断；
 - 深度类预算（语法嵌套、表达式递归）默认 0，即不设置语言能力上限；它们只作为可配置执行策略保留；
 - Parser 的类型、一元链、表达式（括号/列表/调用/索引/成员）、语句/块/if/while/for、target 顶层 if 均已迁移到显式栈；Parser 常规路径不再依赖 C 递归；
-- 深度默认值按 Windows 默认 1 MiB 栈保守取值；如果 M2.5 在 Windows/Linux/Android 完成压测，并确认目标平台统一使用更大栈，可以提高默认值；
-- 所有字段都可以显式设为 0 关闭；正常项目的 AST 结构不依赖这些数字，M3/M4 不读取预算作为语义信息。
+- 深度默认值按 Windows 默认 1 MiB 栈保守取值；如果 AST/Parser.5 在 Windows/Linux/Android 完成压测，并确认目标平台统一使用更大栈，可以提高默认值；
+- 所有字段都可以显式设为 0 关闭；正常项目的 AST 结构不依赖这些数字，Semantic/Runtime 不读取预算作为语义信息。
 
-如果后续决定完全取消默认计数预算，只需修改 `cmk_limits_init`，Parser 代码不变。
+取消默认计数预算时，只需修改 `cmk_limits_init`，Parser 代码不变。
 
 ### 6.4 其他边界
 
@@ -1006,24 +1006,6 @@ tests/cmk/
 ```
 
 构建脚本已经递归收集 `src/**/*.c` 和 `tests/cmk/*.c`；新增文件不需要改构建脚本，只需在 `tests/test.c` 注册新套件。
-
-## 8. M2 子阶段与验收
-
-| 子阶段 | 工作 | 验收 |
-|---|---|---|
-| M2.0 | AST 数据模型、字符串表、span、所有权、校验、visitor、`CMKLimits` | 手工创建/遍历/销毁 AST；节点/字符串/文件所有权正确；校验能发现孤儿、环、子节点数量错误 |
-| M2.1 | Parser 基础设施：Token 缓冲、advance/peek/expect、诊断、预算、事务外壳 | 空文件、EOF、非法 Token 序列、初始化失败、Lexer 诊断复制、预算超限 |
-| M2.2 | 表达式 Parser：literal、ident、config ref、list、call、index、member、unary、binary | 优先级/结合性矩阵全部通过；链式比较拒绝；赋值不进入表达式 |
-| M2.3 | 语句 Parser：变量声明、赋值、block、if/while/for-in/return/break/continue | 函数体内全部语句可解析；嵌套块与 else-if 正确 |
-| M2.4 | 顶层声明：函数、target、target 字段、`@import`、`@include`、顶层 if | 完整模块文件可解析；导入/包含只记录不加载 |
-| M2.5 | 集成与压力测试：文档示例、深嵌套、限制、失败回滚、确定性随机输入 | 失败路径不发布 AST、无泄漏；Debug/Release 全通过 |
-
-每个子阶段先写测试，再实现功能；不得跨阶段合并。M2.0 的本文档是编码前置条件。
-
-M2.0 状态：已完成。`cmk_ast.c/h`、`cmk_limits.c/h` 与 `CMKAST` 套件（10 个用例）已落地。
-M2.1 状态：已完成。`cmk_parser.h`、`cmk_parser_internal.h`、`cmk_parser.c` 与 `CMKPARSER` 套件（11 个用例）已落地。
-M2.2–M2.5 状态：已完成。表达式、语句、顶层声明、预算/压力/确定性随机输入测试分别落在 `cmk_parser_expr.c`、`cmk_parser_stmt.c`、`cmk_parser_decl.c` 与 `CMKEXPR`、`CMKSTMT`、`CMKDECL`、`CMKSTRESS` 套件；Parser 已能解析完整模块。
-M3/M4 状态：已完成。M5-M9 的 IR、Scheduler、Process/Executor、Cache、并发调度与 CLI 串接已落地。语义与运行时边界见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)，计划/执行见 [CMK 构建计划与执行](CMK构建计划与执行.md)。
 
 ## 9. 测试计划
 
@@ -1079,23 +1061,12 @@ M3/M4 状态：已完成。M5-M9 的 IR、Scheduler、Process/Executor、Cache�
 
 测试通过 `cmk_ast_visit` 生成固定 S-expression 文本，用于 golden 比较；序列化器只存在于 `tests/cmk/`，不是公共 API。正式调试输出如果以后需要，再提升为 `cmk_ast_dump`。
 
-## 10. 后续与未决
+## 10. 行为边界
 
-- M2 不做多错误恢复；首错终止；
-- M2 不实现 `CMK_AST_ACTION`；动作构造器由 M3 分类；
-- M2 不把配置路径拆成 AST 段；M3 解析 `CMK_AST_CONFIG_REF.path`；如果 M3 需要共享段结构，再在不改变 `CONFIG_REF` 节点的前提下增加段表，M2 不提前引入；
-- M2 不加载 `@include`/`@import` 文件；M3/Program 负责模块加载、循环检测和符号表；
-- M2 不做常量折叠、类型检查、目标闭包；
-- `CCINT64_MIN` 已通过 `-9223372036854775808` 的特殊字面量路径支持，不再是已知限制；
-- Parser 预算默认值如果与项目实际规模冲突，在 M2.0 编码前调整本表；
-- AST 公开访问接口稳定；节点内部布局允许后续在保持 API 的前提下调整。
-
-## 11. 与现有文档的关系
-
-- [CMK 词法与语法](CMK词法与语法.md)：已同步更新本文 §4 的 EBNF、优先级、赋值语句化、链式比较、调用限制与顶层 if；
-- [CMK 实现细则](CMK实现细则.md)：文件布局加入 `cmk_limits.h` 与拆分后的 Parser 文件；§10 增加 Parser 资源预算说明；
-- [开发手册](开发手册.md)：挂接本文链接；
-- M2.0 的 `cmk_ast`、`cmk_limits` 与 `CMKAST` 测试已按本文落地；
-- M2.1 的 Parser 基础设施与 `CMKPARSER` 测试已落地；
-- M2.2–M2.5 的表达式、语句、声明、预算/压力/确定性随机输入测试已落地；M2 完成；
-- M3/M4 的 Value、Builtin、Semantic、Runtime、Program 测试已落地；下一步进入 M5。
+- Parser 首错终止，不做多错误恢复；
+- Parser 不生成 `CMK_AST_ACTION`；动作构造器由 Semantic 分类；
+- 配置引用在 AST 中保存为路径字符串，不拆成段表；
+- Parser 不加载 `@include` / `@import` 文件；模块加载、循环检测和符号表由 Program 负责；
+- Parser 不做常量折叠、类型检查、目标闭包；
+- `-9223372036854775808` 通过特殊字面量路径解析为 `INT64_MIN`；
+- AST 公开访问接口稳定；节点内部布局可在保持 API 的前提下调整。

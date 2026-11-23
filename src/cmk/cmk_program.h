@@ -35,7 +35,8 @@ void cmk_program_set_target_name(
 /* 显式 Lowering；Configure 默认按目标名自动调用 */
 CCBOOL cmk_program_lower(CMKProgram *program, const char *target_name);
 const CMKPlan *cmk_program_plan(const CMKProgram *program);
-CMKPlan *cmk_program_plan_mut(CMKProgram *program);
+/* 转移 Plan 所有权；成功后 Program 不再持有 Plan */
+CMKPlan *cmk_program_take_plan(CMKProgram *program);
 /* 设置 Configure 执行策略；应在 cmk_program_configure 前调用 */
 void cmk_program_set_policy(
     CMKProgram *program, const CMKExecutionPolicy *policy
@@ -44,7 +45,6 @@ void cmk_program_get_policy(
     const CMKProgram *program, CMKExecutionPolicy *policy
 );
 
-CMKRuntime *cmk_program_root_runtime(const CMKProgram *program);
 const CMKProgramModule *cmk_program_root_module(
     const CMKProgram *program
 );
@@ -65,6 +65,4 @@ const CMKTargetDraft *cmk_program_target_at(
 );
 
 /* main 流程入口：加载并 Configure 当前 -f 文件 */
-CCBOOL parse_cmk(void);
-
 #endif

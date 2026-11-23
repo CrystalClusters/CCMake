@@ -178,7 +178,7 @@ target app() {
 - 函数不能声明目标，也不能执行外部命令；
 - 内置函数与用户函数共用调用语法，但内置函数由语义层绑定，不进入用户符号表。
 
-结论：函数调用实现成本主要在作用域、类型检查和调用帧，不涉及进程或构建图，适合在 M3/M4 完成，是可控的。
+结论：函数调用实现成本主要在作用域、类型检查和调用帧，不涉及进程或构建图，适合在 Semantic/Runtime 完成，是可控的。
 
 可行性分解：
 
@@ -665,7 +665,7 @@ CANCELLED
 
 | 状态 | 含义 |
 |---|---|
-| `PENDING` | 依赖未完成 |
+| `PENDING` | 依赖非终态 |
 | `READY` | 依赖全部成功，可调度 |
 | `RUNNING` | 已分配给 Executor |
 | `SUCCESS` | 自身动作全部成功 |
@@ -676,12 +676,12 @@ CANCELLED
 
 ### 6.2 策略
 
-- 默认 fail-fast：首个任务失败后取消 READY/RUNNING 中不相关任务；
+- 默认 fail-fast：批次完成后不再启动后续任务，取消未启动目标；
 - `-k/--keep-going`：继续执行不依赖失败目标的独立任务；
 - 依赖失败的目标进入 `BLOCKED`；
 - 聚合目标在所有依赖成功后 `SUCCESS`，否则 `BLOCKED`；
-- `-j` 控制 READY 队列并发；
-- 第一版 Scheduler 单线程，后续把 READY 交给线程池；
+- `-j` 控制 READY 批次并发上限；
+- READY 批次通过 `CreateThread` / `pthread` 并发执行，状态由主线程统一更新；
 - Scheduler 不直接创建进程，只调用 Executor 接口。
 
 ### 6.3 选择目标
@@ -749,13 +749,13 @@ signature = Hash(
 - 环境变量只纳入显式读取或动作声明的部分；
 - 缓存文件带版本号和原子写；
 - `-B` 绕过缓存；
-- 增量模块可以在 M8 接入，IR 从 M5 就保留字段。
+- 增量模块可以在 Cache 接入，IR 从 IR/Plan 就保留字段。
 
 ## 9. 模块与文件布局
 
 ```text
 src/cmk/
-  cmk_program.c/h       模块加载、导入图、Configure 入口（M3/M4）
+  cmk_program.c/h       模块加载、导入图、Configure 入口（Semantic/Runtime）
   cmk_source.c/h        源码缓冲区和位置
   cmk_token.h
   cmk_lexer.c/h
@@ -775,19 +775,18 @@ src/cmk/
   cmk_builtin_std.c      标准内建与动作构造器
   cmk_semantic.c/h       作用域、类型、函数、导入、target
   cmk_runtime.c/h        Configure 求值、函数帧、target draft
-  cmk_ir.c/h             M5
-  cmk_target.c/h         M5
-  cmk_scheduler.c/h      M6
-  cmk_process.c/h        M7
-  cmk_executor.c/h       M6/M7
-  cmk_cache.c/h          M8
+  cmk_ir.c/h             IR/Plan
+  cmk_target.c/h         IR/Plan
+  cmk_scheduler.c/h      Scheduler
+  cmk_process.c/h        Process/Executor
+  cmk_executor.c/h       Scheduler/Process/Executor
+  cmk_cache.c/h          Cache
 ```
 
 - 构建脚本递归编译 `src/`，`src/cmk/` 无需修改构建入口；
 - 测试放 `tests/cmk/`，并加入 `scripts/build_test.*` 的测试目录；
-- 不一次性创建所有文件，按里程碑逐步落地；
-- `cmk_program` 是源码、AST、Semantic、Runtime、诊断与模块表的根所有者；M5 加入 IR 所有权；
-- M2 的 AST 数据模型、Parser 拆分、所有权与预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)。
+- `cmk_program` 是源码、AST、Semantic、Runtime、诊断与模块表的根所有者；IR/Plan 拥有 Plan 所有权；
+- AST/Parser 的 AST 数据模型、Parser 拆分、所有权与预算见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)。
 
 ## 10. 资源与失败
 
@@ -804,22 +803,21 @@ Parser 提供可配置的实现资源预算（`CMKLimits`）：计数类预算�
 - stdout/stderr 默认流式处理，捕获时动态缓冲；
 - `-j` 是并发控制参数，不是语言能力限制。
 
-## 11. 实施顺序
+## 11. 模块与验证
 
-| 阶段 | 工作 | 验收 |
+| 模块 | 职责 | 验证 |
 |---|---|---|
-| M0 | 语言规范、EBNF、样例、诊断、所有权表、内建 ABI | 语法、目标模型和内建接口冻结 |
-| M1 | Lexer | Token 序列、位置、长度和错误测试 |
-| M2 | AST / Parser（见 [CMK AST 与解析设计](CMK%20AST与解析设计.md)） | AST 所有权与校验、表达式优先级、完整样例 AST golden test |
-| M3 | Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
-| M4 | Value / Configure 求值 | 表达式、函数、内建调用、while 可运行；不执行外部命令（已完成；见 [CMK 语义与运行时设计](CMK语义与运行时设计.md)） |
-| M5 | Lowering / IR / Plan Validation | 已完成：目标/动作 IR、冻结验证、拓扑序 |
-| M6 | 单线程 Scheduler + fake Executor | 已完成：依赖、失败、BLOCKED、-k 正确 |
-| M7 | Process / Executor | 已完成：真实命令、文件动作、捕获上限 |
-| M8 | 增量缓存 | 已完成：签名、缺失输出、-B |
-| M9 | 并发调度 | 已完成：`-j` READY 批次并发、状态一致、独立任务测试 |
+| Lexer | Token 序列、位置、长度和错误 | Lexer 套件 |
+| AST / Parser | AST 所有权与校验、表达式优先级、完整模块解析 | AST/Parser/EXPR/STMT/DECL/STRESS 套件 |
+| Scope / Semantic | 名称、类型、函数、内建签名、目标引用错误 | Semantic 套件 |
+| Value / Configure | 表达式、函数、内建调用、while、target draft | Runtime/Configure 套件 |
+| Lowering / IR | 目标/动作 IR、冻结验证、拓扑序 | IR/Program 套件 |
+| Scheduler | 依赖、失败、BLOCKED、keep-going、并发 READY | Scheduler 套件 |
+| Process / Executor | 外部命令、文件动作、捕获上限 | Process/Executor 套件 |
+| Cache | 内容签名、缺失输出、`-B` | Cache 套件 |
+| 并发 | `-j` READY 批次并发 | Scheduler 并发用例 |
 
-每个阶段先写独立测试，再实现功能；不得跨阶段合并。
+模块测试独立运行，不跨模块共享状态。
 
 ## 12. 测试边界
 

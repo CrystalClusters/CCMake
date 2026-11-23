@@ -656,345 +656,6 @@ static CCBOOL parser_push_value(
     return parser_map_result(p, r, what);
 }
 
-#if 0
-static CCBOOL parser_parse_builtin(CCMParser *p, const char *path)
-{
-    char *value = NULL;
-    CCUINT32 len = 0;
-    if (!ccm_builtin_eval(
-            p->ctx, p->tok.text, p->tok.len, p->tree,
-            &value, &len, p->lex.file, p->tok.line
-        )
-    )
-        return CCFALSE;
-    CCBOOL ok = parser_set_value(
-        p, path, CC_VAR_STRING, value, len,
-        CC_VAR_WRITE_REPLACE, "写入内建函数结果"
-    );
-    if (value)
-        ccalloc(value, 0, NULL);
-    return ok;
-}
-
-#endif
-#if 0
-static CCBOOL parser_parse_value(
-    CCMParser *p,
-    const char *path,
-    CCVarWriteMode object_mode,
-    CCUINT32 depth
-)
-{
-    if (p->ctx->limits.max_value_depth != 0 &&
-        depth > p->ctx->limits.max_value_depth)
-        return ccm_parse_failf(p->lex.file, p->tok.line, "值嵌套过深");
-
-    switch (p->tok.type)
-    {
-    case CCM_TOK_STRING:
-        if (!parser_set_value(
-                p, path, CC_VAR_STRING,
-                p->tok.text, p->tok.len,
-                CC_VAR_WRITE_REPLACE, "写入字符串"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-
-    case CCM_TOK_NUMBER:
-    {
-        CCBOOL is_float = CCFALSE;
-        CCINT64 integer = 0;
-        double floating = 0;
-        if (!parser_number(p, &is_float, &integer, &floating))
-            return CCFALSE;
-        if (!parser_set_value(
-                p, path,
-                is_float ? CC_VAR_FLOAT : CC_VAR_INT,
-                is_float ? (const void *)&floating
-                         : (const void *)&integer,
-                0, CC_VAR_WRITE_REPLACE, "写入数字"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-    }
-
-    case CCM_TOK_TRUE:
-    case CCM_TOK_FALSE:
-    {
-        CCBOOL boolean = (p->tok.type == CCM_TOK_TRUE) ? CCTRUE : CCFALSE;
-        if (!parser_set_value(
-                p, path, CC_VAR_BOOL, &boolean, 0,
-                CC_VAR_WRITE_REPLACE, "写入布尔值"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-    }
-
-    case CCM_TOK_LBRACE:
-        if (!parser_set_value(
-                p, path, CC_VAR_OBJECT, NULL, 0,
-                object_mode, "写入对象"
-            )
-        )
-            return CCFALSE;
-        if (!parser_advance(p))
-            return CCFALSE;
-        if (!parser_parse_object_members(p, path, depth + 1))
-            return CCFALSE;
-        if (!parser_need(p, CCM_TOK_RBRACE, "对象右花括号"))
-            return CCFALSE;
-        return parser_advance(p);
-
-    case CCM_TOK_LBRACKET:
-        if (!parser_set_value(
-                p, path, CC_VAR_ARRAY, NULL, 0,
-                CC_VAR_WRITE_REPLACE, "写入数组"
-            )
-        )
-            return CCFALSE;
-        if (!parser_advance(p))
-            return CCFALSE;
-        if (!parser_parse_array_members(p, path, depth + 1))
-            return CCFALSE;
-        if (!parser_need(p, CCM_TOK_RBRACKET, "数组右方括号"))
-            return CCFALSE;
-        return parser_advance(p);
-
-    case CCM_TOK_BUILTIN:
-        if (!parser_parse_builtin(p, path))
-            return CCFALSE;
-        return parser_advance(p);
-
-    default:
-        return ccm_parse_failf(p->lex.file, p->tok.line, "值格式非法");
-    }
-}
-
-static CCBOOL parser_parse_object_member(
-    CCMParser *p,
-    const char *path,
-    CCUINT32 depth
-)
-{
-    char *child = parser_path_key(path, p->tok.text, p->tok.len);
-    if (!child)
-        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-    if (!parser_advance(p) || !parser_need(p, CCM_TOK_COLON, "冒号"))
-        goto Failed;
-    if (!parser_advance(p))
-        goto Failed;
-    if (!parser_parse_value(p, child, CC_VAR_WRITE_REPLACE, depth))
-        goto Failed;
-    ccalloc(child, 0, NULL);
-    if (!parser_need(p, CCM_TOK_SEMI, "分号"))
-        return CCFALSE;
-    return parser_advance(p);
-
-Failed:
-    ccalloc(child, 0, NULL);
-    return CCFALSE;
-}
-
-static CCBOOL parser_parse_object_members(
-    CCMParser *p,
-    const char *path,
-    CCUINT32 depth
-)
-{
-    CCUINT32 members = 0;
-    while (p->tok.type != CCM_TOK_RBRACE)
-    {
-        if (p->tok.type == CCM_TOK_EOF)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "对象未闭合");
-        if (p->ctx->limits.max_object_members != 0 &&
-            members >= p->ctx->limits.max_object_members)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "对象成员数量超过限制");
-        if (p->tok.type != CCM_TOK_STRING)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "对象成员名必须是字符串");
-        if (!ccvar_key_valid(p->tok.text, p->tok.len))
-            return ccm_parse_failf(
-                p->lex.file, p->tok.line,
-                "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
-            );
-        if (!parser_parse_object_member(p, path, depth))
-            return CCFALSE;
-        members++;
-    }
-    return CCTRUE;
-}
-
-static CCBOOL parser_array_object(
-    CCMParser *p,
-    const char *path,
-    CCUINT32 depth
-)
-{
-    CCUINT32 index = 0;
-    if (!parser_push_value(
-            p, path, CC_VAR_OBJECT, NULL, 0, &index,
-            "追加数组对象"
-        ))
-        return CCFALSE;
-    char *child = parser_path_index(path, index);
-    if (!child)
-        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-    if (!parser_advance(p))
-        goto Failed;
-    if (!parser_parse_object_members(p, child, depth + 1))
-        goto Failed;
-    ccalloc(child, 0, NULL);
-    if (!parser_need(p, CCM_TOK_RBRACE, "对象右花括号"))
-        return CCFALSE;
-    return parser_advance(p);
-
-Failed:
-    ccalloc(child, 0, NULL);
-    return CCFALSE;
-}
-
-static CCBOOL parser_array_array(
-    CCMParser *p,
-    const char *path,
-    CCUINT32 depth
-)
-{
-    CCUINT32 index = 0;
-    if (!parser_push_value(
-            p, path, CC_VAR_ARRAY, NULL, 0, &index,
-            "追加数组"
-        ))
-        return CCFALSE;
-    char *child = parser_path_index(path, index);
-    if (!child)
-        return ccm_parse_failf(p->lex.file, p->tok.line, "内存分配失败");
-    if (!parser_advance(p))
-        goto Failed;
-    if (!parser_parse_array_members(p, child, depth + 1))
-        goto Failed;
-    ccalloc(child, 0, NULL);
-    if (!parser_need(p, CCM_TOK_RBRACKET, "数组右方括号"))
-        return CCFALSE;
-    return parser_advance(p);
-
-Failed:
-    ccalloc(child, 0, NULL);
-    return CCFALSE;
-}
-
-static CCBOOL parser_array_element(CCMParser *p, const char *path, CCUINT32 depth)
-{
-    if (p->ctx->limits.max_value_depth != 0 &&
-        depth > p->ctx->limits.max_value_depth)
-        return ccm_parse_failf(p->lex.file, p->tok.line, "值嵌套过深");
-    switch (p->tok.type)
-    {
-    case CCM_TOK_STRING:
-        if (!parser_push_value(
-                p, path, CC_VAR_STRING,
-                p->tok.text, p->tok.len, NULL,
-                "追加数组字符串"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-
-    case CCM_TOK_NUMBER:
-    {
-        CCBOOL is_float = CCFALSE;
-        CCINT64 integer = 0;
-        double floating = 0;
-        if (!parser_number(p, &is_float, &integer, &floating))
-            return CCFALSE;
-        if (!parser_push_value(
-                p, path,
-                is_float ? CC_VAR_FLOAT : CC_VAR_INT,
-                is_float ? (const void *)&floating
-                         : (const void *)&integer,
-                0, NULL, "追加数组数字"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-    }
-
-    case CCM_TOK_TRUE:
-    case CCM_TOK_FALSE:
-    {
-        CCBOOL boolean = (p->tok.type == CCM_TOK_TRUE) ? CCTRUE : CCFALSE;
-        if (!parser_push_value(
-                p, path, CC_VAR_BOOL, &boolean, 0, NULL,
-                "追加数组布尔值"
-            )
-        )
-            return CCFALSE;
-        return parser_advance(p);
-    }
-
-    case CCM_TOK_LBRACE:
-        return parser_array_object(p, path, depth);
-
-    case CCM_TOK_LBRACKET:
-        return parser_array_array(p, path, depth);
-
-    case CCM_TOK_BUILTIN:
-    {
-        char *value = NULL;
-        CCUINT32 len = 0;
-        if (!ccm_builtin_eval(
-                p->ctx, p->tok.text, p->tok.len, p->tree,
-                &value, &len, p->lex.file, p->tok.line
-            )
-        )
-            return CCFALSE;
-        CCBOOL ok = parser_push_value(
-            p, path, CC_VAR_STRING, value, len,
-            NULL, "追加内建函数结果"
-        );
-        if (value)
-            ccalloc(value, 0, NULL);
-        if (!ok)
-            return CCFALSE;
-        return parser_advance(p);
-    }
-
-    default:
-        return ccm_parse_failf(p->lex.file, p->tok.line, "数组元素格式非法");
-    }
-}
-
-static CCBOOL parser_parse_array_members(
-    CCMParser *p,
-    const char *path,
-    CCUINT32 depth
-)
-{
-    CCUINT32 elements = 0;
-    while (p->tok.type != CCM_TOK_RBRACKET)
-    {
-        if (p->tok.type == CCM_TOK_EOF)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "数组未闭合");
-        if (p->ctx->limits.max_array_elements != 0 &&
-            elements >= p->ctx->limits.max_array_elements)
-            return ccm_parse_failf(p->lex.file, p->tok.line, "数组元素数量超过限制");
-        if (!parser_array_element(p, path, depth))
-            return CCFALSE;
-        elements++;
-        if (p->tok.type == CCM_TOK_COMMA)
-        {
-            if (!parser_advance(p))
-                return CCFALSE;
-            continue;
-        }
-        if (p->tok.type == CCM_TOK_RBRACKET)
-            break;
-        /* 数字/字符串之间允许以空白分隔，继续读取下一元素 */
-    }
-    return CCTRUE;
-}
-#endif
 
 typedef enum ccm_value_frame_kind {
     CCM_VALUE_FRAME_OBJECT = 0,
@@ -1162,6 +823,238 @@ static CCBOOL parser_value_frame_pop(
     ) == 0) ? CCTRUE : CCFALSE;
 }
 
+static CCBOOL parser_parse_object_frame(
+    CCMParser *p, CCDyn *frames, CCMValueFrame *frame
+)
+{
+    if (frame->after_value)
+    {
+        if (!parser_need(p, CCM_TOK_SEMI, "分号") ||
+            !parser_advance(p))
+            return CCFALSE;
+        frame->after_value = CCFALSE;
+        frame->count++;
+        return CCTRUE;
+    }
+
+    if (p->tok.type == CCM_TOK_RBRACE)
+    {
+        if (!parser_advance(p))
+            return CCFALSE;
+        CCMValueFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (!parser_value_frame_pop(frames, &popped))
+            return CCFALSE;
+        if (popped.owns_path && popped.path)
+            ccalloc(popped.path, 0, NULL);
+        return CCTRUE;
+    }
+
+    if (p->tok.type == CCM_TOK_EOF)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "对象未闭合"
+        );
+        return CCFALSE;
+    }
+    if (p->ctx->limits.max_object_members != 0 &&
+        frame->count >= p->ctx->limits.max_object_members)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "对象成员数量超过限制"
+        );
+        return CCFALSE;
+    }
+    if (p->tok.type != CCM_TOK_STRING)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "对象成员名必须是字符串"
+        );
+        return CCFALSE;
+    }
+    if (!ccvar_key_valid(p->tok.text, p->tok.len))
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line,
+            "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
+        );
+        return CCFALSE;
+    }
+
+    char *child = parser_path_key(
+        frame->path, p->tok.text, p->tok.len
+    );
+    if (!child)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "内存分配失败"
+        );
+        return CCFALSE;
+    }
+    if (!parser_advance(p) ||
+        !parser_need(p, CCM_TOK_COLON, "冒号") ||
+        !parser_advance(p))
+    {
+        ccalloc(child, 0, NULL);
+        return CCFALSE;
+    }
+
+    CCUINT32 child_depth = frame->depth + 1;
+    if (!parser_value_depth_ok(p, child_depth))
+    {
+        ccalloc(child, 0, NULL);
+        return CCFALSE;
+    }
+
+    if (p->tok.type == CCM_TOK_LBRACE)
+    {
+        if (!parser_set_value(
+                p, child, CC_VAR_OBJECT, NULL, 0,
+                CC_VAR_WRITE_REPLACE, "写入对象"
+            ) ||
+            !parser_advance(p))
+        {
+            ccalloc(child, 0, NULL);
+            return CCFALSE;
+        }
+        frame->after_value = CCTRUE;
+        return parser_value_frame_push(
+            p, frames, CCM_VALUE_FRAME_OBJECT,
+            child, CCTRUE, child_depth
+        );
+    }
+    if (p->tok.type == CCM_TOK_LBRACKET)
+    {
+        if (!parser_set_value(
+                p, child, CC_VAR_ARRAY, NULL, 0,
+                CC_VAR_WRITE_REPLACE, "写入数组"
+            ) ||
+            !parser_advance(p))
+        {
+            ccalloc(child, 0, NULL);
+            return CCFALSE;
+        }
+        frame->after_value = CCTRUE;
+        return parser_value_frame_push(
+            p, frames, CCM_VALUE_FRAME_ARRAY,
+            child, CCTRUE, child_depth
+        );
+    }
+
+    int scalar = parser_value_scalar(p, child, CCFALSE, NULL);
+    ccalloc(child, 0, NULL);
+    if (scalar < 0)
+        return CCFALSE;
+    if (scalar == 0)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "值格式非法"
+        );
+        return CCFALSE;
+    }
+    frame->after_value = CCTRUE;
+    return CCTRUE;
+}
+
+static CCBOOL parser_parse_array_frame(
+    CCMParser *p, CCDyn *frames, CCMValueFrame *frame
+)
+{
+    if (p->tok.type == CCM_TOK_RBRACKET)
+    {
+        if (!parser_advance(p))
+            return CCFALSE;
+        CCMValueFrame popped;
+        memset(&popped, 0, sizeof(popped));
+        if (!parser_value_frame_pop(frames, &popped))
+            return CCFALSE;
+        if (popped.owns_path && popped.path)
+            ccalloc(popped.path, 0, NULL);
+        return CCTRUE;
+    }
+
+    if (frame->after_value)
+    {
+        frame->after_value = CCFALSE;
+        if (p->tok.type == CCM_TOK_COMMA)
+        {
+            if (!parser_advance(p))
+                return CCFALSE;
+            return CCTRUE;
+        }
+    }
+
+    if (p->tok.type == CCM_TOK_EOF)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "数组未闭合"
+        );
+        return CCFALSE;
+    }
+    if (p->ctx->limits.max_array_elements != 0 &&
+        frame->count >= p->ctx->limits.max_array_elements)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line,
+            "数组元素数量超过限制"
+        );
+        return CCFALSE;
+    }
+
+    if (p->tok.type == CCM_TOK_LBRACE ||
+        p->tok.type == CCM_TOK_LBRACKET)
+    {
+        CCBOOL is_object = (p->tok.type == CCM_TOK_LBRACE)
+            ? CCTRUE : CCFALSE;
+        CCUINT32 index = 0;
+        if (!parser_push_value(
+                p, frame->path,
+                is_object ? CC_VAR_OBJECT : CC_VAR_ARRAY,
+                NULL, 0, &index,
+                is_object ? "追加数组对象" : "追加数组"
+            ) ||
+            !parser_advance(p))
+            return CCFALSE;
+        char *child = parser_path_index(frame->path, index);
+        if (!child)
+        {
+            (void)ccm_parse_failf(
+                p->lex.file, p->tok.line, "内存分配失败"
+            );
+            return CCFALSE;
+        }
+        CCUINT32 child_depth = frame->depth + 1;
+        if (!parser_value_depth_ok(p, child_depth))
+        {
+            ccalloc(child, 0, NULL);
+            return CCFALSE;
+        }
+        frame->count++;
+        frame->after_value = CCTRUE;
+        return parser_value_frame_push(
+            p, frames,
+            is_object ? CCM_VALUE_FRAME_OBJECT : CCM_VALUE_FRAME_ARRAY,
+            child, CCTRUE, child_depth
+        );
+    }
+
+    if (!parser_value_depth_ok(p, frame->depth + 1))
+        return CCFALSE;
+    int scalar = parser_value_scalar(p, frame->path, CCTRUE, NULL);
+    if (scalar < 0)
+        return CCFALSE;
+    if (scalar == 0)
+    {
+        (void)ccm_parse_failf(
+            p->lex.file, p->tok.line, "数组元素格式非法"
+        );
+        return CCFALSE;
+    }
+    frame->count++;
+    frame->after_value = CCTRUE;
+    return CCTRUE;
+}
+
 static CCBOOL parser_parse_value(
     CCMParser *p,
     const char *path,
@@ -1217,239 +1110,14 @@ static CCBOOL parser_parse_value(
         CCMValueFrame *frame =
             &((CCMValueFrame *)frames.array)
                 [frames.size / (CCUINT32)sizeof(CCMValueFrame) - 1];
-
         if (frame->kind == CCM_VALUE_FRAME_OBJECT)
         {
-            if (frame->after_value)
-            {
-                if (!parser_need(p, CCM_TOK_SEMI, "分号") ||
-                    !parser_advance(p))
-                    goto Failed;
-                frame->after_value = CCFALSE;
-                frame->count++;
-                continue;
-            }
-
-            if (p->tok.type == CCM_TOK_RBRACE)
-            {
-                if (!parser_advance(p))
-                    goto Failed;
-                CCMValueFrame popped;
-                memset(&popped, 0, sizeof(popped));
-                if (!parser_value_frame_pop(&frames, &popped))
-                    goto Failed;
-                if (popped.owns_path && popped.path)
-                    ccalloc(popped.path, 0, NULL);
-                continue;
-            }
-
-            if (p->tok.type == CCM_TOK_EOF)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line, "对象未闭合"
-                );
-                goto Failed;
-            }
-            if (p->ctx->limits.max_object_members != 0 &&
-                frame->count >= p->ctx->limits.max_object_members)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line,
-                    "对象成员数量超过限制"
-                );
-                goto Failed;
-            }
-            if (p->tok.type != CCM_TOK_STRING)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line,
-                    "对象成员名必须是字符串"
-                );
-                goto Failed;
-            }
-            if (!ccvar_key_valid(p->tok.text, p->tok.len))
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line,
-                    "键名非法（应匹配 [A-Za-z_][A-Za-z0-9_]*）"
-                );
-                goto Failed;
-            }
-
-            char *child = parser_path_key(
-                frame->path, p->tok.text, p->tok.len
-            );
-            if (!child)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line, "内存分配失败"
-                );
-                goto Failed;
-            }
-            if (!parser_advance(p) ||
-                !parser_need(p, CCM_TOK_COLON, "冒号") ||
-                !parser_advance(p))
-            {
-                ccalloc(child, 0, NULL);
-                goto Failed;
-            }
-
-            CCUINT32 child_depth = frame->depth + 1;
-            if (!parser_value_depth_ok(p, child_depth))
-            {
-                ccalloc(child, 0, NULL);
-                goto Failed;
-            }
-
-            if (p->tok.type == CCM_TOK_LBRACE)
-            {
-                if (!parser_set_value(
-                        p, child, CC_VAR_OBJECT, NULL, 0,
-                        CC_VAR_WRITE_REPLACE, "写入对象"
-                    ) ||
-                    !parser_advance(p))
-                {
-                    ccalloc(child, 0, NULL);
-                    goto Failed;
-                }
-                frame->after_value = CCTRUE;
-                if (!parser_value_frame_push(
-                        p, &frames, CCM_VALUE_FRAME_OBJECT,
-                        child, CCTRUE, child_depth
-                    ))
-                    goto Failed;
-                continue;
-            }
-            if (p->tok.type == CCM_TOK_LBRACKET)
-            {
-                if (!parser_set_value(
-                        p, child, CC_VAR_ARRAY, NULL, 0,
-                        CC_VAR_WRITE_REPLACE, "写入数组"
-                    ) ||
-                    !parser_advance(p))
-                {
-                    ccalloc(child, 0, NULL);
-                    goto Failed;
-                }
-                frame->after_value = CCTRUE;
-                if (!parser_value_frame_push(
-                        p, &frames, CCM_VALUE_FRAME_ARRAY,
-                        child, CCTRUE, child_depth
-                    ))
-                    goto Failed;
-                continue;
-            }
-
-            scalar = parser_value_scalar(p, child, CCFALSE, NULL);
-            ccalloc(child, 0, NULL);
-            if (scalar < 0)
-                goto Failed;
-            if (scalar == 0)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line, "值格式非法"
-                );
-                goto Failed;
-            }
-            frame->after_value = CCTRUE;
-            continue;
-        }
-
-        if (p->tok.type == CCM_TOK_RBRACKET)
-        {
-            if (!parser_advance(p))
-                goto Failed;
-            CCMValueFrame popped;
-            memset(&popped, 0, sizeof(popped));
-            if (!parser_value_frame_pop(&frames, &popped))
-                goto Failed;
-            if (popped.owns_path && popped.path)
-                ccalloc(popped.path, 0, NULL);
-            continue;
-        }
-
-        if (frame->after_value)
-        {
-            frame->after_value = CCFALSE;
-            if (p->tok.type == CCM_TOK_COMMA)
-            {
-                if (!parser_advance(p))
-                    goto Failed;
-                continue;
-            }
-        }
-
-        if (p->tok.type == CCM_TOK_EOF)
-        {
-            (void)ccm_parse_failf(
-                p->lex.file, p->tok.line, "数组未闭合"
-            );
-            goto Failed;
-        }
-        if (p->ctx->limits.max_array_elements != 0 &&
-            frame->count >= p->ctx->limits.max_array_elements)
-        {
-            (void)ccm_parse_failf(
-                p->lex.file, p->tok.line,
-                "数组元素数量超过限制"
-            );
-            goto Failed;
-        }
-
-        if (p->tok.type == CCM_TOK_LBRACE ||
-            p->tok.type == CCM_TOK_LBRACKET)
-        {
-            CCBOOL is_object = (p->tok.type == CCM_TOK_LBRACE)
-                ? CCTRUE : CCFALSE;
-            CCUINT32 index = 0;
-            if (!parser_push_value(
-                    p, frame->path,
-                    is_object ? CC_VAR_OBJECT : CC_VAR_ARRAY,
-                    NULL, 0, &index,
-                    is_object ? "追加数组对象" : "追加数组"
-                ) ||
-                !parser_advance(p))
-                goto Failed;
-            char *child = parser_path_index(frame->path, index);
-            if (!child)
-            {
-                (void)ccm_parse_failf(
-                    p->lex.file, p->tok.line, "内存分配失败"
-                );
-                goto Failed;
-            }
-            CCUINT32 child_depth = frame->depth + 1;
-            if (!parser_value_depth_ok(p, child_depth))
-            {
-                ccalloc(child, 0, NULL);
-                goto Failed;
-            }
-            frame->count++;
-            frame->after_value = CCTRUE;
-            if (!parser_value_frame_push(
-                    p, &frames,
-                    is_object ? CCM_VALUE_FRAME_OBJECT
-                              : CCM_VALUE_FRAME_ARRAY,
-                    child, CCTRUE, child_depth
-                ))
+            if (!parser_parse_object_frame(p, &frames, frame))
                 goto Failed;
             continue;
         }
-
-        if (!parser_value_depth_ok(p, frame->depth + 1))
+        if (!parser_parse_array_frame(p, &frames, frame))
             goto Failed;
-        scalar = parser_value_scalar(p, frame->path, CCTRUE, NULL);
-        if (scalar < 0)
-            goto Failed;
-        if (scalar == 0)
-        {
-            (void)ccm_parse_failf(
-                p->lex.file, p->tok.line, "数组元素格式非法"
-            );
-            goto Failed;
-        }
-        frame->count++;
-        frame->after_value = CCTRUE;
     }
 
     if (frames.array)

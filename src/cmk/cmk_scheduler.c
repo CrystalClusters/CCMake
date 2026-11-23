@@ -8,6 +8,8 @@
  */
 
 #include "cmk_scheduler.h"
+#include "cmk_ir_internal.h"
+#include "cmk_target_internal.h"
 #include "cmk_safe.h"
 
 #include <ccalloc.h>
@@ -42,27 +44,6 @@ struct cmk_scheduler {
     CCBOOL force;
 };
 
-#if 0
-static CCBOOL cmk_sched_error(
-    CMKScheduler *scheduler, CMKTargetId id,
-    const char *fmt, ...
-)
-{
-    if (!scheduler || !scheduler->diagnostic)
-        return CCFALSE;
-    va_list ap;
-    va_start(ap, fmt);
-    CCBOOL ok = cmk_diagnostic_vset(
-        scheduler->diagnostic, CMK_DIAG_ERROR,
-        id < scheduler->count
-            ? cmk_plan_target_at(scheduler->plan, id)->key.module.data
-            : NULL,
-        0, 0, fmt, ap
-    );
-    va_end(ap);
-    return ok ? CCFALSE : CCFALSE;
-}
-#endif
 
 CMKScheduler *cmk_scheduler_create(
     CMKPlan *plan,
@@ -245,195 +226,6 @@ static void cmk_sched_set_message(
     scheduler->messages[id] = message;
 }
 
-static CCBOOL __attribute__((unused)) cmk_sched_all_terminal(const CMKScheduler *scheduler)
-{
-    for (CCUINT32 i = 0; i < scheduler->count; i++)
-    {
-        if (!cmk_sched_is_reachable(scheduler, i))
-            continue;
-        CMKTargetState state =
-            cmk_plan_target_at(scheduler->plan, i)->state;
-        if (state == CMK_TARGET_PENDING ||
-            state == CMK_TARGET_READY ||
-            state == CMK_TARGET_RUNNING)
-            return CCFALSE;
-    }
-    return CCTRUE;
-}
-
-#if 0
-static CCBOOL cmk_scheduler_run_legacy(CMKScheduler *scheduler, CCBOOL keep_going)
-{
-    if (!scheduler)
-        return CCFALSE;
-    cmk_sched_mark_reachable(scheduler);
-    CMKTargetId root = cmk_plan_root(scheduler->plan);
-
-    for (;;)
-    {
-        /* 依赖失败传播 */
-        for (CCUINT32 i = 0; i < scheduler->count; i++)
-        {
-            if (!cmk_sched_is_reachable(scheduler, i))
-                continue;
-            const CMKPlanTarget *target =
-                cmk_plan_target_at(scheduler->plan, i);
-            if (target->state == CMK_TARGET_PENDING &&
-                cmk_sched_dep_terminal_bad(scheduler, i))
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_BLOCKED
-                );
-                cmk_sched_set_message(
-                    scheduler, i, "依赖失败或取消"
-                );
-            }
-        }
-
-        if (!keep_going)
-        {
-            CCBOOL failed = CCFALSE;
-            for (CCUINT32 i = 0; i < scheduler->count; i++)
-            {
-                if (cmk_sched_is_reachable(scheduler, i) &&
-                    cmk_plan_target_at(scheduler->plan, i)->state ==
-                        CMK_TARGET_FAILED)
-                {
-                    failed = CCTRUE;
-                    break;
-                }
-            }
-            if (failed)
-            {
-                for (CCUINT32 i = 0; i < scheduler->count; i++)
-                {
-                    if (!cmk_sched_is_reachable(scheduler, i))
-                        continue;
-                    CMKTargetState state =
-                        cmk_plan_target_at(scheduler->plan, i)->state;
-                    if (state == CMK_TARGET_PENDING ||
-                        state == CMK_TARGET_READY)
-                        cmk_plan_set_target_state(
-                            scheduler->plan, i, CMK_TARGET_CANCELLED
-                        );
-                }
-                break;
-            }
-        }
-
-        /* 依赖全部成功后进入 READY */
-        CCBOOL ready_found = CCFALSE;
-        for (CCUINT32 i = 0; i < scheduler->count; i++)
-        {
-            if (!cmk_sched_is_reachable(scheduler, i))
-                continue;
-            const CMKPlanTarget *target =
-                cmk_plan_target_at(scheduler->plan, i);
-            if (target->state == CMK_TARGET_PENDING &&
-                cmk_sched_deps_success(scheduler, i))
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_READY
-                );
-                ready_found = CCTRUE;
-            }
-        }
-        (void)ready_found;
-
-        CCBOOL executed_any = CCFALSE;
-        for (CCUINT32 i = 0; i < scheduler->count; i++)
-        {
-            if (!cmk_sched_is_reachable(scheduler, i))
-                continue;
-            const CMKPlanTarget *target =
-                cmk_plan_target_at(scheduler->plan, i);
-            if (target->state != CMK_TARGET_READY)
-                continue;
-
-            if (target->actions.size == 0)
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_SUCCESS
-                );
-                executed_any = CCTRUE;
-                continue;
-            }
-
-            if (scheduler->cache && !scheduler->force &&
-                scheduler->cache->should_skip)
-            {
-                CCBOOL skip = CCFALSE;
-                if (scheduler->cache->should_skip(
-                        scheduler->cache_user, target, &skip
-                    ) && skip)
-                {
-                    cmk_plan_set_target_state(
-                        scheduler->plan, i, CMK_TARGET_SKIPPED
-                    );
-                    executed_any = CCTRUE;
-                    continue;
-                }
-            }
-
-            cmk_plan_set_target_state(
-                scheduler->plan, i, CMK_TARGET_RUNNING
-            );
-            CMKExecutorResult result;
-            memset(&result, 0, sizeof(result));
-            CCBOOL ok = scheduler->ops->run(
-                scheduler->user, target, &result
-            );
-            scheduler->executed++;
-            if (ok && result.success)
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_SUCCESS
-                );
-                if (scheduler->cache && scheduler->cache->record)
-                    (void)scheduler->cache->record(
-                        scheduler->cache_user, target
-                    );
-            }
-            else
-            {
-                scheduler->failed++;
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_FAILED
-                );
-                cmk_sched_set_message(
-                    scheduler, i,
-                    result.message ? result.message : "目标执行失败"
-                );
-            }
-            if (result.output.len > 0)
-            {
-                fwrite(
-                    result.output.data, 1,
-                    result.output.len, stdout
-                );
-                fflush(stdout);
-            }
-            cmk_executor_result_clear(&result);
-            executed_any = CCTRUE;
-            break;
-        }
-
-        if (cmk_sched_all_terminal(scheduler))
-            break;
-        if (!executed_any)
-        {
-            cmk_sched_error(
-                scheduler, root, "调度无法继续：存在未满足的依赖"
-            );
-            break;
-        }
-    }
-
-    return cmk_plan_target_at(scheduler->plan, root)->state ==
-        CMK_TARGET_SUCCESS ? CCTRUE : CCFALSE;
-}
-#endif
-
 static CCBOOL cmk_scheduler_run_serial(CMKScheduler *scheduler, CCBOOL keep_going)
 {
     if (!scheduler)
@@ -594,6 +386,184 @@ void cmk_scheduler_set_force(CMKScheduler *scheduler, CCBOOL force)
         scheduler->force = force;
 }
 
+static void cmk_sched_propagate_blocked(CMKScheduler *scheduler)
+{
+    for (CCUINT32 i = 0; i < scheduler->count; i++)
+    {
+        if (!cmk_sched_is_reachable(scheduler, i))
+            continue;
+        const CMKPlanTarget *target =
+            cmk_plan_target_at(scheduler->plan, i);
+        if (target->state == CMK_TARGET_PENDING &&
+            cmk_sched_dep_terminal_bad(scheduler, i))
+        {
+            cmk_plan_set_target_state(
+                scheduler->plan, i, CMK_TARGET_BLOCKED
+            );
+            cmk_sched_set_message(
+                scheduler, i, "依赖失败或取消"
+            );
+        }
+    }
+}
+
+static void cmk_sched_cancel_pending(CMKScheduler *scheduler)
+{
+    for (CCUINT32 i = 0; i < scheduler->count; i++)
+    {
+        if (!cmk_sched_is_reachable(scheduler, i))
+            continue;
+        CMKTargetState state =
+            cmk_plan_target_at(scheduler->plan, i)->state;
+        if (state == CMK_TARGET_PENDING || state == CMK_TARGET_READY)
+            cmk_plan_set_target_state(
+                scheduler->plan, i, CMK_TARGET_CANCELLED
+            );
+    }
+}
+
+static void cmk_sched_collect_batch(
+    CMKScheduler *scheduler, CMKSchedJob *batch,
+    CCUINT32 *job_count, CCBOOL *aggregates
+)
+{
+    *job_count = 0;
+    *aggregates = CCFALSE;
+    for (CCUINT32 i = 0; i < scheduler->count &&
+         *job_count < scheduler->jobs; i++)
+    {
+        if (!cmk_sched_is_reachable(scheduler, i))
+            continue;
+        const CMKPlanTarget *target =
+            cmk_plan_target_at(scheduler->plan, i);
+        if (target->state != CMK_TARGET_PENDING ||
+            !cmk_sched_deps_success(scheduler, i))
+            continue;
+        if (target->actions.size == 0)
+        {
+            cmk_plan_set_target_state(
+                scheduler->plan, i, CMK_TARGET_SUCCESS
+            );
+            *aggregates = CCTRUE;
+            continue;
+        }
+        if (scheduler->cache && !scheduler->force &&
+            scheduler->cache->should_skip)
+        {
+            CCBOOL skip = CCFALSE;
+            if (scheduler->cache->should_skip(
+                    scheduler->cache_user, target, &skip
+                ) && skip)
+            {
+                cmk_plan_set_target_state(
+                    scheduler->plan, i, CMK_TARGET_SKIPPED
+                );
+                *aggregates = CCTRUE;
+                continue;
+            }
+        }
+        cmk_plan_set_target_state(
+            scheduler->plan, i, CMK_TARGET_RUNNING
+        );
+        CMKSchedJob *job = &batch[*job_count];
+        job->ops = scheduler->ops;
+        job->user = scheduler->user;
+        job->target = target;
+        job->id = i;
+        job->ok = CCFALSE;
+        memset(&job->result, 0, sizeof(job->result));
+        (*job_count)++;
+    }
+}
+
+static void cmk_sched_start_batch(
+    CMKScheduler *scheduler, CMKSchedJob *batch,
+    CMKSchedThread *threads, CCUINT32 job_count
+)
+{
+    for (CCUINT32 i = 0; i < job_count; i++)
+    {
+#ifdef CC_WINDOWS
+        threads[i] = CreateThread(
+            NULL, 0, cmk_sched_job_entry, &batch[i], 0, NULL
+        );
+        if (!threads[i])
+            batch[i].ok = scheduler->ops->run(
+                scheduler->user, batch[i].target,
+                &batch[i].result
+            );
+#else
+        if (pthread_create(
+                &threads[i], NULL, cmk_sched_job_entry, &batch[i]
+            ) != 0)
+            batch[i].ok = scheduler->ops->run(
+                scheduler->user, batch[i].target,
+                &batch[i].result
+            );
+#endif
+    }
+}
+
+static void cmk_sched_finish_batch(
+    CMKScheduler *scheduler, CMKSchedJob *batch,
+    CMKSchedThread *threads, CCUINT32 job_count,
+    CCBOOL keep_going, CCBOOL *triggered
+)
+{
+    for (CCUINT32 i = 0; i < job_count; i++)
+    {
+#ifdef CC_WINDOWS
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+#else
+        pthread_join(threads[i], NULL);
+#endif
+        CMKTargetId id = batch[i].id;
+        scheduler->executed++;
+        if (batch[i].ok && batch[i].result.success)
+        {
+            cmk_plan_set_target_state(
+                scheduler->plan, id, CMK_TARGET_SUCCESS
+            );
+            if (scheduler->cache && scheduler->cache->record)
+                (void)scheduler->cache->record(
+                    scheduler->cache_user, batch[i].target
+                );
+        }
+        else
+        {
+            scheduler->failed++;
+            cmk_plan_set_target_state(
+                scheduler->plan, id, CMK_TARGET_FAILED
+            );
+            cmk_sched_set_message(
+                scheduler, id,
+                batch[i].result.message
+                    ? batch[i].result.message : "目标执行失败"
+            );
+            if (!keep_going)
+                *triggered = CCTRUE;
+        }
+        if (batch[i].result.output.len > 0)
+            fwrite(
+                batch[i].result.output.data, 1,
+                batch[i].result.output.len, stdout
+            );
+        cmk_executor_result_clear(&batch[i].result);
+        fflush(stdout);
+    }
+}
+
+static CCBOOL cmk_sched_root_ok(const CMKScheduler *scheduler)
+{
+    CMKTargetState state = cmk_plan_target_at(
+        scheduler->plan, cmk_plan_root(scheduler->plan)
+    )->state;
+    return (state == CMK_TARGET_SUCCESS ||
+            state == CMK_TARGET_SKIPPED)
+        ? CCTRUE : CCFALSE;
+}
+
 CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
 {
     if (!scheduler)
@@ -602,7 +572,6 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
         return cmk_scheduler_run_serial(scheduler, keep_going);
 
     cmk_sched_mark_reachable(scheduler);
-    CMKTargetId root = cmk_plan_root(scheduler->plan);
     CMKSchedJob *batch = ccalloc(
         NULL, (CCUINT64)scheduler->jobs * sizeof(CMKSchedJob),
         CMK_SCHED_COMMENT
@@ -624,90 +593,18 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
     CCBOOL ok = CCFALSE;
     for (;;)
     {
-        /* 依赖失败传播 */
-        for (CCUINT32 i = 0; i < scheduler->count; i++)
-        {
-            if (!cmk_sched_is_reachable(scheduler, i))
-                continue;
-            const CMKPlanTarget *target =
-                cmk_plan_target_at(scheduler->plan, i);
-            if (target->state == CMK_TARGET_PENDING &&
-                cmk_sched_dep_terminal_bad(scheduler, i))
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_BLOCKED
-                );
-                cmk_sched_set_message(
-                    scheduler, i, "依赖失败或取消"
-                );
-            }
-        }
+        cmk_sched_propagate_blocked(scheduler);
         if (triggered)
         {
-            for (CCUINT32 i = 0; i < scheduler->count; i++)
-            {
-                if (!cmk_sched_is_reachable(scheduler, i))
-                    continue;
-                CMKTargetState state =
-                    cmk_plan_target_at(scheduler->plan, i)->state;
-                if (state == CMK_TARGET_PENDING ||
-                    state == CMK_TARGET_READY)
-                    cmk_plan_set_target_state(
-                        scheduler->plan, i, CMK_TARGET_CANCELLED
-                    );
-            }
+            cmk_sched_cancel_pending(scheduler);
             break;
         }
 
         CCUINT32 job_count = 0;
         CCBOOL aggregates = CCFALSE;
-        for (CCUINT32 i = 0; i < scheduler->count &&
-             job_count < scheduler->jobs; i++)
-        {
-            if (!cmk_sched_is_reachable(scheduler, i))
-                continue;
-            const CMKPlanTarget *target =
-                cmk_plan_target_at(scheduler->plan, i);
-            if (target->state != CMK_TARGET_PENDING ||
-                !cmk_sched_deps_success(scheduler, i))
-                continue;
-            if (target->actions.size == 0)
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, i, CMK_TARGET_SUCCESS
-                );
-                aggregates = CCTRUE;
-                continue;
-            }
-            if (scheduler->cache && !scheduler->force &&
-                scheduler->cache->should_skip)
-            {
-                CCBOOL skip = CCFALSE;
-                if (scheduler->cache->should_skip(
-                        scheduler->cache_user, target, &skip
-                    ) && skip)
-                {
-                    cmk_plan_set_target_state(
-                        scheduler->plan, i, CMK_TARGET_SKIPPED
-                    );
-                    aggregates = CCTRUE;
-                    continue;
-                }
-            }
-            cmk_plan_set_target_state(
-                scheduler->plan, i, CMK_TARGET_RUNNING
-            );
-            batch[job_count].ops = scheduler->ops;
-            batch[job_count].user = scheduler->user;
-            batch[job_count].target = target;
-            batch[job_count].id = i;
-            batch[job_count].ok = CCFALSE;
-            memset(
-                &batch[job_count].result, 0,
-                sizeof(batch[job_count].result)
-            );
-            job_count++;
-        }
+        cmk_sched_collect_batch(
+            scheduler, batch, &job_count, &aggregates
+        );
 
         if (job_count == 0)
         {
@@ -716,89 +613,16 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
             break;
         }
 
-        CCUINT32 started = 0;
-        for (CCUINT32 i = 0; i < job_count; i++)
-        {
-#ifdef CC_WINDOWS
-            threads[i] = CreateThread(
-                NULL, 0, cmk_sched_job_entry, &batch[i], 0, NULL
-            );
-            if (threads[i])
-                started++;
-            else
-            {
-                batch[i].ok = scheduler->ops->run(
-                    scheduler->user, batch[i].target,
-                    &batch[i].result
-                );
-                started++;
-            }
-#else
-            if (pthread_create(
-                    &threads[i], NULL, cmk_sched_job_entry, &batch[i]
-                ) == 0)
-                started++;
-            else
-            {
-                batch[i].ok = scheduler->ops->run(
-                    scheduler->user, batch[i].target,
-                    &batch[i].result
-                );
-                started++;
-            }
-#endif
-        }
-        for (CCUINT32 i = 0; i < started; i++)
-        {
-#ifdef CC_WINDOWS
-            WaitForSingleObject(threads[i], INFINITE);
-            CloseHandle(threads[i]);
-#else
-            pthread_join(threads[i], NULL);
-#endif
-            CMKTargetId id = batch[i].id;
-            scheduler->executed++;
-            if (batch[i].ok && batch[i].result.success)
-            {
-                cmk_plan_set_target_state(
-                    scheduler->plan, id, CMK_TARGET_SUCCESS
-                );
-                if (scheduler->cache && scheduler->cache->record)
-                    (void)scheduler->cache->record(
-                        scheduler->cache_user, batch[i].target
-                    );
-            }
-            else
-            {
-                scheduler->failed++;
-                cmk_plan_set_target_state(
-                    scheduler->plan, id, CMK_TARGET_FAILED
-                );
-                cmk_sched_set_message(
-                    scheduler, id,
-                    batch[i].result.message
-                        ? batch[i].result.message : "目标执行失败"
-                );
-                if (!keep_going)
-                    triggered = CCTRUE;
-            }
-            if (batch[i].result.output.len > 0)
-            {
-                fwrite(
-                    batch[i].result.output.data, 1,
-                    batch[i].result.output.len, stdout
-                );
-            }
-            cmk_executor_result_clear(&batch[i].result);
-            fflush(stdout);
-        }
+        cmk_sched_start_batch(
+            scheduler, batch, threads, job_count
+        );
+        cmk_sched_finish_batch(
+            scheduler, batch, threads, job_count,
+            keep_going, &triggered
+        );
     }
 
-    CMKTargetState root_state =
-        cmk_plan_target_at(scheduler->plan, root)->state;
-    ok = (root_state == CMK_TARGET_SUCCESS ||
-          root_state == CMK_TARGET_SKIPPED)
-        ? CCTRUE : CCFALSE;
+    ok = cmk_sched_root_ok(scheduler);
     ccalloc(batch, 0, NULL);
     ccalloc(threads, 0, NULL);
     return ok;

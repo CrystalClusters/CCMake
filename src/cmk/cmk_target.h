@@ -26,11 +26,6 @@ typedef enum cmk_target_state {
     CMK_TARGET_CANCELLED
 } CMKTargetState;
 
-typedef struct cmk_target_key {
-    CMKString module;
-    CMKString name;
-} CMKTargetKey;
-
 typedef enum cmk_plan_action_type {
     CMK_PLAN_ACTION_EXEC = 0,
     CMK_PLAN_ACTION_COPY,
@@ -39,28 +34,14 @@ typedef enum cmk_plan_action_type {
     CMK_PLAN_ACTION_MKDIR
 } CMKPlanActionType;
 
-typedef struct cmk_plan_action {
-    CMKPlanActionType type;
-    CMKString program;
-    CCDyn argv;       /* CMKString[] */
-    CCUINT32 argc;
-    CCDyn env;        /* CMKString[] */
-    CCUINT32 envc;
-    CMKString cwd;
-    CMKString from;
-    CMKString to;
-    CMKString path;
-} CMKPlanAction;
+typedef struct cmk_target_key CMKTargetKey;
+typedef struct cmk_plan_action CMKPlanAction;
+typedef struct cmk_plan_target CMKPlanTarget;
 
-typedef struct cmk_plan_target {
-    CMKTargetKey key;
-    CCDyn dependencies; /* CMKTargetId[] */
-    CCDyn dependency_keys; /* CMKTargetKey[]：冻结前解析 */
-    CCDyn actions;      /* CMKPlanAction[] */
-    CCDyn inputs;       /* CMKString[] */
-    CCDyn outputs;      /* CMKString[] */
-    CMKTargetState state;
-} CMKPlanTarget;
+/*
+ * 公开侧只暴露不透明句柄；构造与布局见 cmk_target_internal.h。
+ * Scheduler/Executor/Cache/IR 通过内部头访问数组，其他模块只使用指针。
+ */
 
 void cmk_target_key_init(CMKTargetKey *key);
 void cmk_target_key_clear(CMKTargetKey *key);

@@ -8,6 +8,7 @@
  */
 
 #include "ccmake_header.h"
+#include "build.h"
 #include "ccvar.h"
 
 int main(int argc, char **argv)
@@ -33,7 +34,7 @@ int main(int argc, char **argv)
     if (!parse_ccm())
         goto FailedtoParseConfig;
     // 步骤五，构建脚本解析与 Configure 求值
-    if (!parse_cmk())
+    if (!build_project())
         goto FailedtoParseConfig;
 
 Done:

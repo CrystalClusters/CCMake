@@ -6,6 +6,7 @@
 #include "test_harness.h"
 
 #include "cmk/cmk_executor.h"
+#include "cmk/cmk_target_internal.h"
 
 #include <string.h>
 
