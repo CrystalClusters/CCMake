@@ -28,9 +28,9 @@ cd "${ROOT}"
 
 OBJ_DIR="out/obj"
 BIN_DIR="out/${PFX}_bin"
-BIN_NAME="ccmaker"
+BIN_NAME="ccmake"
 case "${PFX}" in
-    windows_*) BIN_NAME="ccmaker.exe" ;;
+    windows_*) BIN_NAME="ccmake.exe" ;;
 esac
 
 # 平台相关的额外链接参数

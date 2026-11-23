@@ -1,0 +1,5 @@
+"project": "hello";
+"toolchain": {
+    "cc": "gcc";
+    "cflags": ["-O2", "-Wall"];
+};

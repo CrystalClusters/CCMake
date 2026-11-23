@@ -194,7 +194,7 @@ static CCBOOL cmk_executor_exec(
     memset(&spec, 0, sizeof(spec));
     spec.program = action->program.data;
     spec.argv = (const char *const *)argv;
-    spec.envp = (const char *const *)envp;
+    spec.envp = action->envc > 0 ? (const char *const *)envp : NULL;
     spec.working_dir = action->cwd.len ? action->cwd.data : NULL;
     spec.capture_limit = executor->policy.max_output_capture;
     CMKProcess *process = cmk_process_create(&spec);

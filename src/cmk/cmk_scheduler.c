@@ -538,8 +538,11 @@ static CCBOOL cmk_scheduler_run_serial(CMKScheduler *scheduler, CCBOOL keep_goin
         }
     }
 
-    return cmk_plan_target_at(scheduler->plan, root)->state ==
-        CMK_TARGET_SUCCESS ? CCTRUE : CCFALSE;
+    CMKTargetState root_state =
+        cmk_plan_target_at(scheduler->plan, root)->state;
+    return (root_state == CMK_TARGET_SUCCESS ||
+            root_state == CMK_TARGET_SKIPPED)
+        ? CCTRUE : CCFALSE;
 }
 
 typedef struct cmk_sched_job {
@@ -791,8 +794,11 @@ CCBOOL cmk_scheduler_run(CMKScheduler *scheduler, CCBOOL keep_going)
         }
     }
 
-    ok = cmk_plan_target_at(scheduler->plan, root)->state ==
-        CMK_TARGET_SUCCESS ? CCTRUE : CCFALSE;
+    CMKTargetState root_state =
+        cmk_plan_target_at(scheduler->plan, root)->state;
+    ok = (root_state == CMK_TARGET_SUCCESS ||
+          root_state == CMK_TARGET_SKIPPED)
+        ? CCTRUE : CCFALSE;
     ccalloc(batch, 0, NULL);
     ccalloc(threads, 0, NULL);
     return ok;

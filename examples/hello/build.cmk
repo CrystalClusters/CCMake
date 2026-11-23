@@ -1,0 +1,15 @@
+// hello 示例：main 聚合目标依赖 hello 可执行文件。
+@include "project.ccm";
+
+target main() {
+    list<target_ref> depends_on = {hello};
+}
+
+target hello() {
+    list<string> inputs = {"src/main.c"};
+    list<string> outputs = {"build/hello.exe"};
+    list<action> actions = {
+        mkdir("build"),
+        command(@{toolchain.cc}, @{toolchain.cflags} + {"src/main.c", "-o", "build/hello.exe"})
+    };
+}

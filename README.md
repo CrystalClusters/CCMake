@@ -39,13 +39,13 @@ DEBUG 使用 `-O0 -g3 -Wall -Wextra`，RELEASE 使用 `-O2 -DNDEBUG -DCC_RELEASE
 out/
 ├── obj/                  中间目标文件（.o）
 └── <平台>_bin/           按平台架构命名的产物目录
-    ├── ccmaker(.exe)     可执行文件
+    ├── ccmake(.exe)     可执行文件
     └── ccmake_test(.exe) 测试程序（build.bat / build.sh 生成）
 ```
 
 ## 测试
 
-测试是一个独立的 C 程序（参考 CrystalStd 测试结构）：直接链接 `src/` 下除 `main.c` 外的源码，包含 `CMD`、`CCM`、`PARSE`、`VARS` 四个套件，分别校验命令行解析、CCM 文件定位、CCM 内容解析与全局变量树。`build.bat` / `build.sh` 会同时生成 `ccmaker` 与 `ccmake_test`。
+测试是一个独立的 C 程序（参考 CrystalStd 测试结构）：直接链接 `src/` 下除 `main.c` 外的源码，包含 `CMD`、`CCM`、`PARSE`、`VARS` 四个套件，分别校验命令行解析、CCM 文件定位、CCM 内容解析与全局变量树。`build.bat` / `build.sh` 会同时生成 `ccmake` 与 `ccmake_test`。
 
 ```bat
 build.bat
