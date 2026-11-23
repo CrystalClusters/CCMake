@@ -69,5 +69,8 @@ bash test.sh CMD
 
 ## 详细资料
 
-[用户手册](docs/用户手册.md)
-[开发手册](docs/dev/开发手册.md)
+- [用户手册](docs/用户手册.md)
+- [.ccm 语法参考](docs/CCM语法参考.md)
+- [.cmk 语法参考](docs/CMK语法参考.md)
+- [应用场景教学](docs/应用场景教学.md)
+- [开发手册](docs/dev/开发手册.md)

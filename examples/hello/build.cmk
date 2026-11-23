@@ -1,15 +1,18 @@
 // hello 示例：main 聚合目标依赖 hello 可执行文件。
 @include "project.ccm";
 
+// 从 src 递归检索所有 .c 文件；不枚举源码文件名。
+list<string> sources = find_files("*.c", {"src"});
+
 target main() {
     list<target_ref> depends_on = {hello};
 }
 
 target hello() {
-    list<string> inputs = {"src/main.c"};
-    list<string> outputs = {"build/hello.exe"};
+    list<string> inputs = sources;
+    list<string> outputs = {@{output}};
     list<action> actions = {
-        mkdir("build"),
-        command(@{toolchain.cc}, @{toolchain.cflags} + {"src/main.c", "-o", "build/hello.exe"})
+        mkdir(dirname(@{output})),
+        command(@{toolchain.cc}, @{toolchain.cflags} + sources + {"-o", @{output}})
     };
 }
