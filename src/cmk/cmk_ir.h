@@ -12,9 +12,9 @@
 
 #include "cmk_diagnostic.h"
 #include "cmk_target.h"
-#include "cmk_target_draft.h"
 
 typedef struct cmk_plan CMKPlan;
+typedef struct cmk_target_draft CMKTargetDraft;
 
 CMKPlan *cmk_plan_create(void);
 void cmk_plan_destroy(CMKPlan *plan);
@@ -51,5 +51,12 @@ CMKTargetId cmk_plan_find_target(
 CMKTargetId cmk_plan_root(const CMKPlan *plan);
 CCUINT32 cmk_plan_order_count(const CMKPlan *plan);
 CMKTargetId cmk_plan_order_at(const CMKPlan *plan, CCUINT32 index);
+/* 目标键只读访问；避免调用方依赖 CMKPlanTarget 内部布局 */
+const char *cmk_plan_target_module(
+    const CMKPlanTarget *target, CCUINT32 *len
+);
+const char *cmk_plan_target_name(
+    const CMKPlanTarget *target, CCUINT32 *len
+);
 
 #endif

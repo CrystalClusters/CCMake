@@ -11,7 +11,6 @@
 #include "cmk/cmk_executor.h"
 #include "cmk/cmk_program.h"
 #include "cmk/cmk_scheduler.h"
-#include "cmk/cmk_target_internal.h"
 
 #include <color_print.h>
 
@@ -20,16 +19,25 @@ typedef struct program_cache_ctx {
     CMKPlan *plan;
 } ProgramCacheCtx;
 
+static CMKTargetId cache_target_id(
+    const ProgramCacheCtx *ctx, const CMKPlanTarget *target
+)
+{
+    CCUINT32 module_len = 0;
+    CCUINT32 name_len = 0;
+    const char *module = cmk_plan_target_module(target, &module_len);
+    const char *name = cmk_plan_target_name(target, &name_len);
+    return cmk_plan_find_target(
+        ctx->plan, module, module_len, name, name_len
+    );
+}
+
 static CCBOOL program_cache_should_skip(
     void *user, const CMKPlanTarget *target, CCBOOL *skip
 )
 {
     ProgramCacheCtx *ctx = (ProgramCacheCtx *)user;
-    CMKTargetId id = cmk_plan_find_target(
-        ctx->plan,
-        target->key.module.data, target->key.module.len,
-        target->key.name.data, target->key.name.len
-    );
+    CMKTargetId id = cache_target_id(ctx, target);
     return cmk_cache_should_skip(
         ctx->cache, ctx->plan, id, CCFALSE, skip
     );
@@ -40,11 +48,7 @@ static CCBOOL program_cache_record(
 )
 {
     ProgramCacheCtx *ctx = (ProgramCacheCtx *)user;
-    CMKTargetId id = cmk_plan_find_target(
-        ctx->plan,
-        target->key.module.data, target->key.module.len,
-        target->key.name.data, target->key.name.len
-    );
+    CMKTargetId id = cache_target_id(ctx, target);
     return cmk_cache_record(ctx->cache, ctx->plan, id);
 }
 
@@ -117,7 +121,9 @@ CCBOOL build_project(void)
         {
             const CMKPlanTarget *target = cmk_plan_target_at(plan, i);
             if (target)
-                color_print("  %s\n", target->key.name.data);
+                color_print(
+                    "  %s\n", cmk_plan_target_name(target, NULL)
+                );
         }
         cmk_program_destroy(program);
         cmk_diagnostic_clear(&diagnostic);

@@ -9,6 +9,7 @@
 
 #include "cmk_ir.h"
 #include "cmk_semantic_internal.h"
+#include "cmk_target_draft.h"
 #include "cmk_target_internal.h"
 #include "cmk_safe.h"
 
@@ -229,6 +230,36 @@ const CMKPlanTarget *cmk_plan_target_at(
     if (!plan || id >= cmk_plan_target_count(plan))
         return NULL;
     return &((const CMKPlanTarget *)plan->targets.array)[id];
+}
+
+const char *cmk_plan_target_module(
+    const CMKPlanTarget *target, CCUINT32 *len
+)
+{
+    if (!target)
+    {
+        if (len)
+            *len = 0;
+        return NULL;
+    }
+    if (len)
+        *len = target->key.module.len;
+    return target->key.module.data;
+}
+
+const char *cmk_plan_target_name(
+    const CMKPlanTarget *target, CCUINT32 *len
+)
+{
+    if (!target)
+    {
+        if (len)
+            *len = 0;
+        return NULL;
+    }
+    if (len)
+        *len = target->key.name.len;
+    return target->key.name.data;
 }
 
 CMKTargetId cmk_plan_find_target(

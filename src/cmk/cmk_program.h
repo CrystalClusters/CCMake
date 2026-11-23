@@ -11,9 +11,9 @@
 #define _INCLUDE_CMK_PROGRAM_H_
 
 #include "cmk_config.h"
-#include "cmk_ir.h"
 #include "cmk_runtime.h"
 
+typedef struct cmk_plan CMKPlan;
 typedef struct cmk_program CMKProgram;
 typedef struct cmk_program_module CMKProgramModule;
 

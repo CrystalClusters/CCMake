@@ -8,6 +8,7 @@
 #include "ccvar.h"
 #include "ccmake_header.h"
 #include "cmk/cmk_program.h"
+#include "cmk/cmk_ir.h"
 #include "cmk/cmk_semantic_internal.h"
 
 #include <stdlib.h>

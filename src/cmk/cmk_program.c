@@ -8,6 +8,7 @@
  */
 
 #include "cmk_program.h"
+#include "cmk_ir.h"
 #include "cmk_semantic_internal.h"
 #include "cmk_safe.h"
 
