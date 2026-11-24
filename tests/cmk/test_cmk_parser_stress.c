@@ -194,6 +194,33 @@ void test_cmk_parser_stress(void)
 
 
     /* ------------------------------------------------------------------
+     * STRESS-003 深嵌套块
+     * ---------------------------------------------------------------- */
+    CC_CASE("STRESS-003", "深嵌套块");
+    {
+        const CCUINT32 depth = 5000;
+        size_t cap = (size_t)depth * 2 + 64;
+        char *src = ccalloc(NULL, cap, NULL);
+        CC_CHECK(src != NULL, "分配源码");
+        if (src)
+        {
+            size_t used = (size_t)snprintf(src, cap, "func main() -> void {");
+            for (CCUINT32 i = 0; i < depth; i++)
+                src[used++] = '{';
+            for (CCUINT32 i = 0; i < depth; i++)
+                src[used++] = '}';
+            src[used++] = '}';
+            src[used] = '\0';
+
+            CMKTestParse ctx;
+            CC_CHECK(cmk_test_parse_begin(&ctx, src, NULL), "解析深嵌套块");
+            cmk_test_parse_end(&ctx);
+            ccalloc(src, 0, NULL);
+        }
+    }
+    CC_CASE_END();
+
+    /* ------------------------------------------------------------------
      * STRESS-004 大量顶层声明
      * ---------------------------------------------------------------- */
     CC_CASE("STRESS-004", "大量顶层声明");

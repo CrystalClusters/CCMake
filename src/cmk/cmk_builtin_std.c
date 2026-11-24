@@ -24,7 +24,9 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#ifndef CC_WINDOWS
+#ifdef CC_WINDOWS
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -1114,6 +1116,40 @@ static CCBOOL builtin_file_mtime(CMKBuiltinCall *call)
     );
 }
 
+static CCBOOL builtin_file_time_ns(
+    CMKBuiltinCall *call, const char *path,
+    CCUINT64 *time_ns, CCBOOL *exists
+)
+{
+    CCBOOL ok = CCTRUE;
+    char *joined = builtin_resolve_path(call, path, &ok);
+    if (!ok)
+        return CCFALSE;
+    const char *resolved = joined ? joined : path;
+#ifdef CC_WINDOWS
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    *exists = GetFileAttributesExA(
+        resolved, GetFileExInfoStandard, &data
+    ) ? CCTRUE : CCFALSE;
+    if (*exists)
+    {
+        ULARGE_INTEGER value;
+        value.LowPart = data.ftLastWriteTime.dwLowDateTime;
+        value.HighPart = data.ftLastWriteTime.dwHighDateTime;
+        *time_ns = (CCUINT64)value.QuadPart * 100u;
+    }
+#else
+    struct stat st;
+    *exists = stat(resolved, &st) == 0 ? CCTRUE : CCFALSE;
+    if (*exists)
+        *time_ns = (CCUINT64)st.st_mtim.tv_sec * 1000000000u +
+            (CCUINT64)st.st_mtim.tv_nsec;
+#endif
+    if (joined)
+        ccalloc(joined, 0, NULL);
+    return CCTRUE;
+}
+
 static CCBOOL builtin_file_newer(CMKBuiltinCall *call)
 {
     CMKValue *left = NULL;
@@ -1123,20 +1159,20 @@ static CCBOOL builtin_file_newer(CMKBuiltinCall *call)
         !builtin_expect(call, 1, CMK_VALUE_STRING, &right))
         return CCFALSE;
 
-    struct stat left_st;
-    struct stat right_st;
+    CCUINT64 left_time = 0;
+    CCUINT64 right_time = 0;
     CCBOOL left_exists = CCFALSE;
     CCBOOL right_exists = CCFALSE;
-    if (!builtin_file_stat(
-            call, left->as.string.data, &left_st, &left_exists
+    if (!builtin_file_time_ns(
+            call, left->as.string.data, &left_time, &left_exists
         ) ||
-        !builtin_file_stat(
-            call, right->as.string.data, &right_st, &right_exists
+        !builtin_file_time_ns(
+            call, right->as.string.data, &right_time, &right_exists
         ))
         return CCFALSE;
 
     CCBOOL newer = (left_exists && right_exists &&
-        left_st.st_mtime > right_st.st_mtime) ? CCTRUE : CCFALSE;
+        left_time > right_time) ? CCTRUE : CCFALSE;
     return cmk_value_set_bool(call->out, newer);
 }
 
@@ -1254,7 +1290,7 @@ static const CMKBuiltinSpec standard_specs[] = {
         CMK_RET_BOOL_, CMK_BUILTIN_READ_FS, builtin_file_newer
     ),
     CMK_BUILTIN_SPEC(
-        "command", "command(string, list<string> [, string [, list<string>]]) -> action",
+        "command", "command(string, list<string> [, string [, list<string>]]) -> void",
         command_args, 2, 4,
         CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_command

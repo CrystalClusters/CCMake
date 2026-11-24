@@ -163,6 +163,30 @@ void test_cmk_semantic(void)
 
 
 
+    CC_CASE("SEM-004", "深语句");
+    {
+        const CCUINT32 depth = 5000;
+        size_t cap = (size_t)depth * 2 + 64;
+        char *src = ccalloc(NULL, cap, NULL);
+        CC_CHECK(src != NULL, "分配源码");
+        if (src)
+        {
+            size_t used = (size_t)snprintf(src, cap, "func main() -> void {");
+            for (CCUINT32 i = 0; i < depth; i++)
+                src[used++] = '{';
+            for (CCUINT32 i = 0; i < depth; i++)
+                src[used++] = '}';
+            src[used++] = '}';
+            src[used] = '\0';
+            CMKTestContext ctx;
+            cmk_test_context_init(&ctx);
+            CC_CHECK(cmk_test_context_load(&ctx, src), "语义分析深嵌套块");
+            cmk_test_context_clear(&ctx);
+            ccalloc(src, 0, NULL);
+        }
+    }
+    CC_CASE_END();
+
     /* ------------------------------------------------------------------
      * SEM-005 配置引用
      * ---------------------------------------------------------------- */

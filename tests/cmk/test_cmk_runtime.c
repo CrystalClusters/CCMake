@@ -719,4 +719,5 @@ void test_cmk_runtime(void)
         cmk_test_context_clear(&ctx);
     }
     CC_CASE_END();
+
 }
