@@ -1,25 +1,24 @@
 # CMK 语法参考
 
-`.cmk` 是构建脚本，分两段执行：
+`.cmk` 是脚本。CCMake 固定执行入口：
 
-```text
-Configure：执行脚本、求值 target、生成 Plan
-Build：Scheduler 调度，Executor 执行目标动作
+```c
+func main() -> void
 ```
 
-Configure 阶段不创建进程；外部命令只能作为目标动作，在 Build 阶段执行。
+没有 `main` 时直接成功退出；动作由脚本按代码顺序调用 `run(...)` 执行。
 
 ## 1. 文件结构
 
 ```text
 module      := top_item*
-top_item    := include | import | var_decl | func_decl | target_decl | top_if
+top_item    := include | import | var_decl | func_decl
 ```
 
 - `@include` 引入 `.ccm` 配置；
-- `@import` 引入其他 `.cmk` 的函数或 target；
-- 变量、函数、target 可以出现在顶层；
-- 顶层 `if` 只能选择 target；
+- `@import` 引入其他 `.cmk` 的函数；
+- 变量、函数可以出现在顶层；
+- 顶层只允许 include、import、变量与函数声明；
 - 语句以 `;` 结束，代码块用 `{}`。
 
 ## 2. 词法
@@ -38,13 +37,13 @@ top_item    := include | import | var_decl | func_decl | target_decl | top_if
 关键字：
 
 ```text
-string int float bool void list action target target_ref
+string int float bool void list action
 const if else for in while break continue
 func return @include @import from as true false
 _
 ```
 
-保留字不能作为变量名、函数名或 target 名。
+保留字不能作为变量名或函数名。
 
 ### 2.3 数字
 
@@ -114,9 +113,8 @@ _
 | `string` | `"text"` | 字符串 |
 | `list<T>` | `list<string>` | 同质列表 |
 | `action` | `command(...)` | 目标动作 |
-| `target_ref` | `core` / `alias.core` | 仅用于 `depends_on` |
 
-`list<T>` 不支持嵌套列表。空列表 `{}` 的元素类型由声明、函数返回类型或 target 字段上下文确定。
+`list<T>` 不支持嵌套列表。空列表 `{}` 的元素类型由声明或函数返回类型确定。
 
 ## 4. 变量与赋值
 
@@ -236,18 +234,6 @@ func f() -> int {
 - 非 void 函数所有路径必须返回值；
 - `return` 表达式中的函数调用由 VM 处理，不受固定 C 栈深度限制。
 
-### 顶层 if
-
-顶层 `if` 只能包含 target 声明：
-
-```c
-if (@{platform} == "windows") {
-    target main() { ... }
-} else {
-    target main() { ... }
-}
-```
-
 ## 8. 函数
 
 ```c
@@ -297,72 +283,64 @@ func noop() -> void {
 @import func compile as gcc_compile from "rules/gcc.cmk";
 ```
 
-### 导入 target
-
-```c
-@import target core, utils from "targets/common.cmk" as common;
-```
-
-- 函数导入与 target 导入相互独立；
-- target 通过 `common.core`、`common.utils` 引用；
-- 未导入的跨模块 target 不能直接引用；
 - 模块级变量不跨模块导出；
 - 循环导入报错。
 
-## 10. target
+## 10. 入口 main
+
+入口固定为：
 
 ```c
-list<string> sources = find_files("*.c", {"src"});
-
-target app() {
-    list<target_ref> depends_on = {core};
-    list<string> inputs = sources;
-    list<string> outputs = {@{output}};
-    list<action> actions = {
-        mkdir(dirname(@{output})),
-        command("cc", @{cflags} + sources + {"-o", @{output}})
-    };
+func main() -> void {
+    ...
 }
 ```
 
-字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `depends_on` | `list<target_ref>` | 依赖目标，必须成功后才执行 |
-| `inputs` | `list<string>` | 缓存签名输入；不会自动加入命令 argv |
-| `outputs` | `list<string>` | 缓存签名输出；缺失或变化使缓存失效 |
-| `actions` | `list<action>` | 按顺序执行的动作 |
-
-规则：
-
-- target 只能出现在顶层，或顶层 `if` 分支；
-- 目标身份是 `模块路径 + target 名`；
-- 本模块 target 直接写名字；
-- 跨模块 target 写 `别名.目标名`；
-- 聚合目标可以只有 `depends_on`；
-- 空 target 至少需要依赖、输入、输出或动作之一；
-- 默认构建目标为 `main`，可用 `-t name` 指定；
-- `inputs` / `outputs` 是构建元数据，Executor 不会自动拼接或创建它们；
-- target 字段名不是 `actions` 作用域的变量；在 `actions` 中直接引用 `inputs` 会报“未定义的标识符”；
-- 需要让同一批文件同时进入 `inputs` 和命令 argv 时，把列表存成模块级变量：
+- `main` 必须无参数、返回 `void`；
+- 没有 `main` 时脚本直接成功退出；
+- 不能通过命令行指定其他入口；
+- `main` 内可以调用任意普通函数；
+- `main` 内按代码顺序调用 `run(...)` 执行动作。
 
 ```c
-list<string> sources = find_files("*.c", {"src"});
-
-target app() {
-    list<string> inputs = sources;
-    list<string> outputs = {@{output}};
-    list<action> actions = {
-        mkdir(dirname(@{output})),
-        command("cc", @{cflags} + sources + {"-o", @{output}})
-    };
+func main() -> void {
+    info("cc: %s", @{toolchain.cc});
+    run({
+        mkdir("build"),
+        command("cc", {"main.c", "-o", "build/app"})
+    });
 }
 ```
 
-- `actions` 顺序执行，失败即停止当前目标。
+入口没有字段声明；动作通过 `run(...)` 执行。
 
 ## 11. 动作
+
+动作是值；只有传给 `run(...)` 才执行。
+
+### run
+
+```c
+run(list<action>) -> void
+```
+
+按列表顺序立即执行动作，失败则停止并报错。
+
+```c
+run({
+    mkdir("build"),
+    command("cc", {"main.c", "-o", "build/app"})
+});
+```
+
+可以分多次调用，执行顺序由代码决定：
+
+```c
+run({mkdir("build")});
+if (!file_exists("build/app") || file_newer("main.c", "build/app")) {
+    run({command("cc", {"main.c", "-o", "build/app"})});
+}
+```
 
 ### command
 
@@ -383,7 +361,7 @@ command("cc", {"main.c"}, "src", {"CC=gcc", "CFLAGS=-O2"})
 - `cwd`：可选工作目录；
 - `env`：可选 `list<string>`，元素形如 `"K=V"`；
 - 返回 `action`；
-- 进程输出由 Executor 捕获，Scheduler 按稳定顺序输出。
+- 由 `run(...)` 执行，进程输出按动作顺序输出。
 
 ### mkdir
 
@@ -513,41 +491,95 @@ list<string> sources = find_files("*.c", {"src", "generated"});
 - 返回结果排序并去重；
 - 受 `CCMAKE_CMK_MAX_FIND_DEPTH` 约束。
 
-### command / mkdir / copy / move / remove
-
-见第 11 节。
-
-### info
+### file_exists
 
 ```c
-info(string, ...) -> void
+file_exists(string) -> bool
 ```
 
-输出信息。格式串支持 `%s`、`%d`、`%f`、`%%`。
+判断路径是否为已存在的普通文件。
 
 ```c
-info("building %s", name);
+if (file_exists(@{output})) {
+    info("output exists");
+}
 ```
 
-### warn
+- 只有普通文件返回 `true`；
+- 目录、缺失路径返回 `false`；
+- 相对路径按当前工作目录解析。
+
+### file_mtime
 
 ```c
-warn(string, ...) -> void
+file_mtime(string) -> int
 ```
 
-输出警告，不终止 Configure。
-
-### error
+返回文件修改时间，Unix 秒。
 
 ```c
-error(string, ...) -> void
+int t = file_mtime("build/app");
 ```
 
-输出错误并终止 Configure；属于不返回函数。
+- 文件不存在返回 `-1`；
+- 目录也可返回时间，但通常应配合 `file_exists` 使用；
+- 精度取决于宿主文件系统，通常是秒级。
+
+### file_newer
 
 ```c
-error("unsupported platform: %s", @{platform});
+file_newer(string, string) -> bool
 ```
+
+判断第一个文件是否比第二个文件更新。
+
+```c
+if (file_newer("src/main.c", "build/main.o")) {
+    ...
+}
+```
+
+- 两个路径都必须是存在的文件；
+- 任一文件缺失返回 `false`；
+- 比较的是 `file_mtime`；
+- 可用于手动判断对象文件/可执行文件是否过期。
+
+## 手动增量控制
+
+是否执行动作由脚本条件决定：
+
+```c
+func main() -> void {
+    list<string> sources = find_files("*.c", {"src"});
+
+    if (!file_exists(@{output}) ||
+        file_newer("src/main.c", @{output})) {
+        run({
+            mkdir(dirname(@{output})),
+            command(
+                @{toolchain.cc},
+                @{toolchain.cflags} + sources + {"-o", @{output}}
+            )
+        });
+    }
+}
+```
+
+多文件逐对象判断：
+
+```c
+for (string src in sources) {
+    string obj = "build/" + subst(basename(src), ".c", ".o");
+    if (!file_exists(obj) || file_newer(src, obj)) {
+        run({command(
+            @{toolchain.cc},
+            @{toolchain.cflags} + {"-c", src, "-o", obj}
+        )});
+    }
+}
+```
+
+CCMake 不决定哪些动作需要执行，只按 `run(...)` 的调用顺序执行。
 
 ## 13. 执行策略
 
@@ -559,37 +591,29 @@ error("unsupported platform: %s", @{platform});
 | `CCMAKE_CMK_MAX_RECURSION_DEPTH` | 函数调用深度策略 |
 | `CCMAKE_CMK_MAX_CONFIGURE_TIME_MS` | Configure 最大 CPU 时间 |
 | `CCMAKE_CMK_MAX_FIND_DEPTH` | `find_files` 最大目录深度 |
-| `CCMAKE_CMK_MAX_PROCESSES` | Scheduler READY 并发上限 |
 | `CCMAKE_CMK_MAX_OUTPUT_CAPTURE` | 单进程输出捕获上限 |
 
-命令行 `-j` 覆盖构建并发数；`-B` 强制绕过缓存；`-k` 继续独立目标。
+执行顺序完全由脚本 `run(...)` 调用顺序决定；没有并发调度。
 
 ## 14. 完整示例
 
 ```c
 @include "project.ccm";
 
-// 源码由检索得到，不在脚本中枚举文件名。
-list<string> sources = find_files("*.c", {"src"});
+func main() -> void {
+    list<string> sources = find_files("*.c", {"src"});
+    info("cc: %s", @{toolchain.cc});
 
-func build_actions() -> list<action> {
-    return {
-        mkdir(dirname(@{output})),
-        command(
-            @{toolchain.cc},
-            @{toolchain.cflags} + sources + {"-o", @{output}}
-        )
-    };
-}
-
-target main() {
-    list<target_ref> depends_on = {app};
-}
-
-target app() {
-    list<string> inputs = sources;
-    list<string> outputs = {@{output}};
-    list<action> actions = build_actions();
+    if (!file_exists(@{output}) ||
+        file_newer("src/main.c", @{output})) {
+        run({
+            mkdir(dirname(@{output})),
+            command(
+                @{toolchain.cc},
+                @{toolchain.cflags} + sources + {"-o", @{output}}
+            )
+        });
+    }
 }
 ```
 
@@ -597,8 +621,9 @@ target app() {
 
 ```bat
 ccmake -c project.ccm -f build.cmk
-ccmake -c project.ccm -f build.cmk -t app
 ```
+
+没有必填字段；`main` 为空或不存在时正常退出。
 
 ## 15. 常见错误
 
@@ -608,8 +633,6 @@ ccmake -c project.ccm -f build.cmk -t app
 | 未处理的返回值 | 有返回值调用没有赋值给变量或 `_` |
 | 类型不匹配 | 变量、参数、列表元素类型不一致 |
 | 未知配置字段 | `@{...}` 路径在 `.ccm` 中不存在 |
-| 目标不存在 | `depends_on` 引用了未导入或未声明的 target |
-| target 位置非法 | target 出现在函数、循环或动作列表内 |
 | 非 void 函数缺少返回值 | 存在未 return 的控制流路径 |
 | 列表嵌套 | `list<list<T>>` 不支持 |
 | 赋值当表达式 | `if (x = 1)` 或 `f(x = 1)` |

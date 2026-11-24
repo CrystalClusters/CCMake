@@ -10,8 +10,7 @@
 
 typedef enum cmk_symbol_kind {
     CMK_SYMBOL_VAR = 0,
-    CMK_SYMBOL_FUNCTION,
-    CMK_SYMBOL_TARGET
+    CMK_SYMBOL_FUNCTION
 } CMKSymbolKind;
 
 typedef struct cmk_symbol {
@@ -20,7 +19,6 @@ typedef struct cmk_symbol {
     CMKType type;                 /* 变量类型或函数返回类型 */
     CCBOOL is_const;
     const CMKFunctionInfo *function;
-    const CMKTargetInfo *target;
 } CMKSymbol;
 
 typedef struct cmk_scope {
@@ -37,26 +35,15 @@ struct cmk_function_info {
     CMKSemanticModule *module;
 };
 
-struct cmk_target_info {
-    CMKString name;
-    CMKASTNodeId decl;
-    CMKSemanticModule *module;
-    CCBOOL conditional;
-};
 
 typedef struct cmk_imported_function {
     CMKString name;               /* 当前模块中的本地名/别名 */
     const CMKFunctionInfo *function;
 } CMKImportedFunction;
 
-typedef struct cmk_imported_target {
-    CMKString alias;              /* 模块别名 */
-    const CMKTargetInfo *target;
-} CMKImportedTarget;
 
 typedef struct cmk_node_semantics {
     CMKType type;
-    const CMKTargetInfo *target_ref;
     const CMKFunctionInfo *function;
     const CMKBuiltinSpec *builtin;
     CCBOOL noreturn;
@@ -71,9 +58,7 @@ struct cmk_semantic_module {
 
     CMKScope *module_scope;
     CCDyn functions;              /* CMKFunctionInfo* */
-    CCDyn targets;                /* CMKTargetInfo* */
     CCDyn imported_functions;     /* CMKImportedFunction* */
-    CCDyn imported_targets;       /* CMKImportedTarget* */
     CMKNodeSemantics *nodes;      /* 按 AST node ID 索引 */
     CCUINT32 node_count;
     CCBOOL analyzed;

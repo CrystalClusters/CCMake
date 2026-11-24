@@ -1,5 +1,3 @@
 @import func missing_func from "lib.cmk";
 
-target app() {
-    list<string> outputs = {"a.out"};
-}
+func main() -> void {}

@@ -3,7 +3,7 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 进程抽象（M7）
+ * @Description: CMK 进程抽象
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -13,6 +13,7 @@
 
 #include "cmk_process.h"
 #include "cmk_safe.h"
+#include "cmk_value.h"
 
 #include <ccalloc.h>
 #include <cc_dyn.h>

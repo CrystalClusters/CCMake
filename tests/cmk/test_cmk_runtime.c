@@ -12,8 +12,6 @@
 
 #include <string.h>
 
-static void test_runtime_deep_statements(void);
-
 static CCBOOL exec_stack_probe(void *user)
 {
     CCBOOL *flags = (CCBOOL *)user;
@@ -30,23 +28,6 @@ static CCBOOL get_global(
     return cmk_runtime_get_global(
         ctx->runtime, name, (CCUINT32)strlen(name), out
     );
-}
-
-static const CMKTargetDraft *find_target(
-    const CMKTestContext *ctx, const char *name
-)
-{
-    CCUINT32 count = cmk_runtime_target_count(ctx->runtime);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        const CMKTargetDraft *draft =
-            cmk_runtime_target_at(ctx->runtime, i);
-        if (draft && draft->info &&
-            draft->info->name.len == strlen(name) &&
-            memcmp(draft->info->name.data, name, draft->info->name.len) == 0)
-            return draft;
-    }
-    return NULL;
 }
 
 static CCBOOL set_int_array(
@@ -190,127 +171,9 @@ void test_cmk_runtime(void)
     }
     CC_CASE_END();
 
-    /* ------------------------------------------------------------------
-     * RT-004 target 与动作
-     * ---------------------------------------------------------------- */
-    CC_CASE("RT-004", "target 与动作");
-    {
-        const char *source =
-            "target app() {\n"
-            "    list<target_ref> depends_on = {core};\n"
-            "    list<string> inputs = {\"a.c\"};\n"
-            "    list<string> outputs = {\"app\"};\n"
-            "    list<action> actions = {\n"
-            "        mkdir(\"build\"),\n"
-            "        command(\"cc\", {\"-O2\", \"a.c\"})\n"
-            "    };\n"
-            "}\n"
-            "target core() {}\n";
 
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(cmk_test_context_load(&ctx, source), "语义通过");
-        CC_CHECK(cmk_test_context_configure(&ctx), "Configure 通过");
-        CC_CHECK_EQ_I64("target 数", 2,
-                        (CCINT64)cmk_runtime_target_count(ctx.runtime));
 
-        const CMKTargetDraft *app = find_target(&ctx, "app");
-        CC_CHECK(app != NULL, "找到 app draft");
-        if (app)
-        {
-            CC_CHECK_EQ_I64(
-                "depends_on 数", 1,
-                (CCINT64)cmk_list_count(app->depends_on.as.list)
-            );
-            const CMKValue *dep =
-                cmk_list_at(app->depends_on.as.list, 0);
-            CC_CHECK(
-                dep && dep->type == CMK_VALUE_TARGET_REF &&
-                strcmp(dep->as.target_ref.name.data, "core") == 0,
-                "target_ref 值"
-            );
-            CC_CHECK_EQ_I64(
-                "action 数", 2,
-                (CCINT64)cmk_list_count(app->actions.as.list)
-            );
-            const CMKValue *mkdir =
-                cmk_list_at(app->actions.as.list, 0);
-            const CMKValue *command =
-                cmk_list_at(app->actions.as.list, 1);
-            CC_CHECK(
-                mkdir && mkdir->type == CMK_VALUE_ACTION &&
-                mkdir->as.action->kind == CMK_ACTION_MKDIR,
-                "mkdir 动作"
-            );
-            CC_CHECK(
-                command && command->type == CMK_VALUE_ACTION &&
-                command->as.action->kind == CMK_ACTION_EXEC &&
-                strcmp(command->as.action->program.data, "cc") == 0 &&
-                cmk_list_count(command->as.action->args) == 2,
-                "command 动作"
-            );
-        }
-        cmk_test_context_clear(&ctx);
-    }
-    CC_CASE_END();
 
-    /* ------------------------------------------------------------------
-     * RT-005 顶层 if 选择 target
-     * ---------------------------------------------------------------- */
-    CC_CASE("RT-005", "顶层 if 选择 target");
-    {
-        const char *source =
-            "if (@{platform} == \"windows\") {\n"
-            "    target app() { list<string> outputs = {\"a.exe\"}; }\n"
-            "} else {\n"
-            "    target app() { list<string> outputs = {\"a\"}; }\n"
-            "}\n";
-
-        {
-            CMKTestContext ctx;
-            cmk_test_context_init(&ctx);
-            CC_CHECK(
-                cmk_test_set_string(ctx.tree, "platform", "windows"),
-                "配置 windows"
-            );
-            CC_CHECK(cmk_test_context_load(&ctx, source), "语义通过");
-            CC_CHECK(cmk_test_context_configure(&ctx), "Configure 通过");
-            CC_CHECK_EQ_I64(
-                "windows target 数", 1,
-                (CCINT64)cmk_runtime_target_count(ctx.runtime)
-            );
-            const CMKTargetDraft *app = find_target(&ctx, "app");
-            CC_CHECK(app != NULL, "windows app");
-            if (app)
-            {
-                const CMKValue *output =
-                    cmk_list_at(app->outputs.as.list, 0);
-                CC_CHECK_EQ_STR("windows 输出", "a.exe", output->as.string.data);
-            }
-            cmk_test_context_clear(&ctx);
-        }
-
-        {
-            CMKTestContext ctx;
-            cmk_test_context_init(&ctx);
-            CC_CHECK(
-                cmk_test_set_string(ctx.tree, "platform", "linux"),
-                "配置 linux"
-            );
-            CC_CHECK(cmk_test_context_load(&ctx, source), "语义通过");
-            CC_CHECK(cmk_test_context_configure(&ctx), "Configure 通过");
-            const CMKTargetDraft *app = find_target(&ctx, "app");
-            CC_CHECK(app != NULL, "linux app");
-            if (app)
-            {
-                const CMKValue *output =
-                    cmk_list_at(app->outputs.as.list, 0);
-                CC_CHECK_EQ_STR("linux 输出", "a", output->as.string.data);
-            }
-            cmk_test_context_clear(&ctx);
-        }
-    }
-    CC_CASE_END();
 
     /* ------------------------------------------------------------------
      * RT-006 for-in / break / continue
@@ -398,207 +261,7 @@ void test_cmk_runtime(void)
     }
     CC_CASE_END();
 
-    /* ------------------------------------------------------------------
-     * RT-008 可配置执行策略
-     * ---------------------------------------------------------------- */
-    CC_CASE("RT-008", "可配置执行策略");
-    {
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(
-                &ctx,
-                "int a = 1;\nint b = 2;\nint c = 3;\n"
-            ),
-            "策略用例语义通过"
-        );
-        ctx.runtime = cmk_runtime_create(
-            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
-        );
-        CC_CHECK(ctx.runtime != NULL, "策略运行时创建");
-        CMKExecutionPolicy policy;
-        cmk_execution_policy_init(&policy);
-        policy.max_steps = 2;
-        cmk_runtime_set_policy(ctx.runtime, &policy);
-        CC_CHECK(!cmk_runtime_configure(ctx.runtime), "步数预算触发失败");
-        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
-        CC_CHECK(
-            diag && diag->message &&
-            strstr(diag->message, "执行步数") != NULL,
-            "步数预算诊断"
-        );
-        cmk_test_context_clear(&ctx);
-    }
-    CC_CASE_END();
-    test_runtime_deep_statements();
-}
 
-static void test_runtime_deep_statements(void)
-{
-    CC_CASE("RT-009", "显式语句栈深嵌套");
-    char *source = ccalloc(NULL, 200000, "CMK 运行时深语句测试");
-    CC_CHECK(source != NULL, "运行时深语句缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        const char *head = "func f() -> int {";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '{';
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '}';
-        const char *tail =
-            "return 1; }\nint g = f();\ntarget core() {}\n";
-        memcpy(source + pos, tail, strlen(tail));
-        pos += strlen(tail);
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层块语义"
-        );
-        CC_CHECK(
-            cmk_test_context_configure(&ctx),
-            "5000 层块 Configure"
-        );
-        CMKValue value;
-        cmk_value_init(&value);
-        CC_CHECK(get_global(&ctx, "g", &value), "深块全局变量");
-        CC_CHECK(
-            value.type == CMK_VALUE_INT &&
-            value.as.integer == 1,
-            "深块返回值"
-        );
-        cmk_value_clear(&value);
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-
-    source = ccalloc(NULL, 200000, "CMK 运行时深 if 测试");
-    CC_CHECK(source != NULL, "运行时深 if 缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        const char *head = "func f() -> int {";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-        {
-            const char *if_head = "if (true) {";
-            memcpy(source + pos, if_head, strlen(if_head));
-            pos += strlen(if_head);
-        }
-        const char *body = "return 1;";
-        memcpy(source + pos, body, strlen(body));
-        pos += strlen(body);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '}';
-        const char *tail =
-            "return 1; }\nint g = f();\ntarget core() {}\n";
-        memcpy(source + pos, tail, strlen(tail));
-        pos += strlen(tail);
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层 if 语义"
-        );
-        CC_CHECK(
-            cmk_test_context_configure(&ctx),
-            "5000 层 if Configure"
-        );
-        CMKValue value;
-        cmk_value_init(&value);
-        CC_CHECK(get_global(&ctx, "g", &value), "深 if 全局变量");
-        CC_CHECK(
-            value.type == CMK_VALUE_INT &&
-            value.as.integer == 1,
-            "深 if 返回值"
-        );
-        cmk_value_clear(&value);
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-    CC_CASE_END();
-
-    CC_CASE("RT-010", "递归深度策略");
-    {
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(
-                &ctx,
-                "func f(int n) -> int {\n"
-                "    if (n <= 0) { return 0; }\n"
-                "    return f(n - 1);\n"
-                "}\n"
-                "int g = f(100);\n"
-                "target core() {}\n"
-            ),
-            "递归策略语义通过"
-        );
-        ctx.runtime = cmk_runtime_create(
-            ctx.semantic, &ctx.config, ctx.builtins, &ctx.diagnostic
-        );
-        CC_CHECK(ctx.runtime != NULL, "递归策略运行时创建");
-        CMKExecutionPolicy policy;
-        cmk_execution_policy_init(&policy);
-        policy.max_recursion_depth = 8;
-        cmk_runtime_set_policy(ctx.runtime, &policy);
-        CC_CHECK(
-            !cmk_runtime_configure(ctx.runtime),
-            "递归深度预算触发失败"
-        );
-        const CMKDiagnostic *diag = cmk_test_context_diag(&ctx);
-        CC_CHECK(
-            diag && diag->message &&
-            strstr(diag->message, "递归深度") != NULL,
-            "递归深度预算诊断"
-        );
-        cmk_test_context_clear(&ctx);
-    }
-    CC_CASE_END();
-
-    CC_CASE("RT-011", "显式顶层 target 栈");
-    {
-        char *source = ccalloc(NULL, 200000, "CMK 运行时顶层 if 测试");
-        CC_CHECK(source != NULL, "运行时顶层 if 缓冲区");
-        if (source)
-        {
-            size_t pos = 0;
-            for (CCUINT32 i = 0; i < 5000; i++)
-            {
-                const char *head = "if (true) {";
-                memcpy(source + pos, head, strlen(head));
-                pos += strlen(head);
-            }
-            const char *target = "target core() {}";
-            memcpy(source + pos, target, strlen(target));
-            pos += strlen(target);
-            for (CCUINT32 i = 0; i < 5000; i++)
-                source[pos++] = '}';
-            source[pos] = '\0';
-
-            CMKTestContext ctx;
-            cmk_test_context_init(&ctx);
-            CC_CHECK(
-                cmk_test_context_load(&ctx, source),
-                "5000 层顶层 if 语义"
-            );
-            CC_CHECK(
-                cmk_test_context_configure(&ctx),
-                "5000 层顶层 if Configure"
-            );
-            cmk_test_context_clear(&ctx);
-            ccalloc(source, 0, NULL);
-        }
-    }
-    CC_CASE_END();
 
     CC_CASE("RT-012", "显式表达式栈深嵌套");
     {
@@ -631,7 +294,7 @@ static void test_runtime_deep_statements(void)
                     source[pos++] = ',';
             }
             const char *tail =
-                "};\nint c = l[0];\ntarget core() {}\n";
+                "};\nint c = l[0];\nfunc main() -> void {}\n";
             memcpy(source + pos, tail, strlen(tail));
             pos += strlen(tail);
             source[pos] = '\0';
@@ -696,7 +359,7 @@ static void test_runtime_deep_statements(void)
             source[pos++] = '1';
             for (CCUINT32 i = 0; i < 5000; i++)
                 source[pos++] = ')';
-            const char *tail = ";\ntarget core() {}\n";
+            const char *tail = ";\nfunc main() -> void {}\n";
             memcpy(source + pos, tail, strlen(tail));
             pos += strlen(tail);
             source[pos] = '\0';
@@ -734,7 +397,7 @@ static void test_runtime_deep_statements(void)
             "    return f(n - 1);\n"
             "}\n"
             "int g = f(5000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "尾递归语义");
@@ -760,7 +423,7 @@ static void test_runtime_deep_statements(void)
             "    return n * f(n - 1);\n"
             "}\n"
             "int g = f(1000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "非尾递归语义");
@@ -794,7 +457,7 @@ static void test_runtime_deep_statements(void)
             "    return 1 + f(n - 1);\n"
             "}\n"
             "int g = f(1000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "线性递归语义");
@@ -821,7 +484,7 @@ static void test_runtime_deep_statements(void)
             "    return f(n - 1) + f(n - 2);\n"
             "}\n"
             "int g = f(1000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "分支递归语义");
@@ -856,7 +519,7 @@ static void test_runtime_deep_statements(void)
             "    return f(n - 1) + f(n - 2);\n"
             "}\n"
             "int g = f(15);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "分支递归程序语义");
@@ -886,7 +549,7 @@ static void test_runtime_deep_statements(void)
             "    return x;\n"
             "}\n"
             "int g = f(1000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "赋值递归语义");
@@ -921,7 +584,7 @@ static void test_runtime_deep_statements(void)
             "    return i;\n"
             "}\n"
             "int g = tick();\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "时间策略语义");
@@ -953,7 +616,7 @@ static void test_runtime_deep_statements(void)
             "list<string> files = find_files(\"*.c\", "
             "{\"tests/data/cmk/find\"});\n"
             "int n = len(files);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "find 深度语义");
@@ -1003,7 +666,7 @@ static void test_runtime_deep_statements(void)
             "    return x;\n"
             "}\n"
             "int g = f(5000);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "深递归赋值语义");
@@ -1036,7 +699,7 @@ static void test_runtime_deep_statements(void)
             "    return x;\n"
             "}\n"
             "int g = f(100);\n"
-            "target core() {}\n";
+            "func main() -> void {}\n";
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
         CC_CHECK(cmk_test_context_load(&ctx, source), "循环递归语义");

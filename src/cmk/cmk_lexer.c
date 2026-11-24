@@ -58,12 +58,6 @@ const char *cmk_token_type_name(CMKTokenType type)
     case CMK_TOK_KW_ACTION:
         return "`action`";
 
-    case CMK_TOK_KW_TARGET:
-        return "`target`";
-
-    case CMK_TOK_KW_TARGET_REF:
-        return "`target_ref`";
-
     case CMK_TOK_KW_CONST:
         return "`const`";
 
@@ -242,8 +236,6 @@ static const CMKKeywordEntry g_cmk_keywords[] = {
     CMK_KEYWORD("float", CMK_TOK_KW_FLOAT),
     CMK_KEYWORD("list", CMK_TOK_KW_LIST),
     CMK_KEYWORD("action", CMK_TOK_KW_ACTION),
-    CMK_KEYWORD("target", CMK_TOK_KW_TARGET),
-    CMK_KEYWORD("target_ref", CMK_TOK_KW_TARGET_REF),
     CMK_KEYWORD("const", CMK_TOK_KW_CONST),
     CMK_KEYWORD("if", CMK_TOK_KW_IF),
     CMK_KEYWORD("else", CMK_TOK_KW_ELSE),

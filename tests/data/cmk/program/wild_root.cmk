@@ -2,6 +2,4 @@
 
 int value = double_it(3);
 
-target main() {
-    list<string> outputs = {"wild.out"};
-}
+func main() -> void {}

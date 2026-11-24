@@ -4,6 +4,4 @@ func f(int n) -> int {
     return n;
 }
 
-target other() {
-    list<string> outputs = {"b.out"};
-}
+func main() -> void {}

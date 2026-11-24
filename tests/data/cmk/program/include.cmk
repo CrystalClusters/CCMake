@@ -2,6 +2,4 @@
 
 string name = @{name};
 
-target main() {
-    list<string> outputs = {name};
-}
+func main() -> void {}

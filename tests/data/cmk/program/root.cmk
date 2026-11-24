@@ -1,9 +1,5 @@
 @import func double_it from "lib.cmk";
-@import target core from "lib.cmk" as common;
 
 int value = double_it(21);
 
-target main() {
-    list<target_ref> depends_on = {common.core};
-    list<string> outputs = {"main.out"};
-}
+func main() -> void {}

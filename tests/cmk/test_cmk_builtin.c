@@ -356,4 +356,87 @@ void test_cmk_builtin(void)
         cmk_builtin_registry_destroy(registry);
     }
     CC_CASE_END();
+
+    /* ------------------------------------------------------------------
+     * BLT-006 文件状态
+     * ---------------------------------------------------------------- */
+    CC_CASE("BLT-006", "文件状态");
+    {
+        CMKBuiltinRegistry *registry = cmk_builtin_registry_create();
+        CC_CHECK(cmk_builtin_register_standard(registry), "注册标准内建");
+        CMKDiagnostic diagnostic;
+        cmk_diagnostic_init(&diagnostic);
+
+        CMKValue path;
+        CC_CHECK(
+            make_string(&path, "tests/data/cmk/find/a.c"), "存在文件路径"
+        );
+        CMKValue args[2] = {path, path};
+        CMKValue out;
+
+        CC_CHECK(
+            call_builtin(
+                registry, "file_exists", args, 1, &out, &diagnostic
+            ),
+            "file_exists 调用"
+        );
+        CC_CHECK(out.type == CMK_VALUE_BOOL && out.as.boolean, "文件存在");
+        cmk_value_clear(&out);
+
+        CC_CHECK(
+            call_builtin(
+                registry, "file_mtime", args, 1, &out, &diagnostic
+            ),
+            "file_mtime 调用"
+        );
+        CC_CHECK(
+            out.type == CMK_VALUE_INT && out.as.integer >= 0,
+            "文件时间戳"
+        );
+        cmk_value_clear(&out);
+
+        CC_CHECK(
+            call_builtin(
+                registry, "file_newer", args, 2, &out, &diagnostic
+            ),
+            "file_newer 调用"
+        );
+        CC_CHECK(
+            out.type == CMK_VALUE_BOOL && !out.as.boolean,
+            "相同文件不更新"
+        );
+        cmk_value_clear(&out);
+
+        CMKValue missing;
+        CC_CHECK(
+            make_string(&missing, "tests/data/cmk/find/nope.c"),
+            "缺失文件路径"
+        );
+        args[0] = missing;
+        CC_CHECK(
+            call_builtin(
+                registry, "file_exists", args, 1, &out, &diagnostic
+            ),
+            "file_exists 缺失调用"
+        );
+        CC_CHECK(
+            out.type == CMK_VALUE_BOOL && !out.as.boolean, "文件不存在"
+        );
+        cmk_value_clear(&out);
+
+        CC_CHECK(
+            call_builtin(
+                registry, "file_mtime", args, 1, &out, &diagnostic
+            ),
+            "file_mtime 缺失调用"
+        );
+        CC_CHECK_EQ_I64("缺失文件时间戳", -1, out.as.integer);
+        cmk_value_clear(&out);
+
+        cmk_value_clear(&path);
+        cmk_value_clear(&missing);
+        cmk_diagnostic_clear(&diagnostic);
+        cmk_builtin_registry_destroy(registry);
+    }
+    CC_CASE_END();
 }

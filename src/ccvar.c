@@ -1620,16 +1620,16 @@ CCVarResult ccvar_remove(CCVarTree *tree, const char *path)
     if (!tree || !path)
         return CC_VAR_ERR_PARAM;
 
-    CCUINT32 target = CC_VAR_NIL;
-    CCVarResult r = var_resolve(tree, path, &target);
+    CCUINT32 node = CC_VAR_NIL;
+    CCVarResult r = var_resolve(tree, path, &node);
     if (r != CC_VAR_OK)
         return r;
-    if (target == tree->root)
+    if (node == tree->root)
         return CC_VAR_ERR_PARAM;
 
     CCDyn paths;
     memset(&paths, 0, sizeof(paths));
-    r = var_collect_paths(tree, target, path, &paths);
+    r = var_collect_paths(tree, node, path, &paths);
     if (r != CC_VAR_OK)
     {
         if (paths.array)

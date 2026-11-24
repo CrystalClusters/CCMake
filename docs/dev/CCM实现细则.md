@@ -398,20 +398,20 @@ while stack 非空:
         frame.next++
         set_top(frame)
         resolved = normalize(edge.literal, dirname(file.real_path))
-        target = find_file(resolved)
+        file_node = find_file(resolved)
 
-        if target 已登记:
-            edge.child = target
-            if target.state == VISITING:
+        if file_node 已登记:
+            edge.child = file_node
+            if file_node.state == VISITING:
                 报告循环导入
                 fail
             continue
 
-        target = append_file(resolved, ...)
-        load_file(target)
-        state[target] = VISITING
-        edge.child = target
-        push({target, 0})
+        file_node = append_file(resolved, ...)
+        load_file(file_node)
+        state[file_node] = VISITING
+        edge.child = file_node
+        push({file_node, 0})
         continue
 
     state[file] = VISITED

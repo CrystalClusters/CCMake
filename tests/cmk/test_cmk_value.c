@@ -119,17 +119,8 @@ void test_cmk_value(void)
     /* ------------------------------------------------------------------
      * VAL-004 目标引用与动作
      * ---------------------------------------------------------------- */
-    CC_CASE("VAL-004", "目标引用与动作");
+    CC_CASE("VAL-004", "动作");
     {
-        CMKValue target;
-        cmk_value_init(&target);
-        CC_CHECK(
-            cmk_value_set_target_ref(&target, "module.cmk", 10, "app", 3),
-            "设置目标引用"
-        );
-        CC_CHECK_EQ_STR("目标引用模块", "module.cmk", target.as.target_ref.module.data);
-        CC_CHECK_EQ_STR("目标引用名", "app", target.as.target_ref.name.data);
-
         CMKValue action;
         cmk_value_init(&action);
         CC_CHECK(cmk_value_set_action(&action, CMK_ACTION_EXEC), "创建动作");
@@ -157,7 +148,6 @@ void test_cmk_value(void)
             "动作深复制"
         );
         cmk_value_clear(&action_copy);
-        cmk_value_clear(&target);
     }
     CC_CASE_END();
 

@@ -1,9 +1,5 @@
 /*
- * @Author: Renascent Adore lizaterop@gmail.com
- * @Date: 2026-11
- * @LastEditors: Renascent Adore lizaterop@gmail.com
- * @LastEditTime: 2026-11
- * @Description: CMK Scheduler 与 Executor 的边界接口（M6）
+ * @Description: CMK 动作执行接口
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -12,32 +8,15 @@
 
 #include "cmk_diagnostic.h"
 #include "cmk_policy.h"
-#include "cmk_target.h"
+#include "cmk_value.h"
 
-/* Executor 返回的结构化结果；message 由 Executor 持有到下一次 run */
+/* Executor 返回的结构化结果；message 由 Executor 持有到下一次执行 */
 typedef struct cmk_executor_result {
     CCBOOL success;
     CCINT32 exit_code;
     const char *message;
     CMKString output;
 } CMKExecutorResult;
-
-/*
- * Scheduler 只通过本接口执行目标；不直接创建进程或操作文件。
- * user 由 Scheduler 原样传入。
- */
-typedef CCBOOL (*CMKExecutorRun)(
-    void *user, const CMKPlanTarget *target,
-    CMKExecutorResult *result
-);
-typedef void (*CMKExecutorCancel)(
-    void *user, CMKTargetId target
-);
-
-typedef struct cmk_executor_ops {
-    CMKExecutorRun run;
-    CMKExecutorCancel cancel;
-} CMKExecutorOps;
 
 typedef struct cmk_executor CMKExecutor;
 
@@ -46,7 +25,11 @@ CMKExecutor *cmk_executor_create(
     CMKDiagnostic *diagnostic
 );
 void cmk_executor_destroy(CMKExecutor *executor);
-const CMKExecutorOps *cmk_executor_ops(void);
+CCBOOL cmk_executor_run_actions(
+    CMKExecutor *executor,
+    const CMKAction *actions, CCUINT32 count,
+    CMKExecutorResult *result
+);
 void cmk_executor_result_clear(CMKExecutorResult *result);
 
 #endif

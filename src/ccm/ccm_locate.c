@@ -441,11 +441,11 @@ static CCBOOL ccm_load_file(
     return CCTRUE;
 }
 
-/* 打印循环导入链：target -> ... -> current -> target */
+/* 打印循环导入链：file_node -> ... -> current -> file_node */
 static CCBOOL ccm_report_cycle(
     CCMakeCCMContext *ctx,
     CCUINT32 current,
-    CCUINT32 target,
+    CCUINT32 file_node,
     CCUINT32 edge_line
 )
 {
@@ -461,7 +461,7 @@ static CCBOOL ccm_report_cycle(
                 (CCINT32)sizeof(CCUINT32), &cur
             ))
             break;
-        if (cur == target)
+        if (cur == file_node)
         {
             reached = CCTRUE;
             break;
@@ -478,19 +478,19 @@ static CCBOOL ccm_report_cycle(
 
     if (!reached)
     {
-        color_print("%s -> %s\n", file_at(ctx, target)->real_path, current_path);
+        color_print("%s -> %s\n", file_at(ctx, file_node)->real_path, current_path);
         goto Done;
     }
 
     CCUINT32 count = chain.size / (CCUINT32)sizeof(CCUINT32);
     CCUINT32 *nodes = (CCUINT32 *)chain.array;
-    color_print("%s", file_at(ctx, target)->real_path);
+    color_print("%s", file_at(ctx, file_node)->real_path);
     for (CCINT32 i = (CCINT32)count - 2; i >= 0; i--)
     {
         CCUINT32 node = nodes[i];
         color_print(":%u -> %s", file_at(ctx, node)->via_line, file_at(ctx, node)->real_path);
     }
-    color_print(":%u -> %s\n", edge_line, file_at(ctx, target)->real_path);
+    color_print(":%u -> %s\n", edge_line, file_at(ctx, file_node)->real_path);
 
 Done:
     if (chain.array)

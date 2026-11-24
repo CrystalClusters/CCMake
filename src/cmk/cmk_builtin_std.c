@@ -8,6 +8,7 @@
  */
 
 #include "cmk_builtin.h"
+#include "cmk_executor.h"
 #include "cmk_runtime.h"
 #include "cmk_safe.h"
 
@@ -20,6 +21,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <sys/stat.h>
 
 #ifndef CC_WINDOWS
 #include <unistd.h>
@@ -1016,6 +1019,181 @@ static CCBOOL builtin_move(CMKBuiltinCall *call)
 }
 
 /* ============================================================================
+ * 文件状态
+ * ========================================================================== */
+
+static CCBOOL builtin_path_is_absolute(const char *path)
+{
+    if (!path || !path[0])
+        return CCFALSE;
+    if (path[0] == '/' || path[0] == '\\')
+        return CCTRUE;
+    return (isalpha((unsigned char)path[0]) && path[1] == ':')
+        ? CCTRUE : CCFALSE;
+}
+
+static char *builtin_resolve_path(
+    CMKBuiltinCall *call, const char *path, CCBOOL *ok
+)
+{
+    *ok = CCTRUE;
+    const char *work_dir = cmk_runtime_get_work_dir(call->runtime);
+    if (!work_dir || builtin_path_is_absolute(path))
+        return NULL;
+    char *joined = find_join(work_dir, path);
+    if (!joined)
+    {
+        *ok = CCFALSE;
+        (void)cmk_builtin_error(call, "文件路径分配失败");
+    }
+    return joined;
+}
+
+static CCBOOL builtin_file_stat(
+    CMKBuiltinCall *call, const char *path,
+    struct stat *st, CCBOOL *exists
+)
+{
+    CCBOOL ok = CCTRUE;
+    char *joined = builtin_resolve_path(call, path, &ok);
+    if (!ok)
+        return CCFALSE;
+    const char *resolved = joined ? joined : path;
+    *exists = (stat(resolved, st) == 0) ? CCTRUE : CCFALSE;
+    if (joined)
+        ccalloc(joined, 0, NULL);
+    return CCTRUE;
+}
+
+static CCBOOL builtin_file_exists(CMKBuiltinCall *call)
+{
+    CMKValue *path = NULL;
+    if (!builtin_arg_count(call, 1, 1) ||
+        !builtin_expect(call, 0, CMK_VALUE_STRING, &path))
+        return CCFALSE;
+
+    struct stat st;
+    CCBOOL exists = CCFALSE;
+    if (!builtin_file_stat(call, path->as.string.data, &st, &exists))
+        return CCFALSE;
+    return cmk_value_set_bool(
+        call->out, (exists && S_ISREG(st.st_mode)) ? CCTRUE : CCFALSE
+    );
+}
+
+static CCBOOL builtin_file_mtime(CMKBuiltinCall *call)
+{
+    CMKValue *path = NULL;
+    if (!builtin_arg_count(call, 1, 1) ||
+        !builtin_expect(call, 0, CMK_VALUE_STRING, &path))
+        return CCFALSE;
+
+    struct stat st;
+    CCBOOL exists = CCFALSE;
+    if (!builtin_file_stat(call, path->as.string.data, &st, &exists))
+        return CCFALSE;
+    return cmk_value_set_int(
+        call->out, exists ? (CCINT64)st.st_mtime : (CCINT64)-1
+    );
+}
+
+static CCBOOL builtin_file_newer(CMKBuiltinCall *call)
+{
+    CMKValue *left = NULL;
+    CMKValue *right = NULL;
+    if (!builtin_arg_count(call, 2, 2) ||
+        !builtin_expect(call, 0, CMK_VALUE_STRING, &left) ||
+        !builtin_expect(call, 1, CMK_VALUE_STRING, &right))
+        return CCFALSE;
+
+    struct stat left_st;
+    struct stat right_st;
+    CCBOOL left_exists = CCFALSE;
+    CCBOOL right_exists = CCFALSE;
+    if (!builtin_file_stat(
+            call, left->as.string.data, &left_st, &left_exists
+        ) ||
+        !builtin_file_stat(
+            call, right->as.string.data, &right_st, &right_exists
+        ))
+        return CCFALSE;
+
+    CCBOOL newer = (left_exists && right_exists &&
+        left_st.st_mtime > right_st.st_mtime) ? CCTRUE : CCFALSE;
+    return cmk_value_set_bool(call->out, newer);
+}
+
+static CCBOOL builtin_run(CMKBuiltinCall *call)
+{
+    CMKValue *list = NULL;
+    if (!builtin_arg_count(call, 1, 1) ||
+        !builtin_expect(call, 0, CMK_VALUE_LIST, &list))
+        return CCFALSE;
+
+    CCUINT32 count = cmk_list_count(list->as.list);
+    CMKAction *actions = NULL;
+    if (count > 0)
+    {
+        actions = ccalloc(
+            NULL, (CCUINT64)count * sizeof(CMKAction),
+            CMK_BUILTIN_STD_COMMENT
+        );
+        if (!actions)
+            return cmk_builtin_error(call, "动作列表分配失败");
+    }
+
+    CCBOOL ok = CCTRUE;
+    for (CCUINT32 i = 0; i < count; i++)
+    {
+        const CMKValue *item = cmk_list_at(list->as.list, i);
+        if (!item || item->type != CMK_VALUE_ACTION ||
+            !item->as.action)
+        {
+            ok = cmk_builtin_error(call, "run 只接受 action 列表");
+            break;
+        }
+        actions[i] = *item->as.action;
+    }
+
+    if (ok && count > 0)
+    {
+        CMKExecutor *executor = cmk_executor_create(
+            cmk_runtime_get_policy(call->runtime), call->diagnostic
+        );
+        if (!executor)
+            ok = cmk_builtin_error(call, "Executor 创建失败");
+        else
+        {
+            CMKExecutorResult result;
+            ok = cmk_executor_run_actions(
+                executor, actions, count, &result
+            );
+            if (!ok || !result.success)
+            {
+                ok = cmk_builtin_error(
+                    call, "%s", result.message
+                        ? result.message : "动作执行失败"
+                );
+            }
+            if (result.output.len > 0)
+            {
+                fwrite(
+                    result.output.data, 1,
+                    result.output.len, stdout
+                );
+                fflush(stdout);
+            }
+            cmk_executor_result_clear(&result);
+            cmk_executor_destroy(executor);
+        }
+    }
+
+    if (actions)
+        ccalloc(actions, 0, NULL);
+    return ok;
+}
+
+/* ============================================================================
  * 注册表
  * ========================================================================== */
 
@@ -1037,6 +1215,9 @@ static const CMKBuiltinArg one_string_args[] = {
 static const CMKBuiltinArg find_files_args[] = {
     {"pattern", {CMK_VALUE_STRING, CMK_VALUE_VOID}, CCFALSE},
     {"roots", {CMK_VALUE_LIST, CMK_VALUE_STRING}, CCFALSE}
+};
+static const CMKBuiltinArg run_args[] = {
+    {"actions", {CMK_VALUE_LIST, CMK_VALUE_ACTION}, CCFALSE}
 };
 static const CMKBuiltinArg command_args[] = {
     {"program", {CMK_VALUE_STRING, CMK_VALUE_VOID}, CCFALSE},
@@ -1069,6 +1250,7 @@ static CCBOOL builtin_error_log(CMKBuiltinCall *call)
 
 #define CMK_RET_VOID_ {CMK_VALUE_VOID, CMK_VALUE_VOID}
 #define CMK_RET_INT_ {CMK_VALUE_INT, CMK_VALUE_VOID}
+#define CMK_RET_BOOL_ {CMK_VALUE_BOOL, CMK_VALUE_VOID}
 #define CMK_RET_STRING_ {CMK_VALUE_STRING, CMK_VALUE_VOID}
 #define CMK_RET_LIST_STRING_ {CMK_VALUE_LIST, CMK_VALUE_STRING}
 #define CMK_RET_ACTION_ {CMK_VALUE_ACTION, CMK_VALUE_VOID}
@@ -1112,6 +1294,26 @@ static const CMKBuiltinSpec standard_specs[] = {
         find_files_args, 2, 2,
         CMK_RET_LIST_STRING_,
         CMK_BUILTIN_READ_FS, builtin_find_files
+    ),
+    CMK_BUILTIN_SPEC(
+        "file_exists", "file_exists(string) -> bool",
+        one_string_args, 1, 1,
+        CMK_RET_BOOL_, CMK_BUILTIN_READ_FS, builtin_file_exists
+    ),
+    CMK_BUILTIN_SPEC(
+        "file_mtime", "file_mtime(string) -> int",
+        one_string_args, 1, 1,
+        CMK_RET_INT_, CMK_BUILTIN_READ_FS, builtin_file_mtime
+    ),
+    CMK_BUILTIN_SPEC(
+        "file_newer", "file_newer(string, string) -> bool",
+        two_string_args, 2, 2,
+        CMK_RET_BOOL_, CMK_BUILTIN_READ_FS, builtin_file_newer
+    ),
+    CMK_BUILTIN_SPEC(
+        "run", "run(list<action>) -> void",
+        run_args, 1, 1,
+        CMK_RET_VOID_, CMK_BUILTIN_BUILD_ACTION, builtin_run
     ),
     CMK_BUILTIN_SPEC(
         "command", "command(string, list<string> [, string [, list<string>]]) -> action",

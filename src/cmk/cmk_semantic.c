@@ -192,7 +192,7 @@ static const CMKSymbol *scope_find(
 static CMKScopeAddResult scope_add(
     CMKScope *scope, const char *name, CCUINT32 len,
     CMKSymbolKind kind, CMKType type, CCBOOL is_const,
-    const CMKFunctionInfo *function, const CMKTargetInfo *target
+    const CMKFunctionInfo *function
 )
 {
     if (!scope || !name)
@@ -215,7 +215,6 @@ static CMKScopeAddResult scope_add(
     symbol.type = type;
     symbol.is_const = is_const;
     symbol.function = function;
-    symbol.target = target;
 
     if (!cmk_dyn_push(
             &scope->symbols, (CCUINT32)sizeof(CMKSymbol),
@@ -234,7 +233,7 @@ static CMKScopeAddResult scope_add(
 
 static CCBOOL sem_type_from_ast(
     CMKSemanticModule *module, CMKASTNodeId type_node,
-    CCBOOL allow_target_ref, CMKType *out
+    CMKType *out
 )
 {
     const CMKASTNode *node = sem_node(module, type_node);
@@ -267,21 +266,12 @@ static CCBOOL sem_type_from_ast(
         *out = cmk_type_scalar(CMK_VALUE_ACTION);
         return CCTRUE;
 
-    case CMK_TYPE_TARGET_REF:
-        if (!allow_target_ref)
-            return sem_error(
-                module, type_node,
-                "target_ref 只能用于 target 的 depends_on 字段"
-            );
-        *out = cmk_type_scalar(CMK_VALUE_TARGET_REF);
-        return CCTRUE;
-
     case CMK_TYPE_LIST:
     {
         CMKASTNodeId element_id = sem_child(module, type_node, 0);
         CMKType element;
         if (!sem_type_from_ast(
-                module, element_id, allow_target_ref, &element
+                module, element_id, &element
             ))
             return CCFALSE;
         if (element.kind == CMK_VALUE_LIST)
@@ -391,14 +381,6 @@ static void function_info_destroy(CMKFunctionInfo *function)
     ccalloc(function, 0, NULL);
 }
 
-static void target_info_destroy(CMKTargetInfo *target)
-{
-    if (!target)
-        return;
-    cmk_string_clear(&target->name);
-    ccalloc(target, 0, NULL);
-}
-
 void cmk_semantic_module_destroy(CMKSemanticModule *module)
 {
     if (!module)
@@ -412,14 +394,6 @@ void cmk_semantic_module_destroy(CMKSemanticModule *module)
         function_info_destroy(functions[i]);
     if (module->functions.array)
         ccalloc(module->functions.array, 0, NULL);
-
-    CMKTargetInfo **targets = (CMKTargetInfo **)module->targets.array;
-    CCUINT32 target_count =
-        module->targets.size / (CCUINT32)sizeof(CMKTargetInfo *);
-    for (CCUINT32 i = 0; i < target_count; i++)
-        target_info_destroy(targets[i]);
-    if (module->targets.array)
-        ccalloc(module->targets.array, 0, NULL);
 
     CMKImportedFunction **imported_functions =
         (CMKImportedFunction **)module->imported_functions.array;
@@ -436,22 +410,6 @@ void cmk_semantic_module_destroy(CMKSemanticModule *module)
     }
     if (module->imported_functions.array)
         ccalloc(module->imported_functions.array, 0, NULL);
-
-    CMKImportedTarget **imported_targets =
-        (CMKImportedTarget **)module->imported_targets.array;
-    CCUINT32 imported_target_count =
-        module->imported_targets.size /
-        (CCUINT32)sizeof(CMKImportedTarget *);
-    for (CCUINT32 i = 0; i < imported_target_count; i++)
-    {
-        CMKImportedTarget *record = imported_targets[i];
-        if (!record)
-            continue;
-        cmk_string_clear(&record->alias);
-        ccalloc(record, 0, NULL);
-    }
-    if (module->imported_targets.array)
-        ccalloc(module->imported_targets.array, 0, NULL);
 
     if (module->module_scope)
         scope_destroy(module->module_scope);
@@ -494,58 +452,9 @@ CCBOOL cmk_semantic_add_imported_function(
     return CCTRUE;
 }
 
-CCBOOL cmk_semantic_add_imported_target(
-    CMKSemanticModule *module,
-    const char *alias, CCUINT32 alias_len,
-    const CMKTargetInfo *target
-)
-{
-    if (!module || !alias || !target)
-        return CCFALSE;
-    CMKImportedTarget *record =
-        ccalloc(NULL, sizeof(CMKImportedTarget), CMK_SEM_COMMENT);
-    if (!record)
-        return CCFALSE;
-    memset(record, 0, sizeof(*record));
-    if (!cmk_string_set(&record->alias, alias, alias_len))
-    {
-        ccalloc(record, 0, NULL);
-        return CCFALSE;
-    }
-    record->target = target;
-    if (!cmk_dyn_push(
-            &module->imported_targets,
-            (CCUINT32)sizeof(CMKImportedTarget *),
-            (CCINT32)sizeof(CMKImportedTarget *), &record
-        ))
-    {
-        cmk_string_clear(&record->alias);
-        ccalloc(record, 0, NULL);
-        return CCFALSE;
-    }
-    return CCTRUE;
-}
-
 /* ============================================================================
  * 预声明
  * ========================================================================== */
-
-static const CMKTargetInfo *sem_find_target_name(
-    const CMKSemanticModule *module, const char *name, CCUINT32 len
-)
-{
-    CMKTargetInfo **targets = (CMKTargetInfo **)module->targets.array;
-    CCUINT32 count =
-        module->targets.size / (CCUINT32)sizeof(CMKTargetInfo *);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        const CMKTargetInfo *target = targets[i];
-        if (target->name.len == len &&
-            (len == 0 || memcmp(target->name.data, name, len) == 0))
-            return target;
-    }
-    return NULL;
-}
 
 static CCBOOL sem_predeclare_function(
     CMKSemanticModule *module, CMKASTNodeId decl
@@ -585,7 +494,7 @@ static CCBOOL sem_predeclare_function(
 
     CMKASTNodeId return_type_id = sem_child(module, decl, 0);
     if (!sem_type_from_ast(
-            module, return_type_id, CCFALSE, &function->return_type
+            module, return_type_id, &function->return_type
         ))
     {
         function_info_destroy(function);
@@ -623,7 +532,7 @@ static CCBOOL sem_predeclare_function(
         }
         CMKASTNodeId param_type = sem_child(module, param, 0);
         if (!sem_type_from_ast(
-                module, param_type, CCFALSE, &function->params[i]
+                module, param_type, &function->params[i]
             ))
         {
             function_info_destroy(function);
@@ -680,7 +589,7 @@ static CCBOOL sem_predeclare_function(
 
     CMKScopeAddResult added = scope_add(
         module->module_scope, name, name_len, CMK_SYMBOL_FUNCTION,
-        function->return_type, CCFALSE, function, NULL
+        function->return_type, CCFALSE, function
     );
     if (added != CMK_SCOPE_ADD_OK)
     {
@@ -705,17 +614,11 @@ static CCBOOL sem_predeclare_global(
 
     CMKType type;
     if (!sem_type_from_ast(
-            module, sem_child(module, decl, 0), CCFALSE, &type
+            module, sem_child(module, decl, 0), &type
         ))
         return CCFALSE;
     if (type.kind == CMK_VALUE_VOID)
         return sem_error(module, decl, "变量类型不能是 void");
-    if (type.kind == CMK_VALUE_TARGET_REF ||
-        (type.kind == CMK_VALUE_LIST &&
-         type.element == CMK_VALUE_TARGET_REF))
-        return sem_error(
-            module, decl, "target_ref 只能用于 target 的 depends_on 字段"
-        );
 
     const char *name = NULL;
     CCUINT32 name_len = 0;
@@ -724,7 +627,7 @@ static CCBOOL sem_predeclare_global(
 
     CMKScopeAddResult added = scope_add(
         module->module_scope, name, name_len, CMK_SYMBOL_VAR,
-        type, node->as.var_decl.is_const, NULL, NULL
+        type, node->as.var_decl.is_const, NULL
     );
     if (added != CMK_SCOPE_ADD_OK)
     {
@@ -740,170 +643,13 @@ static CCBOOL sem_predeclare_global(
 }
 
 /* ============================================================================
- * target 预收集
- * ========================================================================== */
-
-static CCBOOL sem_collect_targets(
-    CMKSemanticModule *module, CMKASTNodeId id, CCBOOL conditional
-);
-
-static CCBOOL sem_collect_target(
-    CMKSemanticModule *module, CMKASTNodeId decl, CCBOOL conditional
-)
-{
-    const CMKASTNode *node = sem_node(module, decl);
-    if (!node || node->kind != CMK_AST_TARGET_DECL)
-        return sem_error(module, decl, "内部错误：期望 target 声明");
-
-    const char *name = NULL;
-    CCUINT32 name_len = 0;
-    if (!sem_string(module, node->as.target_decl.name, &name, &name_len))
-        return sem_error(module, decl, "target 名无效");
-
-    const CMKTargetInfo *existing =
-        sem_find_target_name(module, name, name_len);
-    if (existing)
-    {
-        if (!existing->conditional || !conditional)
-            return sem_error(
-                module, decl, "重复的 target 声明：%.*s",
-                (int)name_len, name
-            );
-    }
-
-    CMKTargetInfo *target =
-        ccalloc(NULL, sizeof(CMKTargetInfo), CMK_SEM_COMMENT);
-    if (!target)
-        return sem_error(module, decl, "内存分配失败");
-    memset(target, 0, sizeof(*target));
-    target->decl = decl;
-    target->module = module;
-    target->conditional = conditional;
-    if (!cmk_string_set(&target->name, name, name_len))
-    {
-        target_info_destroy(target);
-        return sem_error(module, decl, "内存分配失败");
-    }
-    if (!cmk_dyn_push(
-            &module->targets, (CCUINT32)sizeof(CMKTargetInfo *),
-            (CCINT32)sizeof(CMKTargetInfo *), &target
-        ))
-    {
-        target_info_destroy(target);
-        return sem_error(module, decl, "内存分配失败");
-    }
-    return CCTRUE;
-}
-
-typedef struct cmk_sem_target_work {
-    CMKASTNodeId id;
-    CCBOOL conditional;
-} CMKSemTargetWork;
-
-static CCBOOL sem_collect_targets(
-    CMKSemanticModule *module, CMKASTNodeId id, CCBOOL conditional
-)
-{
-    CCDyn stack;
-    memset(&stack, 0, sizeof(stack));
-    CMKSemTargetWork root;
-    root.id = id;
-    root.conditional = conditional;
-    if (!cmk_dyn_push(
-            &stack, (CCUINT32)sizeof(CMKSemTargetWork),
-            (CCINT32)sizeof(CMKSemTargetWork), &root
-        ))
-        return sem_error(module, id, "内存分配失败");
-
-    while (stack.size >= (CCUINT32)sizeof(CMKSemTargetWork))
-    {
-        CMKSemTargetWork work;
-        memset(&work, 0, sizeof(work));
-        if (cc_dyn_core_pop(
-                &stack, (CCUINT32)sizeof(CMKSemTargetWork),
-                (CCINT32)sizeof(CMKSemTargetWork), &work
-            ) != 0)
-            goto Failed;
-
-        const CMKASTNode *node = sem_node(module, work.id);
-        if (!node)
-        {
-            (void)sem_error(module, work.id, "内部错误：节点缺失");
-            goto Failed;
-        }
-
-        if (node->kind == CMK_AST_TARGET_DECL)
-        {
-            if (!sem_collect_target(module, work.id, work.conditional))
-                goto Failed;
-            continue;
-        }
-
-        if (node->kind == CMK_AST_IF)
-        {
-            if (node->as.if_stmt.has_else)
-            {
-                CMKSemTargetWork next;
-                next.id = sem_child(module, work.id, 2);
-                next.conditional = CCTRUE;
-                if (!cmk_dyn_push(
-                        &stack, (CCUINT32)sizeof(CMKSemTargetWork),
-                        (CCINT32)sizeof(CMKSemTargetWork), &next
-                    ))
-                    goto Failed;
-            }
-            CMKSemTargetWork next;
-            next.id = sem_child(module, work.id, 1);
-            next.conditional = CCTRUE;
-            if (!cmk_dyn_push(
-                    &stack, (CCUINT32)sizeof(CMKSemTargetWork),
-                    (CCINT32)sizeof(CMKSemTargetWork), &next
-                ))
-                goto Failed;
-            continue;
-        }
-
-        if (node->kind == CMK_AST_BLOCK)
-        {
-            CCUINT32 count = sem_child_count(module, work.id);
-            for (CCUINT32 i = count; i > 0; i--)
-            {
-                CMKSemTargetWork next;
-                next.id = sem_child(module, work.id, i - 1);
-                next.conditional = work.conditional;
-                if (!cmk_dyn_push(
-                        &stack, (CCUINT32)sizeof(CMKSemTargetWork),
-                        (CCINT32)sizeof(CMKSemTargetWork), &next
-                    ))
-                    goto Failed;
-            }
-            continue;
-        }
-
-        (void)sem_error(
-            module, work.id, "顶层条件分支只能包含 target 声明"
-        );
-        goto Failed;
-    }
-
-    if (stack.array)
-        ccalloc(stack.array, 0, NULL);
-    return CCTRUE;
-
-Failed:
-    if (stack.array)
-        ccalloc(stack.array, 0, NULL);
-    return CCFALSE;
-}
-
-/* ============================================================================
  * 表达式
  * ========================================================================== */
 
 static CCBOOL sem_expr(
     CMKSemanticModule *module, CMKASTNodeId id,
     CMKScope *scope, const CMKType *expected,
-    CCBOOL allow_target_ref, CMKType *out
+    CMKType *out
 );
 
 static void sem_set_type(
@@ -995,7 +741,7 @@ static CCBOOL sem_expr_config(
 
 static CCBOOL sem_expr_ident(
     CMKSemanticModule *module, CMKASTNodeId id, CMKScope *scope,
-    CCBOOL allow_target_ref, CMKType *out
+    CMKType *out
 )
 {
     const CMKASTNode *node = sem_node(module, id);
@@ -1012,92 +758,11 @@ static CCBOOL sem_expr_ident(
     {
         if (symbol->kind == CMK_SYMBOL_FUNCTION)
             return sem_error(module, id, "函数名不能作为值使用：%s", name);
-        if (symbol->kind == CMK_SYMBOL_TARGET)
-        {
-            if (!allow_target_ref)
-                return sem_error(
-                    module, id,
-                    "target 引用只能用于 target 的 depends_on 字段"
-                );
-            module->nodes[id].target_ref = symbol->target;
-            *out = cmk_type_scalar(CMK_VALUE_TARGET_REF);
-            sem_set_type(module, id, out);
-            return CCTRUE;
-        }
         *out = symbol->type;
         return CCTRUE;
     }
 
-    if (allow_target_ref)
-    {
-        const CMKTargetInfo *target =
-            sem_find_target_name(module, name, name_len);
-        if (target)
-        {
-            module->nodes[id].target_ref = target;
-            *out = cmk_type_scalar(CMK_VALUE_TARGET_REF);
-            return CCTRUE;
-        }
-    }
-
     return sem_error(module, id, "未定义的标识符：%s", name);
-}
-
-static CCBOOL sem_expr_member(
-    CMKSemanticModule *module, CMKASTNodeId id,
-    CCBOOL allow_target_ref, CMKType *out
-)
-{
-    if (!allow_target_ref)
-        return sem_error(
-            module, id, "成员访问只允许用于 depends_on 中的目标引用"
-        );
-
-    const CMKASTNode *node = sem_node(module, id);
-    if (!node || node->kind != CMK_AST_MEMBER)
-        return sem_error(module, id, "内部错误：期望成员访问");
-
-    CMKASTNodeId base_id = sem_child(module, id, 0);
-    const CMKASTNode *base = sem_node(module, base_id);
-    if (!base || base->kind != CMK_AST_IDENT)
-        return sem_error(module, id, "目标引用格式必须是 别名.目标名");
-
-    const char *alias = NULL;
-    CCUINT32 alias_len = 0;
-    const char *target_name = NULL;
-    CCUINT32 target_name_len = 0;
-    if (!sem_string(
-            module, base->as.ident.name, &alias, &alias_len
-        ) ||
-        !sem_string(
-            module, node->as.member.member,
-            &target_name, &target_name_len
-        ))
-        return sem_error(module, id, "目标引用名称无效");
-
-    CMKImportedTarget **targets =
-        (CMKImportedTarget **)module->imported_targets.array;
-    CCUINT32 count = module->imported_targets.size /
-        (CCUINT32)sizeof(CMKImportedTarget *);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        const CMKImportedTarget *record = targets[i];
-        if (record->alias.len == alias_len &&
-            target_name_len == record->target->name.len &&
-            memcmp(record->alias.data, alias, alias_len) == 0 &&
-            memcmp(
-                record->target->name.data, target_name, target_name_len
-            ) == 0)
-        {
-            module->nodes[id].target_ref = record->target;
-            *out = cmk_type_scalar(CMK_VALUE_TARGET_REF);
-            return CCTRUE;
-        }
-    }
-    return sem_error(
-        module, id, "未导入的目标引用：%.*s.%.*s",
-        (int)alias_len, alias, (int)target_name_len, target_name
-    );
 }
 
 typedef enum cmk_sem_expr_kind {
@@ -1130,7 +795,6 @@ typedef struct cmk_sem_expr_frame {
     CMKScope *scope;
     CMKType expected;
     CCBOOL has_expected;
-    CCBOOL allow_target_ref;
     CMKType out;
     CCUINT32 index;
     CCUINT32 count;
@@ -1155,7 +819,7 @@ static CMKSemExprFrame *sem_expr_top(CCDyn *frames)
 static CCBOOL sem_expr_push(
     CMKSemanticModule *module, CCDyn *frames,
     CMKASTNodeId id, CMKScope *scope,
-    const CMKType *expected, CCBOOL allow_target_ref
+    const CMKType *expected
 )
 {
     CMKSemExprFrame frame;
@@ -1164,7 +828,6 @@ static CCBOOL sem_expr_push(
     frame.stage = CMK_SEM_EXPR_START;
     frame.id = id;
     frame.scope = scope;
-    frame.allow_target_ref = allow_target_ref;
     if (expected)
     {
         frame.expected = *expected;
@@ -1214,7 +877,7 @@ static CCBOOL sem_expr_list_next(
     }
     return sem_expr_push(
         module, frames, item, frame->scope,
-        expected_ptr, frame->allow_target_ref
+        expected_ptr
     );
 }
 
@@ -1253,7 +916,7 @@ static CCBOOL sem_expr_call_next(
         formal = frame->builtin->args[frame->index].type;
         expected = &formal;
     }
-    return sem_expr_push(module, frames, arg, frame->scope, expected, CCFALSE);
+    return sem_expr_push(module, frames, arg, frame->scope, expected);
 }
 
 static CCBOOL sem_expr_begin_call(
@@ -1270,11 +933,6 @@ static CCBOOL sem_expr_begin_call(
     if (symbol && symbol->kind == CMK_SYMBOL_VAR)
         return sem_error(
             module, frame->id, "变量不是函数：%.*s",
-            (int)name_len, name
-        );
-    if (symbol && symbol->kind == CMK_SYMBOL_TARGET)
-        return sem_error(
-            module, frame->id, "target 不是函数：%.*s",
             (int)name_len, name
         );
 
@@ -1348,8 +1006,7 @@ static CCBOOL sem_expr_apply_binary(
             return sem_error(module, frame->id, "比较运算两侧类型不一致");
         if (left_type->kind == CMK_VALUE_VOID ||
             left_type->kind == CMK_VALUE_LIST ||
-            left_type->kind == CMK_VALUE_ACTION ||
-            left_type->kind == CMK_VALUE_TARGET_REF)
+            left_type->kind == CMK_VALUE_ACTION)
             return sem_error(module, frame->id, "该类型不能参与比较");
         if (op != CMK_BINARY_EQ && op != CMK_BINARY_NE &&
             left_type->kind != CMK_VALUE_INT &&
@@ -1431,8 +1088,7 @@ static CCBOOL sem_expr_step_start(
     case CMK_AST_IDENT:
         *done = CCTRUE;
         return sem_expr_ident(
-            module, frame->id, frame->scope,
-            frame->allow_target_ref, out
+            module, frame->id, frame->scope, out
         );
 
     case CMK_AST_CONFIG_REF:
@@ -1440,12 +1096,6 @@ static CCBOOL sem_expr_step_start(
         return sem_expr_config(
             module, frame->id,
             frame->has_expected ? &frame->expected : NULL, out
-        );
-
-    case CMK_AST_MEMBER:
-        *done = CCTRUE;
-        return sem_expr_member(
-            module, frame->id, frame->allow_target_ref, out
         );
 
     case CMK_AST_LIST:
@@ -1495,7 +1145,7 @@ static CCBOOL sem_expr_step_start(
         }
         if (!sem_expr_push(
                 module, frames, operand, frame->scope,
-                expected_ptr, CCFALSE
+                expected_ptr
             ))
             return CCFALSE;
         *done = CCFALSE;
@@ -1533,7 +1183,7 @@ static CCBOOL sem_expr_step_start(
         }
         if (!sem_expr_push(
                 module, frames, sem_child(module, frame->id, 0),
-                frame->scope, expected_ptr, CCFALSE
+                frame->scope, expected_ptr
             ))
             return CCFALSE;
         *done = CCFALSE;
@@ -1563,7 +1213,7 @@ static CCBOOL sem_expr_step_start(
         frame->stage = CMK_SEM_EXPR_INDEX_BASE;
         if (!sem_expr_push(
                 module, frames, sem_child(module, frame->id, 0),
-                frame->scope, NULL, CCFALSE
+                frame->scope, NULL
             ))
             return CCFALSE;
         *done = CCFALSE;
@@ -1652,7 +1302,7 @@ case CMK_SEM_EXPR_BINARY:
                 ? &frame->child_expected : NULL;
         if (!sem_expr_push(
                 module, frames, sem_child(module, frame->id, 1),
-                frame->scope, expected, CCFALSE
+                frame->scope, expected
             ))
             return CCFALSE;
         *done = CCFALSE;
@@ -1732,7 +1382,7 @@ case CMK_SEM_EXPR_INDEX:
         CMKType int_type = cmk_type_scalar(CMK_VALUE_INT);
         if (!sem_expr_push(
                 module, frames, sem_child(module, frame->id, 1),
-                frame->scope, &int_type, CCFALSE
+                frame->scope, &int_type
             ))
             return CCFALSE;
         *done = CCFALSE;
@@ -1770,7 +1420,7 @@ static CCBOOL sem_expr_step(
 static CCBOOL sem_expr_run(
     CMKSemanticModule *module, CMKASTNodeId id,
     CMKScope *scope, const CMKType *expected,
-    CCBOOL allow_target_ref, CMKType *out
+    CMKType *out
 )
 {
     CCDyn frames;
@@ -1815,8 +1465,7 @@ static CCBOOL sem_expr_run(
         if (frames.size == 0)
         {
             if (!sem_expr_push(
-                    module, &frames, id, scope, expected,
-                    allow_target_ref
+                    module, &frames, id, scope, expected
                 ))
                 goto Failed;
             continue;
@@ -1853,13 +1502,13 @@ Failed:
 static CCBOOL sem_expr(
     CMKSemanticModule *module, CMKASTNodeId id,
     CMKScope *scope, const CMKType *expected,
-    CCBOOL allow_target_ref, CMKType *out
+    CMKType *out
 )
 {
     if (!module || !out)
         return CCFALSE;
     return sem_expr_run(
-        module, id, scope, expected, allow_target_ref, out
+        module, id, scope, expected, out
     );
 }
 
@@ -1890,17 +1539,11 @@ static CCBOOL sem_declare_local(
 
     CMKType type;
     if (!sem_type_from_ast(
-            module, sem_child(module, id, 0), CCFALSE, &type
+            module, sem_child(module, id, 0), &type
         ))
         return CCFALSE;
     if (type.kind == CMK_VALUE_VOID)
         return sem_error(module, id, "变量类型不能是 void");
-    if (type.kind == CMK_VALUE_TARGET_REF ||
-        (type.kind == CMK_VALUE_LIST &&
-         type.element == CMK_VALUE_TARGET_REF))
-        return sem_error(
-            module, id, "target_ref 只能用于 target 的 depends_on 字段"
-        );
 
     const char *name = NULL;
     CCUINT32 name_len = 0;
@@ -1910,7 +1553,7 @@ static CCBOOL sem_declare_local(
     CMKASTNodeId init = sem_child(module, id, 1);
     CMKType init_type;
     if (!sem_expr(
-            module, init, scope, &type, CCFALSE, &init_type
+            module, init, scope, &type, &init_type
         ))
         return CCFALSE;
     if (!sem_type_expect(module, init, &init_type, &type, "变量初始化"))
@@ -1918,7 +1561,7 @@ static CCBOOL sem_declare_local(
 
     CMKScopeAddResult added = scope_add(
         scope, name, name_len, CMK_SYMBOL_VAR, type,
-        node->as.var_decl.is_const, NULL, NULL
+        node->as.var_decl.is_const, NULL
     );
     if (added != CMK_SCOPE_ADD_OK)
     {
@@ -1955,7 +1598,7 @@ static CCBOOL sem_stmt_assign(
             return sem_error(module, id, "_ 不能使用 += ");
         CMKType value_type;
         if (!sem_expr(
-                module, value_id, scope, NULL, CCFALSE, &value_type
+                module, value_id, scope, NULL, &value_type
             ))
             return CCFALSE;
         if (value_type.kind == CMK_VALUE_VOID)
@@ -1981,8 +1624,7 @@ static CCBOOL sem_stmt_assign(
     if (node->as.assign.op == CMK_ASSIGN_SET)
     {
         if (!sem_expr(
-                module, value_id, scope, &symbol->type,
-                CCFALSE, &value_type
+                module, value_id, scope, &symbol->type, &value_type
             ))
             return CCFALSE;
         return sem_type_expect(
@@ -1994,7 +1636,7 @@ static CCBOOL sem_stmt_assign(
     {
         CMKType element = cmk_type_scalar(symbol->type.element);
         if (!sem_expr(
-                module, value_id, scope, &element, CCFALSE, &value_type
+                module, value_id, scope, &element, &value_type
             ))
             return CCFALSE;
         return sem_type_expect(
@@ -2004,8 +1646,7 @@ static CCBOOL sem_stmt_assign(
     if (!cmk_type_is_numeric(&symbol->type))
         return sem_error(module, id, "+= 只支持数值和 list");
     if (!sem_expr(
-            module, value_id, scope, &symbol->type,
-            CCFALSE, &value_type
+            module, value_id, scope, &symbol->type, &value_type
         ))
         return CCFALSE;
     return sem_type_expect(
@@ -2020,7 +1661,7 @@ static CCBOOL sem_stmt_expr_stmt(
 {
     CMKASTNodeId expr = sem_child(module, id, 0);
     CMKType type;
-    if (!sem_expr(module, expr, scope, NULL, CCFALSE, &type))
+    if (!sem_expr(module, expr, scope, NULL, &type))
         return CCFALSE;
     if (type.kind != CMK_VALUE_VOID &&
         !(module->nodes && expr < module->node_count &&
@@ -2054,8 +1695,7 @@ static CCBOOL sem_stmt_return(
         CMKASTNodeId value = sem_child(module, id, 0);
         CMKType value_type;
         if (!sem_expr(
-                module, value, scope, &function->return_type,
-                CCFALSE, &value_type
+                module, value, scope, &function->return_type, &value_type
             ))
             return CCFALSE;
         if (!sem_type_expect(
@@ -2189,7 +1829,7 @@ static CCBOOL sem_frame_begin(
         CMKType condition_type;
         if (!sem_expr(
                 module, sem_child(module, id, 0), scope,
-                &bool_type, CCFALSE, &condition_type
+                &bool_type, &condition_type
             ))
             return CCFALSE;
         if (!sem_type_expect(
@@ -2209,7 +1849,7 @@ static CCBOOL sem_frame_begin(
         CMKType condition_type;
         if (!sem_expr(
                 module, sem_child(module, id, 0), scope,
-                &bool_type, CCFALSE, &condition_type
+                &bool_type, &condition_type
             ))
             return CCFALSE;
         if (!sem_type_expect(
@@ -2226,7 +1866,7 @@ static CCBOOL sem_frame_begin(
     {
         CMKType element;
         if (!sem_type_from_ast(
-                module, sem_child(module, id, 0), CCFALSE, &element
+                module, sem_child(module, id, 0), &element
             ))
             return CCFALSE;
         if (element.kind == CMK_VALUE_VOID)
@@ -2236,7 +1876,7 @@ static CCBOOL sem_frame_begin(
         CMKType iterable_type;
         if (!sem_expr(
                 module, sem_child(module, id, 1), scope,
-                &list_type, CCFALSE, &iterable_type
+                &list_type, &iterable_type
             ))
             return CCFALSE;
         if (!sem_type_expect(
@@ -2258,7 +1898,7 @@ static CCBOOL sem_frame_begin(
         }
         CMKScopeAddResult added = scope_add(
             loop_scope, name, name_len, CMK_SYMBOL_VAR,
-            element, CCFALSE, NULL, NULL
+            element, CCFALSE, NULL
         );
         if (added != CMK_SCOPE_ADD_OK)
         {
@@ -2549,7 +2189,7 @@ static CCBOOL sem_analyze_function(
         }
         CMKScopeAddResult added = scope_add(
             function_scope, name, name_len, CMK_SYMBOL_VAR,
-            function->params[i], CCFALSE, NULL, NULL
+            function->params[i], CCFALSE, NULL
         );
         if (added != CMK_SCOPE_ADD_OK)
         {
@@ -2595,214 +2235,19 @@ static CCBOOL sem_analyze_global(
         return sem_error(module, decl, "变量声明缺失");
     CMKType type;
     if (!sem_type_from_ast(
-            module, sem_child(module, decl, 0), CCFALSE, &type
+            module, sem_child(module, decl, 0), &type
         ))
         return CCFALSE;
     CMKType value_type;
     if (!sem_expr(
             module, sem_child(module, decl, 1), module->module_scope,
-            &type, CCFALSE, &value_type
+            &type, &value_type
         ))
         return CCFALSE;
     return sem_type_expect(
         module, sem_child(module, decl, 1),
         &value_type, &type, "变量初始化"
     );
-}
-
-static CCBOOL sem_analyze_target(
-    CMKSemanticModule *module, CMKASTNodeId decl
-)
-{
-    const CMKASTNode *node = sem_node(module, decl);
-    if (!node || node->kind != CMK_AST_TARGET_DECL)
-        return sem_error(module, decl, "target 声明缺失");
-
-    CCBOOL seen[4] = {CCFALSE, CCFALSE, CCFALSE, CCFALSE};
-    CCUINT32 count = sem_child_count(module, decl);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        CMKASTNodeId field = sem_child(module, decl, i);
-        const CMKASTNode *field_node = sem_node(module, field);
-        if (!field_node || field_node->kind != CMK_AST_TARGET_FIELD)
-            return sem_error(module, field, "target 字段节点错误");
-
-        CMKTargetFieldKind kind = field_node->as.target_field.field;
-        if (kind < 0 || kind >= CMK_TARGET_FIELD_KIND_COUNT ||
-            kind == CMK_TARGET_FIELD_UNKNOWN)
-            return sem_error(module, field, "未知的 target 字段");
-
-        if (seen[kind])
-            return sem_error(module, field, "重复的 target 字段");
-        seen[kind] = CCTRUE;
-
-        CMKType expected;
-        CCBOOL allow_target_ref = CCFALSE;
-        switch (kind)
-        {
-        case CMK_TARGET_FIELD_DEPENDS_ON:
-            expected = cmk_type_list(CMK_VALUE_TARGET_REF);
-            allow_target_ref = CCTRUE;
-            break;
-
-        case CMK_TARGET_FIELD_INPUTS:
-        case CMK_TARGET_FIELD_OUTPUTS:
-            expected = cmk_type_list(CMK_VALUE_STRING);
-            break;
-
-        case CMK_TARGET_FIELD_ACTIONS:
-            expected = cmk_type_list(CMK_VALUE_ACTION);
-            break;
-
-        default:
-            return sem_error(module, field, "未知的 target 字段");
-        }
-
-        CMKType field_type;
-        if (!sem_type_from_ast(
-                module, sem_child(module, field, 0),
-                allow_target_ref, &field_type
-            ))
-            return CCFALSE;
-        if (!cmk_type_equal(&field_type, &expected))
-            return sem_error(
-                module, field, "target 字段类型必须与字段定义一致"
-            );
-
-        CMKType value_type;
-        if (!sem_expr(
-                module, sem_child(module, field, 1), module->module_scope,
-                &expected, allow_target_ref, &value_type
-            ))
-            return CCFALSE;
-        if (!sem_type_expect(
-                module, sem_child(module, field, 1),
-                &value_type, &expected, "target 字段值"
-            ))
-            return CCFALSE;
-    }
-    return CCTRUE;
-}
-
-
-static CCBOOL sem_analyze_top_if(
-    CMKSemanticModule *module, CMKASTNodeId root
-)
-{
-    const CMKASTNode *root_node = sem_node(module, root);
-    if (!root_node || root_node->kind != CMK_AST_IF)
-        return sem_error(module, root, "顶层 if 节点错误");
-
-    CCDyn stack;
-    memset(&stack, 0, sizeof(stack));
-    CMKASTNodeId first = root;
-    if (!cmk_dyn_push(
-            &stack, (CCUINT32)sizeof(CMKASTNodeId),
-            (CCINT32)sizeof(CMKASTNodeId), &first
-        ))
-        return sem_error(module, root, "内存分配失败");
-
-    while (stack.size >= (CCUINT32)sizeof(CMKASTNodeId))
-    {
-        CMKASTNodeId id = CMK_AST_NODE_NIL;
-        if (cc_dyn_core_pop(
-                &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                (CCINT32)sizeof(CMKASTNodeId), &id
-            ) != 0)
-            goto Failed;
-
-        const CMKASTNode *node = sem_node(module, id);
-        if (!node)
-        {
-            (void)sem_error(module, id, "顶层 if 分支缺失");
-            goto Failed;
-        }
-
-        if (node->kind == CMK_AST_TARGET_DECL)
-        {
-            if (!sem_analyze_target(module, id))
-                goto Failed;
-            continue;
-        }
-
-        if (node->kind == CMK_AST_IF)
-        {
-            CMKType bool_type = cmk_type_scalar(CMK_VALUE_BOOL);
-            CMKType condition_type;
-            if (!sem_expr(
-                    module, sem_child(module, id, 0),
-                    module->module_scope, &bool_type, CCFALSE,
-                    &condition_type
-                ))
-                goto Failed;
-            if (!sem_type_expect(
-                    module, sem_child(module, id, 0), &condition_type,
-                    &bool_type, "顶层 if 条件"
-                ))
-                goto Failed;
-
-            if (node->as.if_stmt.has_else)
-            {
-                CMKASTNodeId else_id = sem_child(module, id, 2);
-                if (!cmk_dyn_push(
-                        &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                        (CCINT32)sizeof(CMKASTNodeId), &else_id
-                    ))
-                    goto Failed;
-            }
-            CMKASTNodeId then_id = sem_child(module, id, 1);
-            if (!cmk_dyn_push(
-                    &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                    (CCINT32)sizeof(CMKASTNodeId), &then_id
-                ))
-                goto Failed;
-            continue;
-        }
-
-        if (node->kind == CMK_AST_BLOCK)
-        {
-            CCUINT32 count = sem_child_count(module, id);
-            for (CCUINT32 i = count; i > 0; i--)
-            {
-                CMKASTNodeId child = sem_child(module, id, i - 1);
-                const CMKASTNode *child_node = sem_node(module, child);
-                if (!child_node)
-                {
-                    (void)sem_error(module, child, "顶层 if 分支缺失");
-                    goto Failed;
-                }
-                if (child_node->kind != CMK_AST_TARGET_DECL &&
-                    child_node->kind != CMK_AST_IF)
-                {
-                    (void)sem_error(
-                        module, child,
-                        "顶层 if 分支只能包含 target 声明"
-                    );
-                    goto Failed;
-                }
-                if (!cmk_dyn_push(
-                        &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                        (CCINT32)sizeof(CMKASTNodeId), &child
-                    ))
-                    goto Failed;
-            }
-            continue;
-        }
-
-        (void)sem_error(
-            module, id, "顶层 if 分支只能包含 target 声明"
-        );
-        goto Failed;
-    }
-
-    if (stack.array)
-        ccalloc(stack.array, 0, NULL);
-    return CCTRUE;
-
-Failed:
-    if (stack.array)
-        ccalloc(stack.array, 0, NULL);
-    return CCFALSE;
 }
 
 static CCBOOL sem_add_imported_functions(CMKSemanticModule *module)
@@ -2829,7 +2274,7 @@ static CCBOOL sem_add_imported_functions(CMKSemanticModule *module)
             module->module_scope,
             import->name.data, import->name.len,
             CMK_SYMBOL_FUNCTION, import->function->return_type,
-            CCFALSE, import->function, NULL
+            CCFALSE, import->function
         );
         if (added != CMK_SCOPE_ADD_OK)
         {
@@ -2885,18 +2330,6 @@ CCBOOL cmk_semantic_analyze(CMKSemanticModule *module)
         }
     }
 
-    for (CCUINT32 i = 0; i < root_count; i++)
-    {
-        CMKASTNodeId item = sem_child(module, root, i);
-        const CMKASTNode *node = sem_node(module, item);
-        if (node && (node->kind == CMK_AST_TARGET_DECL ||
-                     node->kind == CMK_AST_IF))
-        {
-            if (!sem_collect_targets(module, item, CCFALSE))
-                goto Failed;
-        }
-    }
-
     if (!sem_add_imported_functions(module))
         goto Failed;
 
@@ -2921,24 +2354,6 @@ CCBOOL cmk_semantic_analyze(CMKSemanticModule *module)
             goto Failed;
     }
 
-    for (CCUINT32 i = 0; i < root_count; i++)
-    {
-        CMKASTNodeId item = sem_child(module, root, i);
-        const CMKASTNode *node = sem_node(module, item);
-        if (!node)
-            goto Failed;
-        if (node->kind == CMK_AST_TARGET_DECL)
-        {
-            if (!sem_analyze_target(module, item))
-                goto Failed;
-        }
-        else if (node->kind == CMK_AST_IF)
-        {
-            if (!sem_analyze_top_if(module, item))
-                goto Failed;
-        }
-    }
-
     module->analyzed = CCTRUE;
     module->ok = CCTRUE;
     return CCTRUE;
@@ -2956,15 +2371,6 @@ const CMKType *cmk_semantic_node_type(
     if (!module || !module->nodes || node >= module->node_count)
         return NULL;
     return &module->nodes[node].type;
-}
-
-const CMKTargetInfo *cmk_semantic_node_target_ref(
-    const CMKSemanticModule *module, CMKASTNodeId node
-)
-{
-    if (!module || !module->nodes || node >= module->node_count)
-        return NULL;
-    return module->nodes[node].target_ref;
 }
 
 const CMKFunctionInfo *cmk_semantic_node_function(
@@ -3013,29 +2419,6 @@ const CMKFunctionInfo *cmk_semantic_find_function(
     return NULL;
 }
 
-const CMKTargetInfo *cmk_semantic_find_target(
-    const CMKSemanticModule *module, const char *name, CCUINT32 len
-)
-{
-    return sem_find_target_name(module, name, len);
-}
-
-const CMKTargetInfo *cmk_semantic_find_target_by_decl(
-    const CMKSemanticModule *module, CMKASTNodeId decl
-)
-{
-    if (!module)
-        return NULL;
-    CMKTargetInfo **targets = (CMKTargetInfo **)module->targets.array;
-    CCUINT32 count =
-        module->targets.size / (CCUINT32)sizeof(CMKTargetInfo *);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        if (targets[i]->decl == decl)
-            return targets[i];
-    }
-    return NULL;
-}
 
 CCUINT32 cmk_semantic_function_count(
     const CMKSemanticModule *module
@@ -3056,22 +2439,4 @@ const CMKFunctionInfo *cmk_semantic_function_at(
     CMKFunctionInfo **functions =
         (CMKFunctionInfo **)module->functions.array;
     return functions[index];
-}
-
-CCUINT32 cmk_semantic_target_count(const CMKSemanticModule *module)
-{
-    if (!module)
-        return 0;
-    return module->targets.size /
-        (CCUINT32)sizeof(CMKTargetInfo *);
-}
-
-const CMKTargetInfo *cmk_semantic_target_at(
-    const CMKSemanticModule *module, CCUINT32 index
-)
-{
-    if (!module || index >= cmk_semantic_target_count(module))
-        return NULL;
-    CMKTargetInfo **targets = (CMKTargetInfo **)module->targets.array;
-    return targets[index];
 }

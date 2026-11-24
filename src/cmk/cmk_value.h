@@ -22,7 +22,6 @@ typedef enum cmk_value_type {
     CMK_VALUE_STRING,
     CMK_VALUE_LIST,
     CMK_VALUE_ACTION,
-    CMK_VALUE_TARGET_REF,
     CMK_VALUE_TYPE_COUNT
 } CMKValueType;
 
@@ -50,10 +49,6 @@ struct cmk_value {
         CMKString string;
         CMKList *list;
         CMKAction *action;
-        struct {
-            CMKString module;
-            CMKString name;
-        } target_ref;
     } as;
 };
 
@@ -130,11 +125,6 @@ CCBOOL cmk_value_set_string(
     CMKValue *value, const char *data, CCUINT32 len
 );
 CCBOOL cmk_value_set_list(CMKValue *value, CMKValueType element_type);
-CCBOOL cmk_value_set_target_ref(
-    CMKValue *value,
-    const char *module, CCUINT32 module_len,
-    const char *name, CCUINT32 name_len
-);
 CCBOOL cmk_value_set_action(CMKValue *value, CMKActionKind kind);
 
 /* 成功返回 true；类型不匹配返回 false */

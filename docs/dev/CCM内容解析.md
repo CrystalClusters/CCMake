@@ -237,7 +237,7 @@ key := [A-Za-z_][A-Za-z0-9_]*
 toolchain
 toolchain.c_compiler
 defines[0]
-targets[2].sources[1]
+projects[2].sources[1]
 ```
 
 ### 5.3 值分派
@@ -535,8 +535,8 @@ while stack:
         frame.next++
         set_top(frame)
         resolve edge
-        if target 已登记:
-            target VISITING → 报循环
+        if file_node 已登记:
+            file_node VISITING → 报循环
             否则只连边
         else:
             装载目标 → VISITING → push

@@ -3,12 +3,11 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 真实 Executor 与文件动作（M7）
+ * @Description: CMK 动作执行
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
 #include "cmk_executor.h"
-#include "cmk_target_internal.h"
 #include "cmk_process.h"
 #include "cmk_safe.h"
 
@@ -34,10 +33,14 @@ struct cmk_executor {
     CMKDiagnostic *diagnostic;
 };
 
-static char **cmk_executor_string_array(
-    const CCDyn *array, CCUINT32 count
-)
+static CCUINT32 cmk_executor_list_count(const CMKList *list)
 {
+    return list ? cmk_list_count(list) : 0;
+}
+
+static char **cmk_executor_list_strings(const CMKList *list)
+{
+    CCUINT32 count = cmk_executor_list_count(list);
     char **items = ccalloc(
         NULL, (CCUINT64)(count + 1) * sizeof(char *),
         CMK_EXECUTOR_COMMENT
@@ -45,9 +48,16 @@ static char **cmk_executor_string_array(
     if (!items)
         return NULL;
     memset(items, 0, (size_t)(count + 1) * sizeof(char *));
-    const CMKString *strings = (const CMKString *)array->array;
     for (CCUINT32 i = 0; i < count; i++)
-        items[i] = strings[i].data;
+    {
+        const CMKValue *value = cmk_list_at(list, i);
+        if (!value || value->type != CMK_VALUE_STRING)
+        {
+            ccalloc(items, 0, NULL);
+            return NULL;
+        }
+        items[i] = value->as.string.data;
+    }
     return items;
 }
 
@@ -143,15 +153,15 @@ static CCBOOL cmk_executor_remove(const char *path)
 #endif
 }
 
-static CCBOOL cmk_executor_file_action(const CMKPlanAction *action)
+static CCBOOL cmk_executor_file_action(const CMKAction *action)
 {
-    switch (action->type)
+    switch (action->kind)
     {
-    case CMK_PLAN_ACTION_COPY:
+    case CMK_ACTION_COPY:
         return cmk_executor_copy_file(
             action->from.data, action->to.data
         );
-    case CMK_PLAN_ACTION_MOVE:
+    case CMK_ACTION_MOVE:
         if (rename(action->from.data, action->to.data) == 0)
             return CCTRUE;
         if (!cmk_executor_copy_file(
@@ -159,9 +169,9 @@ static CCBOOL cmk_executor_file_action(const CMKPlanAction *action)
             ))
             return CCFALSE;
         return cmk_executor_remove(action->from.data);
-    case CMK_PLAN_ACTION_REMOVE:
+    case CMK_ACTION_REMOVE:
         return cmk_executor_remove(action->path.data);
-    case CMK_PLAN_ACTION_MKDIR:
+    case CMK_ACTION_MKDIR:
         return cmk_executor_mkdir(action->path.data);
     default:
         return CCFALSE;
@@ -169,18 +179,15 @@ static CCBOOL cmk_executor_file_action(const CMKPlanAction *action)
 }
 
 static CCBOOL cmk_executor_exec(
-    CMKExecutor *executor, const CMKPlanAction *action,
+    CMKExecutor *executor, const CMKAction *action,
     CMKExecutorResult *result
 )
 {
-    char **argv = cmk_executor_string_array(
-        &action->argv, action->argc
-    );
-    char **envp = cmk_executor_string_array(
-        &action->env, action->envc
-    );
-    if ((action->argc > 0 && !argv) ||
-        (action->envc > 0 && !envp))
+    CCUINT32 argc = cmk_executor_list_count(action->args);
+    CCUINT32 envc = cmk_executor_list_count(action->env);
+    char **argv = cmk_executor_list_strings(action->args);
+    char **envp = cmk_executor_list_strings(action->env);
+    if ((argc > 0 && !argv) || (envc > 0 && !envp))
     {
         if (argv)
             ccalloc(argv, 0, NULL);
@@ -195,7 +202,7 @@ static CCBOOL cmk_executor_exec(
     memset(&spec, 0, sizeof(spec));
     spec.program = action->program.data;
     spec.argv = (const char *const *)argv;
-    spec.envp = action->envc > 0 ? (const char *const *)envp : NULL;
+    spec.envp = envc > 0 ? (const char *const *)envp : NULL;
     spec.working_dir = action->cwd.len ? action->cwd.data : NULL;
     spec.capture_limit = executor->policy.max_output_capture;
     CMKProcess *process = cmk_process_create(&spec);
@@ -254,24 +261,18 @@ static CCBOOL cmk_executor_exec(
     return result->success;
 }
 
-static CCBOOL cmk_executor_run(
-    void *user, const CMKPlanTarget *target,
-    CMKExecutorResult *result
+CCBOOL cmk_executor_run_actions(
+    CMKExecutor *executor, const CMKAction *actions,
+    CCUINT32 count, CMKExecutorResult *result
 )
 {
-    CMKExecutor *executor = (CMKExecutor *)user;
-    if (!executor || !target || !result)
+    if (!executor || (!actions && count > 0) || !result)
         return CCFALSE;
     memset(result, 0, sizeof(*result));
     result->success = CCTRUE;
-
-    const CMKPlanAction *actions =
-        (const CMKPlanAction *)target->actions.array;
-    CCUINT32 count = target->actions.size /
-        (CCUINT32)sizeof(CMKPlanAction);
     for (CCUINT32 i = 0; i < count; i++)
     {
-        if (actions[i].type == CMK_PLAN_ACTION_EXEC)
+        if (actions[i].kind == CMK_ACTION_EXEC)
         {
             if (!cmk_executor_exec(executor, &actions[i], result))
                 return CCFALSE;
@@ -284,12 +285,6 @@ static CCBOOL cmk_executor_run(
         }
     }
     return CCTRUE;
-}
-
-static void cmk_executor_cancel(void *user, CMKTargetId target)
-{
-    (void)user;
-    (void)target;
 }
 
 CMKExecutor *cmk_executor_create(
@@ -314,14 +309,6 @@ void cmk_executor_destroy(CMKExecutor *executor)
 {
     if (executor)
         ccalloc(executor, 0, NULL);
-}
-
-const CMKExecutorOps *cmk_executor_ops(void)
-{
-    static const CMKExecutorOps ops = {
-        cmk_executor_run, cmk_executor_cancel
-    };
-    return &ops;
 }
 
 void cmk_executor_result_clear(CMKExecutorResult *result)

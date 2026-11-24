@@ -296,18 +296,15 @@ ccmake -c project.ccm -D toolchain.c=clang -D "cflags=-O2 -g"
 ```c
 @include "project.ccm";
 
-list<string> source_files = find_files("*.c", {@{src}});
-
-target main() {
-    list<string> inputs = source_files;
-    list<string> outputs = {@{output}};
-    list<action> actions = {
+func main() -> void {
+    list<string> source_files = find_files("*.c", {@{src}});
+    run({
         mkdir(dirname(@{output})),
         command(
             @{toolchain.cc},
             @{toolchain.cflags} + source_files + {"-o", @{output}}
         )
-    };
+    });
 }
 ```
 

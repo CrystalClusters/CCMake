@@ -67,9 +67,6 @@ CMKASTNodeId parser_parse_return_type(CMKParser *parser);
 CMKASTNodeId parser_parse_var_decl(CMKParser *parser);
 CMKASTNodeId parser_parse_statement(CMKParser *parser);
 CMKASTNodeId parser_parse_block(CMKParser *parser);
-CCBOOL parser_parse_target_fields(
-    CMKParser *parser, CMKASTNodeId target_id
-);
 
 /* 源码范围 */
 CMKSourceSpan parser_token_span(const CMKToken *token);

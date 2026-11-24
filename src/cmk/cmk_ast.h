@@ -28,8 +28,6 @@ typedef enum {
     CMK_AST_VAR_DECL,
     CMK_AST_FUNC_DECL,
     CMK_AST_PARAM,
-    CMK_AST_TARGET_DECL,
-    CMK_AST_TARGET_FIELD,
     CMK_AST_TYPE,
 
     CMK_AST_BLOCK,
@@ -62,7 +60,6 @@ typedef enum {
     CMK_TYPE_BOOL,
     CMK_TYPE_FLOAT,
     CMK_TYPE_ACTION,
-    CMK_TYPE_TARGET_REF,
     CMK_TYPE_LIST,
     CMK_TYPE_VOID,
     CMK_TYPE_KIND_COUNT
@@ -108,18 +105,8 @@ typedef enum {
 
 typedef enum {
     CMK_IMPORT_FUNC = 0,
-    CMK_IMPORT_TARGET,
     CMK_IMPORT_KIND_COUNT
 } CMKImportKind;
-
-typedef enum {
-    CMK_TARGET_FIELD_DEPENDS_ON = 0,
-    CMK_TARGET_FIELD_INPUTS,
-    CMK_TARGET_FIELD_OUTPUTS,
-    CMK_TARGET_FIELD_ACTIONS,
-    CMK_TARGET_FIELD_UNKNOWN,
-    CMK_TARGET_FIELD_KIND_COUNT
-} CMKTargetFieldKind;
 
 /* AST 拥有的字符串；data 末尾补 0，len 可包含 0 字节 */
 typedef struct cmk_ast_string {
@@ -152,15 +139,6 @@ typedef struct cmk_ast_node {
             CMKASTStringId name;
             CCUINT32 param_count;
         } func_decl;
-
-        struct {
-            CMKASTStringId name;
-        } target_decl;
-
-        struct {
-            CMKTargetFieldKind field;
-            CMKASTStringId name;
-        } target_field;
 
         struct {
             CMKImportKind kind;

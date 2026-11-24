@@ -3,12 +3,11 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 模块加载与 Configure 入口（M3/M4）
+ * @Description: CMK 模块加载与 Configure 入口
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
 #include "cmk_program.h"
-#include "cmk_ir.h"
 #include "cmk_semantic_internal.h"
 #include "cmk_safe.h"
 
@@ -58,8 +57,6 @@ struct cmk_program {
     CMKProgramModule *root;
     char *work_dir;
     CMKExecutionPolicy policy;
-    CMKPlan *plan;
-    char *target_name;
     CCBOOL loaded;
     CCBOOL configured;
     CCBOOL failed;
@@ -380,60 +377,7 @@ static CCBOOL program_add_imports(
         return CCTRUE;
     }
 
-    if (kind == CMK_IMPORT_TARGET)
-    {
-        const char *alias = NULL;
-        CCUINT32 alias_len = 0;
-        alias = cmk_ast_string(
-            module->ast, node->as.import_decl.alias, &alias_len
-        );
-        if (!alias)
-            return program_error(
-                program, module, decl, "目标导入别名无效"
-            );
-
-        for (CMKASTNodeId item = node->first_child;
-             item != CMK_AST_NODE_NIL;)
-        {
-            const CMKASTNode *item_node =
-                cmk_ast_node(module->ast, item);
-            if (!item_node || item_node->kind != CMK_AST_IMPORT_ITEM)
-                return program_error(
-                    program, module, item, "目标导入项无效"
-                );
-            CCUINT32 name_len = 0;
-            const char *name = cmk_ast_string(
-                module->ast, item_node->as.import_item.name, &name_len
-            );
-            if (!name)
-                return program_error(
-                    program, module, item, "导入目标名无效"
-                );
-            const CMKTargetInfo *target = cmk_semantic_find_target(
-                imported->semantic, name, name_len
-            );
-            if (!target)
-                return program_error(
-                    program, module, item,
-                    "导入模块中不存在 target：%.*s",
-                    (int)name_len, name
-                );
-            if (!cmk_semantic_add_imported_target(
-                    module->semantic, alias, alias_len, target
-                ))
-                return program_error(
-                    program, module, item, "导入目标内存分配失败"
-                );
-
-            CMKASTNodeId item_next = item_node->next_sibling;
-            if (item_next == CMK_AST_NODE_NIL)
-                break;
-            item = item_next;
-        }
-        return CCTRUE;
-    }
-
-    return program_error(program, module, decl, "未知的导入类型");
+    return program_error(program, module, decl, "导入需要 func");
 }
 
 /* ============================================================================
@@ -1011,121 +955,29 @@ CCBOOL cmk_program_configure(CMKProgram *program)
     return CCTRUE;
 }
 
-void cmk_program_set_target_name(
-    CMKProgram *program, const char *name
-)
-{
-    if (!program || program->configured)
-        return;
-    if (program->target_name)
-    {
-        ccalloc(program->target_name, 0, NULL);
-        program->target_name = NULL;
-    }
-    if (!name)
-        return;
-    size_t len = strlen(name);
-    program->target_name = ccalloc(
-        NULL, (CCUINT64)len + 1, CMK_PROGRAM_COMMENT
-    );
-    if (program->target_name)
-        memcpy(program->target_name, name, len + 1);
-}
+static CMKRuntime *program_root_runtime(const CMKProgram *program);
 
-static CCUINT32 program_module_path_len(const char *path)
+CCBOOL cmk_program_run_main(CMKProgram *program)
 {
-    if (!path)
-        return 0;
-    CCUINT32 len = (CCUINT32)strlen(path);
-    while (len > 1 &&
-           (path[len - 1] == '/' || path[len - 1] == '\\'))
-        len--;
-    return len;
-}
-
-CCBOOL cmk_program_lower(
-    CMKProgram *program, const char *target_name
-)
-{
-    if (!program || !program->configured || program->failed)
+    if (!program || !program->configured || !program->root)
         return CCFALSE;
-    if (program->plan)
-    {
-        cmk_plan_destroy(program->plan);
-        program->plan = NULL;
-    }
-    CMKPlan *plan = cmk_plan_create();
-    if (!plan)
-        return program_error(
-            program, program->root, CMK_AST_NODE_NIL,
-            "构建计划分配失败"
-        );
-
-    CMKProgramModule **modules =
-        (CMKProgramModule **)program->modules.array;
-    CCUINT32 count =
-        program->modules.size / (CCUINT32)sizeof(CMKProgramModule *);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        CMKProgramModule *module = modules[i];
-        if (!module || module->state != CMK_MODULE_LOADED ||
-            !module->runtime || !module->semantic)
-            continue;
-        CCUINT32 targets = cmk_runtime_target_count(module->runtime);
-        for (CCUINT32 t = 0; t < targets; t++)
-        {
-            const CMKTargetDraft *draft =
-                cmk_runtime_target_at(module->runtime, t);
-            if (!draft)
-                continue;
-            const char *path = module->semantic->path;
-            if (draft->info && draft->info->module &&
-                draft->info->module->path)
-                path = draft->info->module->path;
-            if (!cmk_plan_add_draft(
-                    plan, path, program_module_path_len(path),
-                    draft, program->diagnostic
-                ))
-            {
-                cmk_plan_destroy(plan);
-                return CCFALSE;
-            }
-        }
-    }
-
-    const char *root_path = program->root->semantic->path;
-    const char *root_name = target_name ? target_name : "main";
-    const CMKTargetInfo *root_info = cmk_semantic_find_target(
-        program->root->semantic, root_name,
-        (CCUINT32)strlen(root_name)
-    );
-    if (root_info && root_info->module && root_info->module->path)
-        root_path = root_info->module->path;
-    if (!cmk_plan_freeze(
-            plan, root_path, program_module_path_len(root_path),
-            root_name, (CCUINT32)strlen(root_name),
-            program->diagnostic
-        ))
-    {
-        cmk_plan_destroy(plan);
+    CMKRuntime *runtime = program_root_runtime(program);
+    if (!runtime)
         return CCFALSE;
-    }
-    program->plan = plan;
-    return CCTRUE;
-}
 
-const CMKPlan *cmk_program_plan(const CMKProgram *program)
-{
-    return program ? program->plan : NULL;
-}
+    const CMKFunctionInfo *entry = cmk_semantic_find_function(
+        program->root->semantic, "main", 4
+    );
+    if (!entry)
+        return CCTRUE;
 
-CMKPlan *cmk_program_take_plan(CMKProgram *program)
-{
-    if (!program)
-        return NULL;
-    CMKPlan *plan = program->plan;
-    program->plan = NULL;
-    return plan;
+    CMKValue out;
+    cmk_value_init(&out);
+    CCBOOL ok = cmk_runtime_call_function(
+        runtime, entry, NULL, 0, &out
+    );
+    cmk_value_clear(&out);
+    return ok;
 }
 
 /* ============================================================================
@@ -1192,10 +1044,6 @@ void cmk_program_destroy(CMKProgram *program)
 {
     if (!program)
         return;
-    if (program->plan)
-        cmk_plan_destroy(program->plan);
-    if (program->target_name)
-        ccalloc(program->target_name, 0, NULL);
     CMKProgramModule **modules =
         (CMKProgramModule **)program->modules.array;
     CCUINT32 count =
@@ -1341,19 +1189,6 @@ CCBOOL cmk_program_get_global(
     return cmk_runtime_get_global(runtime, name, name_len, out);
 }
 
-CCUINT32 cmk_program_target_count(const CMKProgram *program)
-{
-    CMKRuntime *runtime = program_root_runtime(program);
-    return runtime ? cmk_runtime_target_count(runtime) : 0;
-}
-
-const CMKTargetDraft *cmk_program_target_at(
-    const CMKProgram *program, CCUINT32 index
-)
-{
-    CMKRuntime *runtime = program_root_runtime(program);
-    return runtime ? cmk_runtime_target_at(runtime, index) : NULL;
-}
 
 /* ============================================================================
  * main 入口

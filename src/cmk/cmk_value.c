@@ -69,9 +69,6 @@ CCBOOL cmk_type_is_scalar(const CMKType *type)
     case CMK_VALUE_BOOL:
     case CMK_VALUE_STRING:
     case CMK_VALUE_ACTION:
-    case CMK_VALUE_TARGET_REF:
-        return CCTRUE;
-
     default:
         return CCFALSE;
     }
@@ -101,9 +98,6 @@ const char *cmk_value_type_name(CMKValueType type)
 
     case CMK_VALUE_ACTION:
         return "action";
-
-    case CMK_VALUE_TARGET_REF:
-        return "target_ref";
 
     default:
         return "未知类型";
@@ -331,11 +325,6 @@ void cmk_value_clear(CMKValue *value)
         }
         break;
 
-    case CMK_VALUE_TARGET_REF:
-        cmk_string_clear(&value->as.target_ref.module);
-        cmk_string_clear(&value->as.target_ref.name);
-        break;
-
     default:
         break;
     }
@@ -455,21 +444,6 @@ CCBOOL cmk_value_copy(CMKValue *dst, const CMKValue *src)
         return CCTRUE;
     }
 
-    case CMK_VALUE_TARGET_REF:
-        if (!cmk_string_set(
-                &dst->as.target_ref.module,
-                src->as.target_ref.module.data,
-                src->as.target_ref.module.len
-            ))
-            goto Failed;
-        if (!cmk_string_set(
-                &dst->as.target_ref.name,
-                src->as.target_ref.name.data,
-                src->as.target_ref.name.len
-            ))
-            goto Failed;
-        return CCTRUE;
-
     default:
         break;
     }
@@ -540,26 +514,6 @@ CCBOOL cmk_value_set_list(CMKValue *value, CMKValueType element_type)
     cmk_value_clear(value);
     value->type = CMK_VALUE_LIST;
     value->as.list = list;
-    return CCTRUE;
-}
-
-CCBOOL cmk_value_set_target_ref(
-    CMKValue *value,
-    const char *module, CCUINT32 module_len,
-    const char *name, CCUINT32 name_len
-)
-{
-    if (!value)
-        return CCFALSE;
-    cmk_value_clear(value);
-    if (!cmk_string_set(&value->as.target_ref.module, module, module_len))
-        return CCFALSE;
-    if (!cmk_string_set(&value->as.target_ref.name, name, name_len))
-    {
-        cmk_string_clear(&value->as.target_ref.module);
-        return CCFALSE;
-    }
-    value->type = CMK_VALUE_TARGET_REF;
     return CCTRUE;
 }
 
@@ -648,19 +602,6 @@ static CCBOOL value_append_text(
             out, value->as.string.data, value->as.string.len
         );
 
-    case CMK_VALUE_TARGET_REF:
-        if (!cmk_string_append(
-                out, value->as.target_ref.module.data,
-                value->as.target_ref.module.len
-            ))
-            return CCFALSE;
-        if (!cmk_string_append(out, ".", 1))
-            return CCFALSE;
-        return cmk_string_append(
-            out, value->as.target_ref.name.data,
-            value->as.target_ref.name.len
-        );
-
     case CMK_VALUE_ACTION:
         return cmk_string_append(out, "<action>", 8);
 
@@ -718,14 +659,6 @@ CCBOOL cmk_value_equal(const CMKValue *a, const CMKValue *b)
 
     case CMK_VALUE_STRING:
         return cmk_string_equal(&a->as.string, &b->as.string);
-
-    case CMK_VALUE_TARGET_REF:
-        return (cmk_string_equal(
-                    &a->as.target_ref.module, &b->as.target_ref.module
-                ) &&
-                cmk_string_equal(
-                    &a->as.target_ref.name, &b->as.target_ref.name
-                )) ? CCTRUE : CCFALSE;
 
     case CMK_VALUE_LIST:
     {

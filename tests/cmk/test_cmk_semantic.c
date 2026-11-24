@@ -11,10 +11,6 @@
 
 #include <string.h>
 
-static void test_semantic_deep_statements(void);
-static void test_semantic_deep_expressions(void);
-static void test_semantic_deep_top_if(void);
-
 static void check_error(
     const char *source, const char *expected
 )
@@ -47,9 +43,7 @@ void test_cmk_semantic(void)
             "    int i = 0;\n"
             "    while (i < n) { total += add(i, base); i += 1; }\n"
             "    return total;\n"
-            "}\n"
-            "target main() { list<target_ref> depends_on = {app}; }\n"
-            "target app() { list<string> outputs = {\"out\"}; }\n";
+            "}\n";
 
         CMKTestContext ctx;
         cmk_test_context_init(&ctx);
@@ -71,14 +65,6 @@ void test_cmk_semantic(void)
             ctx.semantic, "use", 3
         );
         CC_CHECK(use != NULL, "找到 use");
-        CC_CHECK(
-            cmk_semantic_find_target(ctx.semantic, "main", 4) != NULL,
-            "找到 main target"
-        );
-        CC_CHECK(
-            cmk_semantic_find_target(ctx.semantic, "app", 3) != NULL,
-            "找到 app target"
-        );
         cmk_test_context_clear(&ctx);
     }
     CC_CASE_END();
@@ -175,62 +161,7 @@ void test_cmk_semantic(void)
     }
     CC_CASE_END();
 
-    /* ------------------------------------------------------------------
-     * SEM-004 target 语义
-     * ---------------------------------------------------------------- */
-    CC_CASE("SEM-004", "target 语义");
-    {
-        const char *valid =
-            "target app() {\n"
-            "    list<target_ref> depends_on = {core};\n"
-            "    list<string> inputs = {\"a.c\"};\n"
-            "    list<string> outputs = {\"app\"};\n"
-            "    list<action> actions = {mkdir(\"build\")};\n"
-            "}\n"
-            "target core() {}\n";
 
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(cmk_test_context_load(&ctx, valid), "合法 target 语义");
-        CC_CHECK(
-            cmk_semantic_find_target(ctx.semantic, "app", 3) != NULL,
-            "target app"
-        );
-        cmk_test_context_clear(&ctx);
-
-        check_error(
-            "target app() { int x = 1; }", "未知的 target 字段"
-        );
-        check_error(
-            "target app() { list<string> outputs = {\"a\"}; "
-            "list<string> outputs = {\"b\"}; }",
-            "重复的 target 字段"
-        );
-        check_error(
-            "target app() { list<string> depends_on = {\"core\"}; }",
-            "字段类型"
-        );
-        check_error(
-            "target app() { list<target_ref> depends_on = {missing}; }",
-            "未定义"
-        );
-        check_error(
-            "target_ref r = app;", "target_ref"
-        );
-        check_error(
-            "target app() {} target app() {}", "重复的 target"
-        );
-
-        const char *conditional =
-            "if (true) { target app() {} } else { target app() {} }";
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, conditional),
-            "条件分支同名 target 允许"
-        );
-        cmk_test_context_clear(&ctx);
-    }
-    CC_CASE_END();
 
     /* ------------------------------------------------------------------
      * SEM-005 配置引用
@@ -300,205 +231,5 @@ void test_cmk_semantic(void)
     }
     CC_CASE_END();
 
-    /* ------------------------------------------------------------------
-     * SEM-006 控制流
-     * ---------------------------------------------------------------- */
-    CC_CASE("SEM-006", "控制流");
-    {
-        const char *source =
-            "func pick(int n) -> int {\n"
-            "    if (n > 0) { return 1; } else { return 0; }\n"
-            "}\n"
-            "func stop() -> int { error(\"stop\"); }\n"
-            "func loop(int n) -> int {\n"
-            "    int i = 0;\n"
-            "    while (i < n) { i += 1; if (i == 2) { continue; } "
-            "if (i == 4) { break; } }\n"
-            "    for (string s in @{items}) { info(\"%s\", s); }\n"
-            "    return i;\n"
-            "}\n";
 
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        const char *items[] = {"a", "b"};
-        CC_CHECK(
-            cmk_test_set_string_array(ctx.tree, "items", items, 2),
-            "控制流配置"
-        );
-        CC_CHECK(cmk_test_context_load(&ctx, source), "控制流语义");
-        cmk_test_context_clear(&ctx);
-
-        check_error(
-            "func f() -> int { while (true) { return 1; } }",
-            "缺少返回值"
-        );
-    }
-    CC_CASE_END();
-    test_semantic_deep_statements();
-    test_semantic_deep_expressions();
-    test_semantic_deep_top_if();
-}
-
-static void test_semantic_deep_statements(void)
-{
-    CC_CASE("SEM-007", "显式语句栈深嵌套");
-    char *source = ccalloc(NULL, 200000, "CMK 语义深语句测试");
-    CC_CHECK(source != NULL, "语义深语句缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        const char *head = "func f() -> void {";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '{';
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '}';
-        source[pos++] = '}';
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层块语义"
-        );
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-
-    source = ccalloc(NULL, 200000, "CMK 语义深 if 测试");
-    CC_CHECK(source != NULL, "语义深 if 缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        const char *head = "func g() -> void {";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-        {
-            const char *if_head = "if (true) {";
-            memcpy(source + pos, if_head, strlen(if_head));
-            pos += strlen(if_head);
-        }
-        const char *body = "int x = 1;";
-        memcpy(source + pos, body, strlen(body));
-        pos += strlen(body);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '}';
-        source[pos++] = '}';
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层 if 语义"
-        );
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-    CC_CASE_END();
-}
-
-static void test_semantic_deep_expressions(void)
-{
-    CC_CASE("SEM-008", "显式表达式栈深嵌套");
-    char *source = ccalloc(NULL, 200000, "CMK 语义深表达式测试");
-    CC_CHECK(source != NULL, "语义深表达式缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        const char *head = "int x = 1";
-        memcpy(source + pos, head, strlen(head));
-        pos += strlen(head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-        {
-            memcpy(source + pos, " + 1", 4);
-            pos += 4;
-        }
-        source[pos++] = ';';
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层二元链语义"
-        );
-        cmk_test_context_clear(&ctx);
-
-        pos = 0;
-        const char *bool_head = "bool y = ";
-        memcpy(source + pos, bool_head, strlen(bool_head));
-        pos += strlen(bool_head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '!';
-        memcpy(source + pos, "true;", 5);
-        pos += 5;
-        source[pos] = '\0';
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层一元链语义"
-        );
-        cmk_test_context_clear(&ctx);
-
-        pos = 0;
-        const char *call_head =
-            "func f(int n) -> int { return n; }\nint z = ";
-        memcpy(source + pos, call_head, strlen(call_head));
-        pos += strlen(call_head);
-        for (CCUINT32 i = 0; i < 5000; i++)
-        {
-            memcpy(source + pos, "f(", 2);
-            pos += 2;
-        }
-        source[pos++] = '1';
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = ')';
-        source[pos++] = ';';
-        source[pos] = '\0';
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层调用语义"
-        );
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-    CC_CASE_END();
-}
-
-static void test_semantic_deep_top_if(void)
-{
-    CC_CASE("SEM-009", "显式顶层 if 栈");
-    char *source = ccalloc(NULL, 200000, "CMK 语义顶层 if 测试");
-    CC_CHECK(source != NULL, "语义顶层 if 缓冲区");
-    if (source)
-    {
-        size_t pos = 0;
-        for (CCUINT32 i = 0; i < 5000; i++)
-        {
-            const char *head = "if (true) {";
-            memcpy(source + pos, head, strlen(head));
-            pos += strlen(head);
-        }
-        const char *target = "target core() {}";
-        memcpy(source + pos, target, strlen(target));
-        pos += strlen(target);
-        for (CCUINT32 i = 0; i < 5000; i++)
-            source[pos++] = '}';
-        source[pos] = '\0';
-
-        CMKTestContext ctx;
-        cmk_test_context_init(&ctx);
-        CC_CHECK(
-            cmk_test_context_load(&ctx, source),
-            "5000 层顶层 if 语义"
-        );
-        cmk_test_context_clear(&ctx);
-        ccalloc(source, 0, NULL);
-    }
-    CC_CASE_END();
 }

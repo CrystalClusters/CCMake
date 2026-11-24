@@ -3,14 +3,14 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 进程抽象（M7）
+ * @Description: CMK 进程抽象
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
 #ifndef _INCLUDE_CMK_PROCESS_H_
 #define _INCLUDE_CMK_PROCESS_H_
 
-#include "cmk_target.h"
+#include "cmk_value.h"
 
 typedef struct cmk_process CMKProcess;
 

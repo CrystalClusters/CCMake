@@ -184,8 +184,6 @@ void test_cmk_lexer(void)
             { "float", CMK_TOK_KW_FLOAT },
             { "list", CMK_TOK_KW_LIST },
             { "action", CMK_TOK_KW_ACTION },
-            { "target", CMK_TOK_KW_TARGET },
-            { "target_ref", CMK_TOK_KW_TARGET_REF },
             { "const", CMK_TOK_KW_CONST },
             { "if", CMK_TOK_KW_IF },
             { "else", CMK_TOK_KW_ELSE },
@@ -205,7 +203,7 @@ void test_cmk_lexer(void)
         };
 
         const char *src =
-            "string int bool float list action target target_ref "
+            "string int bool float list action "
             "const if else for in while break continue func return "
             "from as true false void _";
 

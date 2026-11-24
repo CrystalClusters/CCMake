@@ -8,7 +8,7 @@
 
 #include "ccmake_header.h"
 
-/* CLI 构建入口：Configure → Lower → Scheduler → Executor → Cache */
+/* CLI 脚本入口：Configure → main() */
 CCBOOL build_project(void);
 
 #endif

@@ -53,7 +53,6 @@ typedef enum {
 // 需要配置的动作类参数：解析阶段只记录，由后续流程执行
 typedef enum {
     CC_CMD_ACTION_NONE,
-    CC_CMD_ACTION_LIST_TARGETS,
     CC_CMD_ACTION_DUMP_CONFIG
 } CC_CMD_ACTION;
 
@@ -69,7 +68,6 @@ struct ccmake_global_var_struct {
     char *cmk_path;
     char *work_dir;          // -C / --directory
     char *output_dir;        // -o / --output
-    char *target;            // -t / --target
     CCUINT32 jobs;           // -j / --jobs（0 = 自动检测，解析完成时已解析为具体值）
     CC_CMD_PARSE_STAT stat;  // 状态枚举，决定后续流程走哪个分支
     CCBOOL  verbose;         // -v / --verbose

@@ -3,7 +3,7 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK Configure 求值运行时（M4）
+ * @Description: CMK Configure 求值运行时
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -85,7 +85,7 @@ struct cmk_runtime {
     CMKBuiltinRegistry *builtins;
     CMKDiagnostic *diagnostic;
     CMKEnv *module_env;
-    CCDyn targets;      /* CMKTargetDraft[] */
+    CCDyn globals;
     CMKRuntimeModuleResolver module_resolver;
     void *resolver_user;
     const char *work_dir;
@@ -462,17 +462,6 @@ static CCBOOL rt_eval_ident(
     CMKRuntime *runtime, CMKASTNodeId id, CMKEnv *env, CMKValue *out
 )
 {
-    const CMKTargetInfo *target =
-        cmk_semantic_node_target_ref(runtime->semantic, id);
-    if (target)
-    {
-        return cmk_value_set_target_ref(
-            out, target->module->path,
-            (CCUINT32)strlen(target->module->path),
-            target->name.data, target->name.len
-        ) ? CCTRUE : rt_error(runtime, id, "目标引用复制失败");
-    }
-
     const CMKASTNode *node =
         cmk_ast_node(runtime->semantic->ast, id);
     if (!node || node->kind != CMK_AST_IDENT)
@@ -960,25 +949,6 @@ static CCBOOL rt_expr_step_start(
         frame->kind = CMK_RT_EXPR_CONFIG;
         *done = CCTRUE;
         return rt_eval_config(runtime, frame->id, out);
-
-    case CMK_AST_MEMBER:
-    {
-        const CMKTargetInfo *target =
-            cmk_semantic_node_target_ref(
-                runtime->semantic, frame->id
-            );
-        if (!target)
-            return rt_error(runtime, frame->id, "目标引用未绑定");
-        frame->kind = CMK_RT_EXPR_MEMBER;
-        *done = CCTRUE;
-        return cmk_value_set_target_ref(
-            out, target->module->path,
-            (CCUINT32)strlen(target->module->path),
-            target->name.data, target->name.len
-        ) ? CCTRUE : rt_error(
-            runtime, frame->id, "目标引用复制失败"
-        );
-    }
 
     case CMK_AST_LIST:
     {
@@ -3471,303 +3441,6 @@ Finished:
  * 模块配置
  * ========================================================================== */
 
-static void target_draft_clear(CMKTargetDraft *draft)
-{
-    if (!draft)
-        return;
-    cmk_value_clear(&draft->depends_on);
-    cmk_value_clear(&draft->inputs);
-    cmk_value_clear(&draft->outputs);
-    cmk_value_clear(&draft->actions);
-    memset(draft, 0, sizeof(*draft));
-}
-
-static CCBOOL target_draft_init(
-    CMKRuntime *runtime, CMKTargetDraft *draft, CMKASTNodeId decl
-)
-{
-    memset(draft, 0, sizeof(*draft));
-    draft->info = cmk_semantic_find_target_by_decl(
-        runtime->semantic, decl
-    );
-    if (!draft->info)
-        return rt_error(runtime, decl, "target 语义记录缺失");
-    cmk_value_init(&draft->depends_on);
-    cmk_value_init(&draft->inputs);
-    cmk_value_init(&draft->outputs);
-    cmk_value_init(&draft->actions);
-
-    if (!cmk_value_set_list(&draft->depends_on, CMK_VALUE_TARGET_REF) ||
-        !cmk_value_set_list(&draft->inputs, CMK_VALUE_STRING) ||
-        !cmk_value_set_list(&draft->outputs, CMK_VALUE_STRING) ||
-        !cmk_value_set_list(&draft->actions, CMK_VALUE_ACTION))
-    {
-        target_draft_clear(draft);
-        return rt_error(runtime, decl, "target 默认字段分配失败");
-    }
-    return CCTRUE;
-}
-
-static CCBOOL rt_eval_target(
-    CMKRuntime *runtime, CMKASTNodeId decl, CMKEnv *env
-)
-{
-    CMKTargetDraft draft;
-    if (!target_draft_init(runtime, &draft, decl))
-        return CCFALSE;
-
-    const CMKASTNode *node =
-        cmk_ast_node(runtime->semantic->ast, decl);
-    if (!node)
-    {
-        target_draft_clear(&draft);
-        return rt_error(runtime, decl, "target 声明缺失");
-    }
-
-    for (CMKASTNodeId field = node->first_child;
-         field != CMK_AST_NODE_NIL;)
-    {
-        const CMKASTNode *field_node =
-            cmk_ast_node(runtime->semantic->ast, field);
-        if (!field_node)
-        {
-            target_draft_clear(&draft);
-            return rt_error(runtime, decl, "target 字段缺失");
-        }
-        CMKASTNodeId next = field_node->next_sibling;
-
-        CMKTargetFieldKind kind = field_node->as.target_field.field;
-        CMKType expected;
-        switch (kind)
-        {
-        case CMK_TARGET_FIELD_DEPENDS_ON:
-            expected = cmk_type_list(CMK_VALUE_TARGET_REF);
-            break;
-
-        case CMK_TARGET_FIELD_INPUTS:
-        case CMK_TARGET_FIELD_OUTPUTS:
-            expected = cmk_type_list(CMK_VALUE_STRING);
-            break;
-
-        case CMK_TARGET_FIELD_ACTIONS:
-            expected = cmk_type_list(CMK_VALUE_ACTION);
-            break;
-
-        default:
-            target_draft_clear(&draft);
-            return rt_error(runtime, field, "未知 target 字段");
-        }
-
-        CMKValue value;
-        cmk_value_init(&value);
-        CMKASTNodeId value_id = rt_child(runtime, field, 1);
-        if (!rt_eval_expr(runtime, value_id, env, &value) ||
-            !rt_expect_value(runtime, value_id, &value, &expected))
-        {
-            cmk_value_clear(&value);
-            target_draft_clear(&draft);
-            return CCFALSE;
-        }
-
-        CMKValue *slot = NULL;
-        switch (kind)
-        {
-        case CMK_TARGET_FIELD_DEPENDS_ON:
-            slot = &draft.depends_on;
-            break;
-        case CMK_TARGET_FIELD_INPUTS:
-            slot = &draft.inputs;
-            break;
-        case CMK_TARGET_FIELD_OUTPUTS:
-            slot = &draft.outputs;
-            break;
-        default:
-            slot = &draft.actions;
-            break;
-        }
-        cmk_value_clear(slot);
-        *slot = value;
-        cmk_value_init(&value);
-        cmk_value_clear(&value);
-        field = next;
-    }
-
-    CMKTargetDraft *drafts = (CMKTargetDraft *)runtime->targets.array;
-    CCUINT32 count = runtime->targets.size /
-        (CCUINT32)sizeof(CMKTargetDraft);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        if (drafts[i].info->name.len == draft.info->name.len &&
-            memcmp(
-                drafts[i].info->name.data, draft.info->name.data,
-                draft.info->name.len
-            ) == 0)
-        {
-            const CMKTargetInfo *duplicate = draft.info;
-            target_draft_clear(&draft);
-            return rt_error(
-                runtime, decl, "同一配置中重复选择 target：%s",
-                duplicate->name.data
-            );
-        }
-    }
-
-    if (!cmk_dyn_push(
-            &runtime->targets, (CCUINT32)sizeof(CMKTargetDraft),
-            (CCINT32)sizeof(CMKTargetDraft), &draft
-        ))
-    {
-        target_draft_clear(&draft);
-        return rt_error(runtime, decl, "内存分配失败");
-    }
-    return CCTRUE;
-}
-
-static CCBOOL rt_eval_top_targets(
-    CMKRuntime *runtime, CMKASTNodeId id, CMKEnv *env
-)
-{
-    CCDyn stack;
-    memset(&stack, 0, sizeof(stack));
-    CCUINT32 depth = 0;
-    if (!cmk_dyn_push(
-            &stack, (CCUINT32)sizeof(CMKASTNodeId),
-            (CCINT32)sizeof(CMKASTNodeId), &id
-        ))
-        return rt_error(runtime, id, "内存分配失败");
-    depth++;
-
-    while (depth > 0)
-    {
-        CMKASTNodeId current = CMK_AST_NODE_NIL;
-        if (cc_dyn_core_pop(
-                &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                (CCINT32)sizeof(CMKASTNodeId), &current
-            ) != 0)
-        {
-            ccalloc(stack.array, 0, NULL);
-            return rt_error(runtime, id, "顶层 target 栈损坏");
-        }
-        depth--;
-
-        const CMKASTNode *node =
-            cmk_ast_node(runtime->semantic->ast, current);
-        if (!node)
-        {
-            ccalloc(stack.array, 0, NULL);
-            return rt_error(runtime, current, "顶层 target 节点缺失");
-        }
-
-        if (node->kind == CMK_AST_TARGET_DECL)
-        {
-            if (!rt_eval_target(runtime, current, env))
-            {
-                ccalloc(stack.array, 0, NULL);
-                return CCFALSE;
-            }
-            continue;
-        }
-
-        if (node->kind == CMK_AST_IF)
-        {
-            CMKASTNodeId condition_id = node->first_child;
-            CMKValue condition;
-            cmk_value_init(&condition);
-            if (!rt_eval_expr(runtime, condition_id, env, &condition))
-            {
-                cmk_value_clear(&condition);
-                ccalloc(stack.array, 0, NULL);
-                return CCFALSE;
-            }
-            if (condition.type != CMK_VALUE_BOOL)
-            {
-                cmk_value_clear(&condition);
-                ccalloc(stack.array, 0, NULL);
-                return rt_error(
-                    runtime, current, "顶层 if 条件不是 bool"
-                );
-            }
-            CCBOOL choose_then = condition.as.boolean;
-            cmk_value_clear(&condition);
-
-            const CMKASTNode *condition_node =
-                cmk_ast_node(runtime->semantic->ast, condition_id);
-            CMKASTNodeId then_id = condition_node
-                ? condition_node->next_sibling : CMK_AST_NODE_NIL;
-            const CMKASTNode *then_node =
-                cmk_ast_node(runtime->semantic->ast, then_id);
-            CMKASTNodeId else_id =
-                then_node ? then_node->next_sibling : CMK_AST_NODE_NIL;
-            CMKASTNodeId branch = choose_then ? then_id : else_id;
-            if (branch == CMK_AST_NODE_NIL)
-                continue;
-            if (!cmk_dyn_push(
-                    &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                    (CCINT32)sizeof(CMKASTNodeId), &branch
-                ))
-            {
-                ccalloc(stack.array, 0, NULL);
-                return rt_error(runtime, current, "内存分配失败");
-            }
-            depth++;
-            continue;
-        }
-
-        if (node->kind == CMK_AST_BLOCK)
-        {
-            CCDyn kids;
-            memset(&kids, 0, sizeof(kids));
-            for (CMKASTNodeId child = node->first_child;
-                 child != CMK_AST_NODE_NIL;)
-            {
-                if (!cmk_dyn_push(
-                        &kids, (CCUINT32)sizeof(CMKASTNodeId),
-                        (CCINT32)sizeof(CMKASTNodeId), &child
-                    ))
-                {
-                    ccalloc(kids.array, 0, NULL);
-                    ccalloc(stack.array, 0, NULL);
-                    return rt_error(
-                        runtime, current, "内存分配失败"
-                    );
-                }
-                const CMKASTNode *child_node =
-                    cmk_ast_node(runtime->semantic->ast, child);
-                child = child_node
-                    ? child_node->next_sibling : CMK_AST_NODE_NIL;
-            }
-            CCUINT32 count = kids.size /
-                (CCUINT32)sizeof(CMKASTNodeId);
-            CMKASTNodeId *items = (CMKASTNodeId *)kids.array;
-            for (CCUINT32 i = count; i > 0; i--)
-            {
-                if (!cmk_dyn_push(
-                        &stack, (CCUINT32)sizeof(CMKASTNodeId),
-                        (CCINT32)sizeof(CMKASTNodeId), &items[i - 1]
-                    ))
-                {
-                    ccalloc(kids.array, 0, NULL);
-                    ccalloc(stack.array, 0, NULL);
-                    return rt_error(
-                        runtime, current, "内存分配失败"
-                    );
-                }
-                depth++;
-            }
-            ccalloc(kids.array, 0, NULL);
-            continue;
-        }
-
-        ccalloc(stack.array, 0, NULL);
-        return rt_error(
-            runtime, current, "顶层 if 分支只能包含 target"
-        );
-    }
-
-    ccalloc(stack.array, 0, NULL);
-    return CCTRUE;
-}
-
 CCBOOL cmk_runtime_init_globals(CMKRuntime *runtime)
 {
     if (!runtime || !runtime->semantic)
@@ -3853,29 +3526,6 @@ static CCBOOL cmk_runtime_configure_body(CMKRuntime *runtime)
         return CCFALSE;
     }
     runtime->configured = CCTRUE;
-
-    CMKASTNodeId root = cmk_ast_root(runtime->semantic->ast);
-    const CMKASTNode *root_node =
-        cmk_ast_node(runtime->semantic->ast, root);
-    if (!root_node)
-        return rt_error(runtime, root, "模块根节点缺失");
-
-    for (CMKASTNodeId child = root_node->first_child;
-         child != CMK_AST_NODE_NIL;)
-    {
-        const CMKASTNode *child_node =
-            cmk_ast_node(runtime->semantic->ast, child);
-        if (!child_node)
-            return rt_error(runtime, child, "模块节点缺失");
-        CMKASTNodeId next = child_node->next_sibling;
-        if (child_node->kind == CMK_AST_TARGET_DECL ||
-            child_node->kind == CMK_AST_IF)
-        {
-            if (!rt_eval_top_targets(runtime, child, runtime->module_env))
-                return CCFALSE;
-        }
-        child = next;
-    }
 
     return CCTRUE;
 }
@@ -3989,22 +3639,6 @@ CCBOOL cmk_runtime_is_configured(const CMKRuntime *runtime)
     return (runtime && runtime->configured) ? CCTRUE : CCFALSE;
 }
 
-CCUINT32 cmk_runtime_target_count(const CMKRuntime *runtime)
-{
-    if (!runtime)
-        return 0;
-    return runtime->targets.size / (CCUINT32)sizeof(CMKTargetDraft);
-}
-
-const CMKTargetDraft *cmk_runtime_target_at(
-    const CMKRuntime *runtime, CCUINT32 index
-)
-{
-    if (!runtime || index >= cmk_runtime_target_count(runtime))
-        return NULL;
-    return &((const CMKTargetDraft *)runtime->targets.array)[index];
-}
-
 CCBOOL cmk_runtime_get_global(
     const CMKRuntime *runtime,
     const char *name, CCUINT32 name_len,
@@ -4049,13 +3683,6 @@ void cmk_runtime_destroy(CMKRuntime *runtime)
 {
     if (!runtime)
         return;
-    CMKTargetDraft *drafts = (CMKTargetDraft *)runtime->targets.array;
-    CCUINT32 count = runtime->targets.size /
-        (CCUINT32)sizeof(CMKTargetDraft);
-    for (CCUINT32 i = 0; i < count; i++)
-        target_draft_clear(&drafts[i]);
-    if (runtime->targets.array)
-        ccalloc(runtime->targets.array, 0, NULL);
     if (runtime->module_env)
         env_destroy(runtime->module_env);
     ccalloc(runtime, 0, NULL);

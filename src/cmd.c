@@ -60,9 +60,7 @@ void init_global_var(void)
 
 void clear_global_var(void)
 {
-    /* 与字段登记顺序相反：target/output/defines/work/cmk/ccm/self */
-    if (ccmake_global_var.target)
-        ccalloc(ccmake_global_var.target, 0, NULL);
+    /* 与字段登记顺序相反：output/defines/work/cmk/ccm/self */
     if (ccmake_global_var.output_dir)
         ccalloc(ccmake_global_var.output_dir, 0, NULL);
     clear_defines();
@@ -265,20 +263,6 @@ static CCBOOL _func_output_(void)
     return CCTRUE;
 }
 
-static CCBOOL _func_target_(void)
-{
-    const char *value = _take_value_("target");
-    if (!value)
-        return CCFALSE;
-    if (!_store_string_(
-            &ccmake_global_var.target,
-            value,
-            CC_DBG_REL_TAG("构建目标", NULL)))
-        return CCFALSE;
-    g_index++;
-    return CCTRUE;
-}
-
 // 追加一条 -D 键值对；键重复时以后来者为准
 static CCBOOL _define_add_(const char *key, CCUINT32 key_len, const char *value, CCUINT32 value_len)
 {
@@ -418,13 +402,6 @@ static CCBOOL _func_keep_going_(void)
 }
 
 // 这两个动作依赖 .ccm 解析：解析阶段只记录请求，继续收集配置参数，由后续流程执行
-static CCBOOL _func_list_targets_(void)
-{
-    ccmake_global_var.action = CC_CMD_ACTION_LIST_TARGETS;
-    g_index++;
-    return CCTRUE;
-}
-
 static CCBOOL _func_dump_config_(void)
 {
     ccmake_global_var.action = CC_CMD_ACTION_DUMP_CONFIG;
@@ -457,12 +434,10 @@ static CCBOOL _func_help_(void)
         "-j, --jobs <数量>            并行任务数（0 = 自动检测，默认: CPU 核心数）\n"
         "-D, --define <键=值>...      覆盖配置文件字段（可跟多个键值对）\n"
         "-o, --output <目录>          构建产物输出目录\n"
-        "-t, --target <目标>          构建目标（如 debug, release）\n"
         "-v, --verbose                详细输出\n"
         "-n, --dry-run                仅显示操作，不执行\n"
         "-B, --always-build           强制重新构建\n"
         "-k, --keep-going             遇到错误继续构建\n"
-        "    --list-targets           列出可用构建目标\n"
         "    --dump-config            展开变量后输出完整配置\n"
         "-h, --help                   显示此帮助信息\n"
         "-V, --version                显示版本信息\n"
@@ -477,14 +452,13 @@ static FUNC_TABLE func_table[] = {
     {"-j", _func_jobs_}, {"--jobs", _func_jobs_},
     {"-D", _func_define_}, {"--define", _func_define_},
     {"-o", _func_output_}, {"--output", _func_output_},
-    {"-t", _func_target_}, {"--target", _func_target_},
     {"-v", _func_verbose_}, {"--verbose", _func_verbose_},
     {"-n", _func_dry_run_}, {"--dry-run", _func_dry_run_},
     {"-B", _func_always_build_}, {"--always-build", _func_always_build_},
     {"-k", _func_keep_going_}, {"--keep-going", _func_keep_going_},
     {"-h", _func_help_}, {"--help", _func_help_},
     {"-V", _func_version_}, {"--version", _func_version_},
-    {"--list-targets", _func_list_targets_}, {"--dump-config", _func_dump_config_}
+    {"--dump-config", _func_dump_config_}
 };
 #define FUNC_TABLE_SIZE (CCINT32)(sizeof(func_table) / sizeof(func_table[0]))
 

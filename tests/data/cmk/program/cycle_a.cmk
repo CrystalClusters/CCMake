@@ -1,5 +1,3 @@
 @import func f from "cycle_b.cmk";
 
-target app() {
-    list<string> outputs = {"a.out"};
-}
+func main() -> void {}

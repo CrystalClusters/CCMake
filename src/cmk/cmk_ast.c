@@ -103,12 +103,6 @@ const char *cmk_ast_kind_name(CMKASTKind kind)
     case CMK_AST_PARAM:
         return "param";
 
-    case CMK_AST_TARGET_DECL:
-        return "target-decl";
-
-    case CMK_AST_TARGET_FIELD:
-        return "target-field";
-
     case CMK_AST_TYPE:
         return "type";
 
@@ -222,8 +216,6 @@ CCBOOL cmk_ast_kind_is_declaration(CMKASTKind kind)
     case CMK_AST_IMPORT_DECL:
     case CMK_AST_VAR_DECL:
     case CMK_AST_FUNC_DECL:
-    case CMK_AST_TARGET_DECL:
-    case CMK_AST_TARGET_FIELD:
         return CCTRUE;
 
     default:
@@ -239,8 +231,6 @@ static CCBOOL ast_is_top_item_kind(CMKASTKind kind)
     case CMK_AST_IMPORT_DECL:
     case CMK_AST_VAR_DECL:
     case CMK_AST_FUNC_DECL:
-    case CMK_AST_TARGET_DECL:
-    case CMK_AST_IF:
         return CCTRUE;
 
     default:
@@ -271,8 +261,6 @@ static CCBOOL ast_is_top_branch(
     const CMKASTNode *node = ast_node_at_const(ast, id);
     if (!node)
         return CCFALSE;
-    if (node->kind == CMK_AST_TARGET_DECL)
-        return CCTRUE;
     if (node->kind == CMK_AST_IF)
         return node->as.if_stmt.is_top_level;
     if (node->kind == CMK_AST_BLOCK)
@@ -754,27 +742,6 @@ static CCBOOL ast_validate_decl(
             return ast_fail(reason, "参数名无效");
         break;
 
-    case CMK_AST_TARGET_DECL:
-        if (!ast_children_all_kind(
-                ast, id, child_count, CMK_AST_TARGET_FIELD
-            ))
-            return ast_fail(reason, "target 子节点类型错误");
-        if (!ast_string_ok(ast, node->as.target_decl.name))
-            return ast_fail(reason, "target 名无效");
-        break;
-
-    case CMK_AST_TARGET_FIELD:
-        if (child_count != 2 ||
-            !ast_child_is_kind(ast, id, 0, CMK_AST_TYPE) ||
-            !ast_child_is_expression(ast, id, 1))
-            return ast_fail(reason, "target 字段子节点错误");
-        if ((unsigned int)node->as.target_field.field >=
-            (unsigned int)CMK_TARGET_FIELD_KIND_COUNT)
-            return ast_fail(reason, "target 字段类型非法");
-        if (!ast_string_ok(ast, node->as.target_field.name))
-            return ast_fail(reason, "target 字段名无效");
-        break;
-
     case CMK_AST_TYPE:
         if ((unsigned int)node->as.type.kind >=
             (unsigned int)CMK_TYPE_KIND_COUNT)
@@ -814,8 +781,6 @@ static CCBOOL ast_validate_stmt(
 
             if (top_level)
             {
-                if (child_node->kind == CMK_AST_TARGET_DECL)
-                    continue;
                 if (child_node->kind == CMK_AST_IF &&
                     child_node->as.if_stmt.is_top_level)
                     continue;
@@ -1046,8 +1011,6 @@ static CCBOOL ast_validate_node(
     case CMK_AST_VAR_DECL:
     case CMK_AST_FUNC_DECL:
     case CMK_AST_PARAM:
-    case CMK_AST_TARGET_DECL:
-    case CMK_AST_TARGET_FIELD:
     case CMK_AST_TYPE:
         return ast_validate_decl(
             ast, id, node, child_count, reason

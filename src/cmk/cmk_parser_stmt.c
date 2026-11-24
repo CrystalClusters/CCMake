@@ -69,30 +69,30 @@ static CMKASTNodeId parser_parse_break_continue(
 static CMKASTNodeId parser_parse_assignment(CMKParser *parser)
 {
     CMKToken start = parser->current;
-    CMKToken target_token = parser->current;
+    CMKToken assign_token = parser->current;
 
-    CMKASTNodeId target = CMK_AST_NODE_NIL;
-    if (target_token.type == CMK_TOK_IDENT)
+    CMKASTNodeId assign_target = CMK_AST_NODE_NIL;
+    if (assign_token.type == CMK_TOK_IDENT)
     {
         CMKASTStringId name = parser_new_string(
-            parser, target_token.text, target_token.len
+            parser, assign_token.text, assign_token.len
         );
         if (name == CMK_AST_STRING_NIL)
             return CMK_AST_NODE_NIL;
-        CMKSourceSpan span = parser_token_span(&target_token);
-        target = parser_new_node(parser, CMK_AST_IDENT, &span);
-        if (target == CMK_AST_NODE_NIL)
+        CMKSourceSpan span = parser_token_span(&assign_token);
+        assign_target = parser_new_node(parser, CMK_AST_IDENT, &span);
+        if (assign_target == CMK_AST_NODE_NIL)
             return CMK_AST_NODE_NIL;
-        CMKASTNode *target_node = cmk_ast_node_mut(parser->ast, target);
-        if (!target_node)
+        CMKASTNode *assign_node = cmk_ast_node_mut(parser->ast, assign_target);
+        if (!assign_node)
             return CMK_AST_NODE_NIL;
-        target_node->as.ident.name = name;
+        assign_node->as.ident.name = name;
     }
     else
     {
-        CMKSourceSpan span = parser_token_span(&target_token);
-        target = parser_new_node(parser, CMK_AST_DISCARD, &span);
-        if (target == CMK_AST_NODE_NIL)
+        CMKSourceSpan span = parser_token_span(&assign_token);
+        assign_target = parser_new_node(parser, CMK_AST_DISCARD, &span);
+        if (assign_target == CMK_AST_NODE_NIL)
             return CMK_AST_NODE_NIL;
     }
 
@@ -111,7 +111,7 @@ static CMKASTNodeId parser_parse_assignment(CMKParser *parser)
         );
         return CMK_AST_NODE_NIL;
     }
-    if (op == CMK_ASSIGN_ADD && target_token.type == CMK_TOK_UNDERSCORE)
+    if (op == CMK_ASSIGN_ADD && assign_token.type == CMK_TOK_UNDERSCORE)
     {
         (void)parser_error_current(parser, "`_` 不能使用 `+=`");
         return CMK_AST_NODE_NIL;
@@ -133,7 +133,7 @@ static CMKASTNodeId parser_parse_assignment(CMKParser *parser)
     if (!assign)
         return CMK_AST_NODE_NIL;
     assign->as.assign.op = op;
-    if (!parser_append_child(parser, node, target) ||
+    if (!parser_append_child(parser, node, assign_target) ||
         !parser_append_child(parser, node, value))
         return CMK_AST_NODE_NIL;
     return node;

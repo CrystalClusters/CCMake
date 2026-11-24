@@ -3,7 +3,7 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 声明 Parser：模块、导入、函数、target、target 字段与顶层 if
+ * @Description: CMK 声明 Parser：模块、导入、函数与顶层声明
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -18,7 +18,6 @@
 static CMKASTNodeId parser_parse_include(CMKParser *parser);
 static CMKASTNodeId parser_parse_import(CMKParser *parser);
 static CMKASTNodeId parser_parse_func_decl(CMKParser *parser);
-static CMKASTNodeId parser_parse_target_decl(CMKParser *parser);
 static CMKASTNodeId parser_parse_top_if(CMKParser *parser);
 
 /* ============================================================================
@@ -36,7 +35,6 @@ CCBOOL parser_is_type_start(CMKParser *parser)
     case CMK_TOK_KW_BOOL:
     case CMK_TOK_KW_FLOAT:
     case CMK_TOK_KW_ACTION:
-    case CMK_TOK_KW_TARGET_REF:
     case CMK_TOK_KW_LIST:
         return CCTRUE;
 
@@ -121,10 +119,6 @@ CMKASTNodeId parser_parse_type(CMKParser *parser)
 
     case CMK_TOK_KW_ACTION:
         base = parser_make_scalar_type(parser, CMK_TYPE_ACTION);
-        break;
-
-    case CMK_TOK_KW_TARGET_REF:
-        base = parser_make_scalar_type(parser, CMK_TYPE_TARGET_REF);
         break;
 
     default:
@@ -284,12 +278,10 @@ static CMKASTNodeId parser_parse_import(CMKParser *parser)
     if (!parser_expect(parser, CMK_TOK_AT_IMPORT, "`@import`"))
         return CMK_AST_NODE_NIL;
 
-    CCBOOL is_func = CCFALSE;
-    if (parser->current.type == CMK_TOK_KW_FUNC)
-        is_func = CCTRUE;
-    else if (parser->current.type != CMK_TOK_KW_TARGET)
+    CCBOOL is_func = CCTRUE;
+    if (parser->current.type != CMK_TOK_KW_FUNC)
         return parser_error_current(
-            parser, "导入需要 `func` 或 `target`"
+            parser, "导入需要 `func`"
         ), CMK_AST_NODE_NIL;
 
     if (!parser_advance(parser))
@@ -305,8 +297,7 @@ static CMKASTNodeId parser_parse_import(CMKParser *parser)
     CMKASTNode *import_node = cmk_ast_node_mut(parser->ast, node);
     if (!import_node)
         return CMK_AST_NODE_NIL;
-    import_node->as.import_decl.kind =
-        is_func ? CMK_IMPORT_FUNC : CMK_IMPORT_TARGET;
+    import_node->as.import_decl.kind = CMK_IMPORT_FUNC;
     import_node->as.import_decl.module = CMK_AST_STRING_NIL;
     import_node->as.import_decl.alias = CMK_AST_STRING_NIL;
     import_node->as.import_decl.wildcard = CCFALSE;
@@ -559,132 +550,6 @@ Failed:
 }
 
 /* ============================================================================
- * target
- * ========================================================================== */
-
-static CMKTargetFieldKind parser_target_field_kind(
-    const char *text, CCUINT32 len
-)
-{
-    if (len == 10 && memcmp(text, "depends_on", 10) == 0)
-        return CMK_TARGET_FIELD_DEPENDS_ON;
-    if (len == 6 && memcmp(text, "inputs", 6) == 0)
-        return CMK_TARGET_FIELD_INPUTS;
-    if (len == 7 && memcmp(text, "outputs", 7) == 0)
-        return CMK_TARGET_FIELD_OUTPUTS;
-    if (len == 7 && memcmp(text, "actions", 7) == 0)
-        return CMK_TARGET_FIELD_ACTIONS;
-    return CMK_TARGET_FIELD_UNKNOWN;
-}
-
-CCBOOL parser_parse_target_fields(
-    CMKParser *parser, CMKASTNodeId target_id
-)
-{
-    if (!parser_expect(parser, CMK_TOK_LBRACE, "左花括号"))
-        return CCFALSE;
-    if (!parser_enter_syntax(parser))
-        return CCFALSE;
-
-    while (parser->current.type != CMK_TOK_RBRACE)
-    {
-        if (parser->current.type == CMK_TOK_EOF)
-        {
-            (void)parser_error_current(parser, "target 体未闭合");
-            goto Failed;
-        }
-
-        CMKToken field_start = parser->current;
-        CMKASTNodeId type = parser_parse_type(parser);
-        if (type == CMK_AST_NODE_NIL)
-            goto Failed;
-
-        CMKToken name_token = parser->current;
-        CMKASTStringId name = CMK_AST_STRING_NIL;
-        if (!parser_take_identifier(parser, &name))
-            goto Failed;
-        if (!parser_expect(parser, CMK_TOK_ASSIGN, "`=`"))
-            goto Failed;
-
-        CMKASTNodeId value = parser_parse_expression(parser);
-        if (value == CMK_AST_NODE_NIL)
-            goto Failed;
-        if (!parser_expect(parser, CMK_TOK_SEMI, "分号"))
-            goto Failed;
-
-        CMKSourceSpan span =
-            parser_make_span(&field_start, &parser->previous);
-        CMKASTNodeId field = parser_new_node(
-            parser, CMK_AST_TARGET_FIELD, &span
-        );
-        if (field == CMK_AST_NODE_NIL)
-            goto Failed;
-        CMKASTNode *field_node = cmk_ast_node_mut(parser->ast, field);
-        if (!field_node)
-            goto Failed;
-        field_node->as.target_field.field = parser_target_field_kind(
-            name_token.text, name_token.len
-        );
-        field_node->as.target_field.name = name;
-        if (!parser_append_child(parser, field, type) ||
-            !parser_append_child(parser, field, value) ||
-            !parser_append_child(parser, target_id, field))
-            goto Failed;
-    }
-
-    if (!parser_expect(parser, CMK_TOK_RBRACE, "右花括号"))
-        goto Failed;
-
-    parser_leave_syntax(parser);
-    return CCTRUE;
-
-Failed:
-    parser_leave_syntax(parser);
-    return CCFALSE;
-}
-
-static CMKASTNodeId parser_parse_target_decl(CMKParser *parser)
-{
-    CMKToken start = parser->current;
-    if (!parser_expect(parser, CMK_TOK_KW_TARGET, "`target`"))
-        return CMK_AST_NODE_NIL;
-
-    CMKASTStringId name = CMK_AST_STRING_NIL;
-    if (!parser_take_identifier(parser, &name))
-        return CMK_AST_NODE_NIL;
-    if (!parser_expect(parser, CMK_TOK_LPAREN, "左圆括号"))
-        return CMK_AST_NODE_NIL;
-    if (!parser_expect(parser, CMK_TOK_RPAREN, "右圆括号"))
-        return CMK_AST_NODE_NIL;
-
-    CMKSourceSpan zero_span;
-    memset(&zero_span, 0, sizeof(zero_span));
-    CMKASTNodeId node = parser_new_node(
-        parser, CMK_AST_TARGET_DECL, &zero_span
-    );
-    if (node == CMK_AST_NODE_NIL)
-        return CMK_AST_NODE_NIL;
-    CMKASTNode *target_node = cmk_ast_node_mut(parser->ast, node);
-    if (!target_node)
-        return CMK_AST_NODE_NIL;
-    target_node->as.target_decl.name = name;
-
-    if (!parser_enter_syntax(parser))
-        return CMK_AST_NODE_NIL;
-    if (!parser_parse_target_fields(parser, node))
-    {
-        parser_leave_syntax(parser);
-        return CMK_AST_NODE_NIL;
-    }
-    parser_leave_syntax(parser);
-
-    CMKSourceSpan span = parser_make_span(&start, &parser->previous);
-    if (!parser_set_node_span(parser, node, &span))
-        return CMK_AST_NODE_NIL;
-    return node;
-}
-
-/* ============================================================================
  * 顶层 if
  * ========================================================================== */
 
@@ -925,8 +790,6 @@ static CMKASTNodeId parser_parse_top_tree(CMKParser *parser)
 
         if (frames.size == 0)
         {
-            if (parser->current.type == CMK_TOK_KW_TARGET)
-                return parser_parse_target_decl(parser);
             if (parser->current.type == CMK_TOK_KW_IF)
             {
                 if (!parser_top_push_if(parser, &frames))
@@ -940,7 +803,7 @@ static CMKASTNodeId parser_parse_top_tree(CMKParser *parser)
                 continue;
             }
             (void)parser_error_current(
-                parser, "顶层 if 分支只允许 target 声明"
+                parser, "顶层只允许 include/import/变量/函数声明"
             );
             goto Failed;
         }
@@ -962,14 +825,6 @@ static CMKASTNodeId parser_parse_top_tree(CMKParser *parser)
                 has_completed = CCTRUE;
                 continue;
             }
-            if (parser->current.type == CMK_TOK_KW_TARGET)
-            {
-                CMKASTNodeId item = parser_parse_target_decl(parser);
-                if (item == CMK_AST_NODE_NIL ||
-                    !parser_append_child(parser, frame->node, item))
-                    goto Failed;
-                continue;
-            }
             if (parser->current.type == CMK_TOK_EOF)
             {
                 (void)parser_error_current(parser, "顶层 if 块未闭合");
@@ -988,19 +843,11 @@ static CMKASTNodeId parser_parse_top_tree(CMKParser *parser)
                 continue;
             }
             (void)parser_error_current(
-                parser, "顶层 if 分支只允许 target 声明"
+                parser, "顶层只允许 include/import/变量/函数声明"
             );
             goto Failed;
         }
 
-        if (parser->current.type == CMK_TOK_KW_TARGET)
-        {
-            completed = parser_parse_target_decl(parser);
-            if (completed == CMK_AST_NODE_NIL)
-                goto Failed;
-            has_completed = CCTRUE;
-            continue;
-        }
         if (parser->current.type == CMK_TOK_KW_IF)
         {
             if (!parser_top_push_if(parser, &frames))
@@ -1014,7 +861,7 @@ static CMKASTNodeId parser_parse_top_tree(CMKParser *parser)
             continue;
         }
         (void)parser_error_current(
-            parser, "顶层 if 分支只允许 target 声明"
+            parser, "顶层只允许 include/import/变量/函数声明"
         );
         goto Failed;
     }
@@ -1053,8 +900,6 @@ static CMKASTNodeId parser_parse_top_item(CMKParser *parser)
     case CMK_TOK_KW_FUNC:
         return parser_parse_func_decl(parser);
 
-    case CMK_TOK_KW_TARGET:
-        return parser_parse_target_decl(parser);
 
     case CMK_TOK_KW_IF:
         return parser_parse_top_if(parser);

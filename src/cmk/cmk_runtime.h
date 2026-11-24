@@ -3,7 +3,7 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK Configure 求值运行时（M4）
+ * @Description: CMK Configure 求值运行时
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -14,7 +14,6 @@
 #include "cmk_config.h"
 #include "cmk_policy.h"
 #include "cmk_semantic.h"
-#include "cmk_target_draft.h"
 
 typedef struct cmk_runtime CMKRuntime;
 
@@ -34,7 +33,7 @@ void cmk_runtime_destroy(CMKRuntime *runtime);
 /* 初始化模块全局变量；Program 在跨模块调用前按依赖序调用 */
 CCBOOL cmk_runtime_init_globals(CMKRuntime *runtime);
 
-/* 初始化模块全局变量，并求值顶层 target / 顶层 if 到 target drafts */
+/* 初始化模块全局变量 */
 CCBOOL cmk_runtime_configure(CMKRuntime *runtime);
 CCBOOL cmk_runtime_is_configured(const CMKRuntime *runtime);
 CCBOOL cmk_runtime_failed(const CMKRuntime *runtime);
@@ -52,11 +51,6 @@ void cmk_runtime_set_policy(
 );
 const CMKExecutionPolicy *cmk_runtime_get_policy(
     const CMKRuntime *runtime
-);
-
-CCUINT32 cmk_runtime_target_count(const CMKRuntime *runtime);
-const CMKTargetDraft *cmk_runtime_target_at(
-    const CMKRuntime *runtime, CCUINT32 index
 );
 
 /* 读取模块级变量（Configure 完成后有效），out 由调用方初始化 */
