@@ -298,13 +298,11 @@ ccmake -c project.ccm -D toolchain.c=clang -D "cflags=-O2 -g"
 
 func main() -> void {
     list<string> source_files = find_files("*.c", {@{src}});
-    run({
-        mkdir(dirname(@{output})),
-        command(
-            @{toolchain.cc},
-            @{toolchain.cflags} + source_files + {"-o", @{output}}
-        )
-    });
+    mkdir(dirname(@{output}));
+    command(
+        @{toolchain.cc},
+        @{toolchain.cflags} + source_files + {"-o", @{output}}
+    );
 }
 ```
 

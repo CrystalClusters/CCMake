@@ -59,7 +59,6 @@ typedef enum {
     CMK_TYPE_INT,
     CMK_TYPE_BOOL,
     CMK_TYPE_FLOAT,
-    CMK_TYPE_ACTION,
     CMK_TYPE_LIST,
     CMK_TYPE_VOID,
     CMK_TYPE_KIND_COUNT

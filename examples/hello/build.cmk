@@ -6,11 +6,9 @@ func main() -> void {
     info("cc: %s", @{toolchain.cc});
     info("output: %s", @{output});
 
-    run({
-        mkdir(dirname(@{output})),
-        command(
-            @{toolchain.cc},
-            @{toolchain.cflags} + sources + {"-o", @{output}}
-        )
-    });
+    mkdir(dirname(@{output}));
+    command(
+        @{toolchain.cc},
+        @{toolchain.cflags} + sources + {"-o", @{output}}
+    );
 }

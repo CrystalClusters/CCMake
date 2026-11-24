@@ -262,10 +262,6 @@ static CCBOOL sem_type_from_ast(
         *out = cmk_type_scalar(CMK_VALUE_STRING);
         return CCTRUE;
 
-    case CMK_TYPE_ACTION:
-        *out = cmk_type_scalar(CMK_VALUE_ACTION);
-        return CCTRUE;
-
     case CMK_TYPE_LIST:
     {
         CMKASTNodeId element_id = sem_child(module, type_node, 0);
@@ -1005,8 +1001,7 @@ static CCBOOL sem_expr_apply_binary(
         if (!cmk_type_equal(left_type, right_type))
             return sem_error(module, frame->id, "比较运算两侧类型不一致");
         if (left_type->kind == CMK_VALUE_VOID ||
-            left_type->kind == CMK_VALUE_LIST ||
-            left_type->kind == CMK_VALUE_ACTION)
+            left_type->kind == CMK_VALUE_LIST)
             return sem_error(module, frame->id, "该类型不能参与比较");
         if (op != CMK_BINARY_EQ && op != CMK_BINARY_NE &&
             left_type->kind != CMK_VALUE_INT &&

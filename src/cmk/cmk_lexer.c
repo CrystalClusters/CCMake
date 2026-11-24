@@ -55,9 +55,6 @@ const char *cmk_token_type_name(CMKTokenType type)
     case CMK_TOK_KW_LIST:
         return "`list`";
 
-    case CMK_TOK_KW_ACTION:
-        return "`action`";
-
     case CMK_TOK_KW_CONST:
         return "`const`";
 
@@ -235,7 +232,6 @@ static const CMKKeywordEntry g_cmk_keywords[] = {
     CMK_KEYWORD("bool", CMK_TOK_KW_BOOL),
     CMK_KEYWORD("float", CMK_TOK_KW_FLOAT),
     CMK_KEYWORD("list", CMK_TOK_KW_LIST),
-    CMK_KEYWORD("action", CMK_TOK_KW_ACTION),
     CMK_KEYWORD("const", CMK_TOK_KW_CONST),
     CMK_KEYWORD("if", CMK_TOK_KW_IF),
     CMK_KEYWORD("else", CMK_TOK_KW_ELSE),

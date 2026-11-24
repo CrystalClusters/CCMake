@@ -1,0 +1,4 @@
+func main() -> void {
+    copy("tests/data/cmk/program/config.ccm", "out/run_a");
+    copy("tests/data/cmk/program/config.ccm", "out/run_b");
+}

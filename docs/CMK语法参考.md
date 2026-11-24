@@ -6,7 +6,7 @@
 func main() -> void
 ```
 
-没有 `main` 时直接成功退出；动作由脚本按代码顺序调用 `run(...)` 执行。
+没有 `main` 时直接成功退出；动作按源码顺序立即执行。
 
 ## 1. 文件结构
 
@@ -37,7 +37,7 @@ top_item    := include | import | var_decl | func_decl
 关键字：
 
 ```text
-string int float bool void list action
+string int float bool void list
 const if else for in while break continue
 func return @include @import from as true false
 _
@@ -112,7 +112,6 @@ _
 | `float` | `3.14` | `double` |
 | `string` | `"text"` | 字符串 |
 | `list<T>` | `list<string>` | 同质列表 |
-| `action` | `command(...)` | 目标动作 |
 
 `list<T>` 不支持嵌套列表。空列表 `{}` 的元素类型由声明或函数返回类型确定。
 
@@ -300,47 +299,19 @@ func main() -> void {
 - 没有 `main` 时脚本直接成功退出；
 - 不能通过命令行指定其他入口；
 - `main` 内可以调用任意普通函数；
-- `main` 内按代码顺序调用 `run(...)` 执行动作。
+- `main` 内的动作按源码顺序立即执行。
 
 ```c
 func main() -> void {
     info("cc: %s", @{toolchain.cc});
-    run({
-        mkdir("build"),
-        command("cc", {"main.c", "-o", "build/app"})
-    });
+    mkdir("build");
+    command("cc", {"main.c", "-o", "build/app"});
 }
 ```
-
-入口没有字段声明；动作通过 `run(...)` 执行。
 
 ## 11. 动作
 
-动作是值；只有传给 `run(...)` 才执行。
-
-### run
-
-```c
-run(list<action>) -> void
-```
-
-按列表顺序立即执行动作，失败则停止并报错。
-
-```c
-run({
-    mkdir("build"),
-    command("cc", {"main.c", "-o", "build/app"})
-});
-```
-
-可以分多次调用，执行顺序由代码决定：
-
-```c
-run({mkdir("build")});
-if (!file_exists("build/app") || file_newer("main.c", "build/app")) {
-    run({command("cc", {"main.c", "-o", "build/app"})});
-}
-```
+`mkdir`、`copy`、`move`、`remove`、`command` 都是 void 函数，调用即执行，失败即终止脚本。
 
 ### command
 
@@ -360,8 +331,7 @@ command("cc", {"main.c"}, "src", {"CC=gcc", "CFLAGS=-O2"})
 - `args`：`list<string>`，直接传给进程，不经过 shell；
 - `cwd`：可选工作目录；
 - `env`：可选 `list<string>`，元素形如 `"K=V"`；
-- 返回 `action`；
-- 由 `run(...)` 执行，进程输出按动作顺序输出。
+- 调用即执行；进程输出写入 stdout。
 
 ### mkdir
 
@@ -369,7 +339,7 @@ command("cc", {"main.c"}, "src", {"CC=gcc", "CFLAGS=-O2"})
 mkdir("build")
 ```
 
-创建目录，返回 `action`。
+创建目录。
 
 ### copy
 
@@ -554,13 +524,11 @@ func main() -> void {
 
     if (!file_exists(@{output}) ||
         file_newer("src/main.c", @{output})) {
-        run({
-            mkdir(dirname(@{output})),
-            command(
-                @{toolchain.cc},
-                @{toolchain.cflags} + sources + {"-o", @{output}}
-            )
-        });
+        mkdir(dirname(@{output}));
+        command(
+            @{toolchain.cc},
+            @{toolchain.cflags} + sources + {"-o", @{output}}
+        );
     }
 }
 ```
@@ -571,15 +539,15 @@ func main() -> void {
 for (string src in sources) {
     string obj = "build/" + subst(basename(src), ".c", ".o");
     if (!file_exists(obj) || file_newer(src, obj)) {
-        run({command(
+        command(
             @{toolchain.cc},
             @{toolchain.cflags} + {"-c", src, "-o", obj}
-        )});
+        );
     }
 }
 ```
 
-CCMake 不决定哪些动作需要执行，只按 `run(...)` 的调用顺序执行。
+CCMake 不决定哪些动作需要执行；源码顺序就是执行顺序。
 
 ## 13. 执行策略
 
@@ -593,7 +561,7 @@ CCMake 不决定哪些动作需要执行，只按 `run(...)` 的调用顺序执�
 | `CCMAKE_CMK_MAX_FIND_DEPTH` | `find_files` 最大目录深度 |
 | `CCMAKE_CMK_MAX_OUTPUT_CAPTURE` | 单进程输出捕获上限 |
 
-执行顺序完全由脚本 `run(...)` 调用顺序决定；没有并发调度。
+执行顺序完全由源码顺序决定；没有并发调度。
 
 ## 14. 完整示例
 
@@ -606,13 +574,11 @@ func main() -> void {
 
     if (!file_exists(@{output}) ||
         file_newer("src/main.c", @{output})) {
-        run({
-            mkdir(dirname(@{output})),
-            command(
-                @{toolchain.cc},
-                @{toolchain.cflags} + sources + {"-o", @{output}}
-            )
-        });
+        mkdir(dirname(@{output}));
+        command(
+            @{toolchain.cc},
+            @{toolchain.cflags} + sources + {"-o", @{output}}
+        );
     }
 }
 ```

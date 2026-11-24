@@ -903,23 +903,6 @@ Failed:
  * 动作构造
  * ========================================================================== */
 
-static CMKList *copy_string_list(const CMKList *source)
-{
-    CMKList *copy = cmk_list_create(CMK_VALUE_STRING);
-    if (!copy)
-        return NULL;
-    CCUINT32 count = cmk_list_count(source);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        const CMKValue *item = cmk_list_at(source, i);
-        if (!item || !cmk_list_append(copy, item))
-        {
-            cmk_list_destroy(copy);
-            return NULL;
-        }
-    }
-    return copy;
-}
 
 static CCBOOL action_set_string(
     CMKBuiltinCall *call, CMKString *dst, CMKValue *src
@@ -928,6 +911,41 @@ static CCBOOL action_set_string(
     if (!cmk_string_set(dst, src->as.string.data, src->as.string.len))
         return cmk_builtin_error(call, "动作字符串分配失败");
     return CCTRUE;
+}
+
+static void action_clear_strings(CMKAction *action)
+{
+    cmk_string_clear(&action->program);
+    cmk_string_clear(&action->cwd);
+    cmk_string_clear(&action->from);
+    cmk_string_clear(&action->to);
+    cmk_string_clear(&action->path);
+}
+
+static CCBOOL execute_action(CMKBuiltinCall *call, CMKAction *action)
+{
+    CMKExecutor *executor = cmk_executor_create(
+        cmk_runtime_get_policy(call->runtime), call->diagnostic
+    );
+    if (!executor)
+        return cmk_builtin_error(call, "Executor 创建失败");
+
+    CMKExecutorResult result;
+    CCBOOL ok = cmk_executor_run_actions(executor, action, 1, &result);
+    if (!ok || !result.success)
+        ok = cmk_builtin_error(
+            call, "%s",
+            result.message ? result.message : "动作执行失败"
+        );
+    if (result.output.len > 0)
+    {
+        fwrite(result.output.data, 1, result.output.len, stdout);
+        fflush(stdout);
+    }
+    cmk_executor_result_clear(&result);
+    cmk_executor_destroy(executor);
+    action_clear_strings(action);
+    return ok;
 }
 
 static CCBOOL builtin_command(CMKBuiltinCall *call)
@@ -950,24 +968,16 @@ static CCBOOL builtin_command(CMKBuiltinCall *call)
         !builtin_expect_string_list(call, 3, &env))
         return CCFALSE;
 
-    if (!cmk_value_set_action(call->out, CMK_ACTION_EXEC))
-        return cmk_builtin_error(call, "动作分配失败");
-
-    CMKAction *action = call->out->as.action;
-    if (!action_set_string(call, &action->program, program))
+    CMKAction action;
+    memset(&action, 0, sizeof(action));
+    action.kind = CMK_ACTION_EXEC;
+    action.args = args->as.list;
+    action.env = env ? env->as.list : NULL;
+    if (!action_set_string(call, &action.program, program))
         return CCFALSE;
-    action->args = copy_string_list(args->as.list);
-    if (!action->args)
-        return cmk_builtin_error(call, "参数列表复制失败");
-    if (cwd && !action_set_string(call, &action->cwd, cwd))
+    if (cwd && !action_set_string(call, &action.cwd, cwd))
         return CCFALSE;
-    if (env)
-    {
-        action->env = copy_string_list(env->as.list);
-        if (!action->env)
-            return cmk_builtin_error(call, "环境列表复制失败");
-    }
-    return CCTRUE;
+    return execute_action(call, &action);
 }
 
 static CCBOOL builtin_mkdir(CMKBuiltinCall *call)
@@ -976,9 +986,12 @@ static CCBOOL builtin_mkdir(CMKBuiltinCall *call)
     if (!builtin_arg_count(call, 1, 1) ||
         !builtin_expect(call, 0, CMK_VALUE_STRING, &path))
         return CCFALSE;
-    if (!cmk_value_set_action(call->out, CMK_ACTION_MKDIR))
-        return cmk_builtin_error(call, "动作分配失败");
-    return action_set_string(call, &call->out->as.action->path, path);
+    CMKAction action;
+    memset(&action, 0, sizeof(action));
+    action.kind = CMK_ACTION_MKDIR;
+    if (!action_set_string(call, &action.path, path))
+        return CCFALSE;
+    return execute_action(call, &action);
 }
 
 static CCBOOL builtin_remove(CMKBuiltinCall *call)
@@ -987,9 +1000,12 @@ static CCBOOL builtin_remove(CMKBuiltinCall *call)
     if (!builtin_arg_count(call, 1, 1) ||
         !builtin_expect(call, 0, CMK_VALUE_STRING, &path))
         return CCFALSE;
-    if (!cmk_value_set_action(call->out, CMK_ACTION_REMOVE))
-        return cmk_builtin_error(call, "动作分配失败");
-    return action_set_string(call, &call->out->as.action->path, path);
+    CMKAction action;
+    memset(&action, 0, sizeof(action));
+    action.kind = CMK_ACTION_REMOVE;
+    if (!action_set_string(call, &action.path, path))
+        return CCFALSE;
+    return execute_action(call, &action);
 }
 
 static CCBOOL builtin_copy_move(CMKBuiltinCall *call, CMKActionKind kind)
@@ -1000,12 +1016,13 @@ static CCBOOL builtin_copy_move(CMKBuiltinCall *call, CMKActionKind kind)
         !builtin_expect(call, 0, CMK_VALUE_STRING, &from) ||
         !builtin_expect(call, 1, CMK_VALUE_STRING, &to))
         return CCFALSE;
-    if (!cmk_value_set_action(call->out, kind))
-        return cmk_builtin_error(call, "动作分配失败");
-    CMKAction *action = call->out->as.action;
-    if (!action_set_string(call, &action->from, from))
+    CMKAction action;
+    memset(&action, 0, sizeof(action));
+    action.kind = kind;
+    if (!action_set_string(call, &action.from, from) ||
+        !action_set_string(call, &action.to, to))
         return CCFALSE;
-    return action_set_string(call, &action->to, to);
+    return execute_action(call, &action);
 }
 
 static CCBOOL builtin_copy(CMKBuiltinCall *call)
@@ -1123,76 +1140,6 @@ static CCBOOL builtin_file_newer(CMKBuiltinCall *call)
     return cmk_value_set_bool(call->out, newer);
 }
 
-static CCBOOL builtin_run(CMKBuiltinCall *call)
-{
-    CMKValue *list = NULL;
-    if (!builtin_arg_count(call, 1, 1) ||
-        !builtin_expect(call, 0, CMK_VALUE_LIST, &list))
-        return CCFALSE;
-
-    CCUINT32 count = cmk_list_count(list->as.list);
-    CMKAction *actions = NULL;
-    if (count > 0)
-    {
-        actions = ccalloc(
-            NULL, (CCUINT64)count * sizeof(CMKAction),
-            CMK_BUILTIN_STD_COMMENT
-        );
-        if (!actions)
-            return cmk_builtin_error(call, "动作列表分配失败");
-    }
-
-    CCBOOL ok = CCTRUE;
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        const CMKValue *item = cmk_list_at(list->as.list, i);
-        if (!item || item->type != CMK_VALUE_ACTION ||
-            !item->as.action)
-        {
-            ok = cmk_builtin_error(call, "run 只接受 action 列表");
-            break;
-        }
-        actions[i] = *item->as.action;
-    }
-
-    if (ok && count > 0)
-    {
-        CMKExecutor *executor = cmk_executor_create(
-            cmk_runtime_get_policy(call->runtime), call->diagnostic
-        );
-        if (!executor)
-            ok = cmk_builtin_error(call, "Executor 创建失败");
-        else
-        {
-            CMKExecutorResult result;
-            ok = cmk_executor_run_actions(
-                executor, actions, count, &result
-            );
-            if (!ok || !result.success)
-            {
-                ok = cmk_builtin_error(
-                    call, "%s", result.message
-                        ? result.message : "动作执行失败"
-                );
-            }
-            if (result.output.len > 0)
-            {
-                fwrite(
-                    result.output.data, 1,
-                    result.output.len, stdout
-                );
-                fflush(stdout);
-            }
-            cmk_executor_result_clear(&result);
-            cmk_executor_destroy(executor);
-        }
-    }
-
-    if (actions)
-        ccalloc(actions, 0, NULL);
-    return ok;
-}
-
 /* ============================================================================
  * 注册表
  * ========================================================================== */
@@ -1215,9 +1162,6 @@ static const CMKBuiltinArg one_string_args[] = {
 static const CMKBuiltinArg find_files_args[] = {
     {"pattern", {CMK_VALUE_STRING, CMK_VALUE_VOID}, CCFALSE},
     {"roots", {CMK_VALUE_LIST, CMK_VALUE_STRING}, CCFALSE}
-};
-static const CMKBuiltinArg run_args[] = {
-    {"actions", {CMK_VALUE_LIST, CMK_VALUE_ACTION}, CCFALSE}
 };
 static const CMKBuiltinArg command_args[] = {
     {"program", {CMK_VALUE_STRING, CMK_VALUE_VOID}, CCFALSE},
@@ -1253,7 +1197,6 @@ static CCBOOL builtin_error_log(CMKBuiltinCall *call)
 #define CMK_RET_BOOL_ {CMK_VALUE_BOOL, CMK_VALUE_VOID}
 #define CMK_RET_STRING_ {CMK_VALUE_STRING, CMK_VALUE_VOID}
 #define CMK_RET_LIST_STRING_ {CMK_VALUE_LIST, CMK_VALUE_STRING}
-#define CMK_RET_ACTION_ {CMK_VALUE_ACTION, CMK_VALUE_VOID}
 
 #define CMK_BUILTIN_SPEC(name_, sig_, args_, min_, max_, ret_, flags_, fn_) \
     { \
@@ -1311,34 +1254,29 @@ static const CMKBuiltinSpec standard_specs[] = {
         CMK_RET_BOOL_, CMK_BUILTIN_READ_FS, builtin_file_newer
     ),
     CMK_BUILTIN_SPEC(
-        "run", "run(list<action>) -> void",
-        run_args, 1, 1,
-        CMK_RET_VOID_, CMK_BUILTIN_BUILD_ACTION, builtin_run
-    ),
-    CMK_BUILTIN_SPEC(
         "command", "command(string, list<string> [, string [, list<string>]]) -> action",
         command_args, 2, 4,
-        CMK_RET_ACTION_,
+        CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_command
     ),
     CMK_BUILTIN_SPEC(
-        "mkdir", "mkdir(string) -> action", one_string_args, 1, 1,
-        CMK_RET_ACTION_,
+        "mkdir", "mkdir(string) -> void", one_string_args, 1, 1,
+        CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_mkdir
     ),
     CMK_BUILTIN_SPEC(
-        "remove", "remove(string) -> action", one_string_args, 1, 1,
-        CMK_RET_ACTION_,
+        "remove", "remove(string) -> void", one_string_args, 1, 1,
+        CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_remove
     ),
     CMK_BUILTIN_SPEC(
-        "copy", "copy(string, string) -> action", two_string_args, 2, 2,
-        CMK_RET_ACTION_,
+        "copy", "copy(string, string) -> void", two_string_args, 2, 2,
+        CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_copy
     ),
     CMK_BUILTIN_SPEC(
-        "move", "move(string, string) -> action", two_string_args, 2, 2,
-        CMK_RET_ACTION_,
+        "move", "move(string, string) -> void", two_string_args, 2, 2,
+        CMK_RET_VOID_,
         CMK_BUILTIN_BUILD_ACTION, builtin_move
     ),
     CMK_BUILTIN_SPEC(

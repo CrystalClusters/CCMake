@@ -21,7 +21,6 @@ typedef enum cmk_value_type {
     CMK_VALUE_BOOL,
     CMK_VALUE_STRING,
     CMK_VALUE_LIST,
-    CMK_VALUE_ACTION,
     CMK_VALUE_TYPE_COUNT
 } CMKValueType;
 
@@ -48,7 +47,6 @@ struct cmk_value {
         CCBOOL boolean;
         CMKString string;
         CMKList *list;
-        CMKAction *action;
     } as;
 };
 
@@ -125,7 +123,6 @@ CCBOOL cmk_value_set_string(
     CMKValue *value, const char *data, CCUINT32 len
 );
 CCBOOL cmk_value_set_list(CMKValue *value, CMKValueType element_type);
-CCBOOL cmk_value_set_action(CMKValue *value, CMKActionKind kind);
 
 /* 成功返回 true；类型不匹配返回 false */
 CCBOOL cmk_value_as_bool(const CMKValue *value, CCBOOL *out);

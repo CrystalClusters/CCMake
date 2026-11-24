@@ -29,7 +29,6 @@ typedef enum {
     CMK_TOK_KW_BOOL,
     CMK_TOK_KW_FLOAT,
     CMK_TOK_KW_LIST,
-    CMK_TOK_KW_ACTION,
     CMK_TOK_KW_CONST,
     CMK_TOK_KW_IF,
     CMK_TOK_KW_ELSE,

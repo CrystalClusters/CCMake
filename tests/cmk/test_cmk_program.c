@@ -216,22 +216,92 @@ void test_cmk_program(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * PRG-008 并发策略不依赖 CLI 全局状态
+     * MAIN/RUN 执行入口与动作链
      * ---------------------------------------------------------------- */
-    CC_CASE("PRG-008", "并发策略边界");
+    CC_CASE("MAIN-001", "调用 main 并执行动作");
     {
-        CCUINT32 saved_jobs = ccmake_global_var.jobs;
-        ccmake_global_var.jobs = 4;
+        remove("out/main_ok");
         CMKProgramTest ctx;
         program_test_init(&ctx);
-        CMKExecutionPolicy policy;
-        cmk_program_get_policy(ctx.program, &policy);
-        CC_CHECK_EQ_I64(
-            "max_processes 不读取 CLI jobs",
-            0, (CCINT64)policy.max_processes
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/main_ok.cmk"),
+            "加载 main_ok"
         );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure main_ok");
+        CC_CHECK(cmk_program_run_main(ctx.program), "执行 main");
+        CC_CHECK(remove("out/main_ok") == 0, "动作创建目录");
         program_test_clear(&ctx);
-        ccmake_global_var.jobs = saved_jobs;
+    }
+    CC_CASE_END();
+
+    CC_CASE("MAIN-002", "没有 main 时成功");
+    {
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/no_main.cmk"),
+            "加载 no_main"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure no_main");
+        CC_CHECK(cmk_program_run_main(ctx.program), "无 main 成功");
+        program_test_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("MAIN-003", "main 签名错误");
+    {
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/main_args.cmk"),
+            "加载 main_args"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure main_args");
+        CC_CHECK(!cmk_program_run_main(ctx.program), "拒绝带参数 main");
+        program_test_clear(&ctx);
+
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/main_return.cmk"),
+            "加载 main_return"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure main_return");
+        CC_CHECK(!cmk_program_run_main(ctx.program), "拒绝非 void main");
+        program_test_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RUN-001", "多个动作按顺序执行");
+    {
+        remove("out/run_a");
+        remove("out/run_b");
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/run_order.cmk"),
+            "加载 run_order"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure run_order");
+        CC_CHECK(cmk_program_run_main(ctx.program), "执行 run_order");
+        CC_CHECK(remove("out/run_a") == 0, "第一个动作");
+        CC_CHECK(remove("out/run_b") == 0, "第二个动作");
+        program_test_clear(&ctx);
+    }
+    CC_CASE_END();
+
+    CC_CASE("RUN-002", "动作失败停止后续动作");
+    {
+        remove("out/run_after_fail");
+        CMKProgramTest ctx;
+        program_test_init(&ctx);
+        CC_CHECK(
+            program_test_load(&ctx, "tests/data/cmk/program/run_stop.cmk"),
+            "加载 run_stop"
+        );
+        CC_CHECK(cmk_program_configure(ctx.program), "Configure run_stop");
+        CC_CHECK(!cmk_program_run_main(ctx.program), "失败传播");
+        CC_CHECK(remove("out/run_after_fail") != 0, "后续动作未执行");
+        program_test_clear(&ctx);
     }
     CC_CASE_END();
 

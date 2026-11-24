@@ -117,41 +117,6 @@ void test_cmk_value(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * VAL-004 目标引用与动作
-     * ---------------------------------------------------------------- */
-    CC_CASE("VAL-004", "动作");
-    {
-        CMKValue action;
-        cmk_value_init(&action);
-        CC_CHECK(cmk_value_set_action(&action, CMK_ACTION_EXEC), "创建动作");
-        CC_CHECK(
-            cmk_string_set(&action.as.action->program, "cc", 2),
-            "动作程序"
-        );
-        action.as.action->args = cmk_list_create(CMK_VALUE_STRING);
-        CC_CHECK(action.as.action->args != NULL, "动作参数列表");
-        CMKValue flag;
-        cmk_value_init(&flag);
-        CC_CHECK(cmk_value_set_string(&flag, "-O2", 3), "参数字符串");
-        CC_CHECK(cmk_list_append(action.as.action->args, &flag), "追加参数");
-        cmk_value_clear(&flag);
-
-        CMKValue action_copy;
-        cmk_value_init(&action_copy);
-        CC_CHECK(cmk_value_copy(&action_copy, &action), "复制动作");
-        cmk_value_clear(&action);
-        CC_CHECK(
-            action_copy.type == CMK_VALUE_ACTION &&
-            action_copy.as.action->kind == CMK_ACTION_EXEC &&
-            action_copy.as.action->args != NULL &&
-            cmk_list_count(action_copy.as.action->args) == 1,
-            "动作深复制"
-        );
-        cmk_value_clear(&action_copy);
-    }
-    CC_CASE_END();
-
-    /* ------------------------------------------------------------------
      * VAL-005 文本化
      * ---------------------------------------------------------------- */
     CC_CASE("VAL-005", "文本化");

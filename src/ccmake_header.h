@@ -68,12 +68,8 @@ struct ccmake_global_var_struct {
     char *cmk_path;
     char *work_dir;          // -C / --directory
     char *output_dir;        // -o / --output
-    CCUINT32 jobs;           // -j / --jobs（0 = 自动检测，解析完成时已解析为具体值）
     CC_CMD_PARSE_STAT stat;  // 状态枚举，决定后续流程走哪个分支
     CCBOOL  verbose;         // -v / --verbose
-    CCBOOL  dry_run;         // -n / --dry-run
-    CCBOOL  always_build;    // -B / --always-build
-    CCBOOL  keep_going;      // -k / --keep-going
     CCDyn   defines;         // -D / --define：CCMakeDefine 动态数组，重复键以后来者为准
     CC_CMD_ACTION action;    // 需要配置的动作类参数（如 --dump-config），由后续流程执行
 };

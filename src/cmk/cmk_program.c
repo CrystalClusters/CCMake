@@ -970,6 +970,17 @@ CCBOOL cmk_program_run_main(CMKProgram *program)
     );
     if (!entry)
         return CCTRUE;
+    if (entry->param_count != 0 ||
+        entry->return_type.kind != CMK_VALUE_VOID)
+    {
+        (void)cmk_diagnostic_set(
+            program->diagnostic, CMK_DIAG_ERROR,
+            program->root->semantic->path, 1, 1,
+            "main 必须无参数并返回 void"
+        );
+        program->failed = CCTRUE;
+        return CCFALSE;
+    }
 
     CMKValue out;
     cmk_value_init(&out);

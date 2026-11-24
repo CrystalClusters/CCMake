@@ -68,7 +68,6 @@ CCBOOL cmk_type_is_scalar(const CMKType *type)
     case CMK_VALUE_FLOAT:
     case CMK_VALUE_BOOL:
     case CMK_VALUE_STRING:
-    case CMK_VALUE_ACTION:
     default:
         return CCFALSE;
     }
@@ -95,9 +94,6 @@ const char *cmk_value_type_name(CMKValueType type)
 
     case CMK_VALUE_LIST:
         return "list";
-
-    case CMK_VALUE_ACTION:
-        return "action";
 
     default:
         return "未知类型";
@@ -285,21 +281,6 @@ void cmk_value_init(CMKValue *value)
         memset(value, 0, sizeof(*value));
 }
 
-static void cmk_action_clear(CMKAction *action)
-{
-    if (!action)
-        return;
-    cmk_string_clear(&action->program);
-    cmk_string_clear(&action->cwd);
-    cmk_string_clear(&action->from);
-    cmk_string_clear(&action->to);
-    cmk_string_clear(&action->path);
-    if (action->args)
-        cmk_list_destroy(action->args);
-    if (action->env)
-        cmk_list_destroy(action->env);
-    memset(action, 0, sizeof(*action));
-}
 
 void cmk_value_clear(CMKValue *value)
 {
@@ -315,14 +296,6 @@ void cmk_value_clear(CMKValue *value)
     case CMK_VALUE_LIST:
         if (value->as.list)
             cmk_list_destroy(value->as.list);
-        break;
-
-    case CMK_VALUE_ACTION:
-        if (value->as.action)
-        {
-            cmk_action_clear(value->as.action);
-            ccalloc(value->as.action, 0, NULL);
-        }
         break;
 
     default:
@@ -352,42 +325,6 @@ static CMKList *cmk_list_copy(const CMKList *source)
     return copy;
 }
 
-static CCBOOL cmk_action_copy(CMKAction *dst, const CMKAction *src)
-{
-    if (!dst || !src)
-        return CCFALSE;
-    memset(dst, 0, sizeof(*dst));
-    dst->kind = src->kind;
-
-    if (!cmk_string_set(&dst->program, src->program.data, src->program.len))
-        goto Failed;
-    if (!cmk_string_set(&dst->cwd, src->cwd.data, src->cwd.len))
-        goto Failed;
-    if (!cmk_string_set(&dst->from, src->from.data, src->from.len))
-        goto Failed;
-    if (!cmk_string_set(&dst->to, src->to.data, src->to.len))
-        goto Failed;
-    if (!cmk_string_set(&dst->path, src->path.data, src->path.len))
-        goto Failed;
-
-    if (src->args)
-    {
-        dst->args = cmk_list_copy(src->args);
-        if (!dst->args)
-            goto Failed;
-    }
-    if (src->env)
-    {
-        dst->env = cmk_list_copy(src->env);
-        if (!dst->env)
-            goto Failed;
-    }
-    return CCTRUE;
-
-Failed:
-    cmk_action_clear(dst);
-    return CCFALSE;
-}
 
 CCBOOL cmk_value_copy(CMKValue *dst, const CMKValue *src)
 {
@@ -427,22 +364,6 @@ CCBOOL cmk_value_copy(CMKValue *dst, const CMKValue *src)
     case CMK_VALUE_LIST:
         dst->as.list = cmk_list_copy(src->as.list);
         return dst->as.list ? CCTRUE : CCFALSE;
-
-    case CMK_VALUE_ACTION:
-    {
-        CMKAction *action =
-            ccalloc(NULL, sizeof(CMKAction), CMK_VALUE_COMMENT);
-        if (!action)
-            return CCFALSE;
-        memset(action, 0, sizeof(*action));
-        if (!cmk_action_copy(action, src->as.action))
-        {
-            ccalloc(action, 0, NULL);
-            return CCFALSE;
-        }
-        dst->as.action = action;
-        return CCTRUE;
-    }
 
     default:
         break;
@@ -517,22 +438,6 @@ CCBOOL cmk_value_set_list(CMKValue *value, CMKValueType element_type)
     return CCTRUE;
 }
 
-CCBOOL cmk_value_set_action(CMKValue *value, CMKActionKind kind)
-{
-    if (!value || kind >= CMK_ACTION_KIND_COUNT)
-        return CCFALSE;
-    CMKAction *action =
-        ccalloc(NULL, sizeof(CMKAction), CMK_VALUE_COMMENT);
-    if (!action)
-        return CCFALSE;
-    memset(action, 0, sizeof(*action));
-    action->kind = kind;
-
-    cmk_value_clear(value);
-    value->type = CMK_VALUE_ACTION;
-    value->as.action = action;
-    return CCTRUE;
-}
 
 CCBOOL cmk_value_as_bool(const CMKValue *value, CCBOOL *out)
 {
@@ -601,9 +506,6 @@ static CCBOOL value_append_text(
         return cmk_string_append(
             out, value->as.string.data, value->as.string.len
         );
-
-    case CMK_VALUE_ACTION:
-        return cmk_string_append(out, "<action>", 8);
 
     case CMK_VALUE_LIST:
     {

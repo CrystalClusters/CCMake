@@ -212,39 +212,6 @@ static CCBOOL text_has(const char *text, const char *needle)
 }
 
 /* 校验 “前缀 + 数字 + 后缀” 的并行任务提示，数字须等于解析出的 jobs */
-static CCBOOL jobs_hint_matches(const char *prefix, const char *suffix)
-{
-    size_t prefix_len = strlen(prefix);
-    const char *p;
-    CCINT64 value = 0;
-    int digits = 0;
-
-    if (strncmp(g_out, prefix, prefix_len) != 0)
-        return CCFALSE;
-
-    p = g_out + prefix_len;
-    while (*p >= '0' && *p <= '9')
-    {
-        value = value * 10 + (*p - '0');
-        p++;
-        digits++;
-    }
-    if (digits == 0)
-        return CCFALSE;
-
-    if (suffix)
-    {
-        if (strcmp(p, suffix) != 0)
-            return CCFALSE;
-    }
-    else if (*p != '\n' || p[1] != '\0')
-    {
-        return CCFALSE;
-    }
-
-    return (value == (CCINT64)ccmake_global_var.jobs) ? CCTRUE : CCFALSE;
-}
-
 static CCUINT32 define_count(void)
 {
     return ccmake_global_var.defines.size / (CCUINT32)sizeof(CCMakeDefine);
@@ -294,7 +261,7 @@ static void test_no_args(void)
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_I64("stat", CC_CMD_FLAG_ACTION_DONE, ccmake_global_var.stat);
-    CC_CHECK_EQ_I64("正文行数", 13, count_lines(g_out));
+    CC_CHECK_EQ_I64("正文行数", 9, count_lines(g_out));
     CC_CHECK(text_has(g_out, "-c, --config"), "包含 -c 选项行");
     CC_CHECK(text_has(g_out, "-V, --version"), "包含 -V 选项行");
     CC_CHECK(ccmake_global_var.self_path == NULL, "未设置 self_path");
@@ -311,7 +278,7 @@ static void test_help_short(void)
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_I64("stat", CC_CMD_FLAG_ACTION_DONE, ccmake_global_var.stat);
-    CC_CHECK_EQ_I64("正文行数", 13, count_lines(g_out));
+    CC_CHECK_EQ_I64("正文行数", 9, count_lines(g_out));
     CC_CHECK(text_has(g_out, "-c, --config"), "包含 -c 选项行");
     CC_CHECK(text_has(g_out, "-D, --define"), "包含 -D 选项行");
     CC_CHECK(text_has(g_out, "-V, --version"), "包含 -V 选项行");
@@ -330,7 +297,7 @@ static void test_help_long(void)
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_I64("stat", CC_CMD_FLAG_ACTION_DONE, ccmake_global_var.stat);
-    CC_CHECK_EQ_I64("正文行数", 13, count_lines(g_out));
+    CC_CHECK_EQ_I64("正文行数", 9, count_lines(g_out));
     CC_CASE_END();
     case_cleanup();
 }
@@ -386,67 +353,8 @@ static void test_build_min(void)
     CC_CHECK_EQ_STR("self_path", "ccmake", ccmake_global_var.self_path);
     CC_CHECK(ccmake_global_var.work_dir == NULL, "未设置 work_dir");
     CC_CHECK(ccmake_global_var.output_dir == NULL, "未设置 output_dir");
-    CC_CHECK(ccmake_global_var.jobs > 0, "jobs 已解析为具体值");
     CC_CHECK_EQ_I64("action", CC_CMD_ACTION_NONE, ccmake_global_var.action);
     CC_CHECK_EQ_I64("verbose", CCFALSE, ccmake_global_var.verbose);
-    CC_CHECK_EQ_I64("dry_run", CCFALSE, ccmake_global_var.dry_run);
-    CC_CHECK_EQ_I64("always_build", CCFALSE, ccmake_global_var.always_build);
-    CC_CHECK_EQ_I64("keep_going", CCFALSE, ccmake_global_var.keep_going);
-    CC_CHECK(
-        jobs_hint_matches("并行任务数：未指定，采用默认值 ", NULL),
-        "未指定 -j 时输出默认值提示"
-    );
-    CC_CASE_END();
-    case_cleanup();
-}
-
-static void test_build_jobs(void)
-{
-    const char *argv[] = { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "4" };
-    CCBOOL ret;
-
-    CC_CASE("CMD-BUILD-002", "-j 指定并行任务数");
-    ret = run_parse(ARGC(argv), argv);
-    CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_I64("jobs", 4, ccmake_global_var.jobs);
-    CC_CHECK_EQ_STR("无默认值提示", "", g_out);
-    CC_CASE_END();
-    case_cleanup();
-}
-
-static void test_build_jobs_zero(void)
-{
-    const char *argv[] = { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "0" };
-    CCBOOL ret;
-
-    CC_CASE("CMD-BUILD-003", "-j 0 自动检测并提示默认值");
-    ret = run_parse(ARGC(argv), argv);
-    CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK(ccmake_global_var.jobs > 0, "jobs 为自动检测结果");
-    CC_CHECK(
-        jobs_hint_matches("并行任务数：采用默认值 ", "（0 = 自动检测）\n"),
-        "-j 0 输出自动检测提示"
-    );
-    CC_CASE_END();
-    case_cleanup();
-}
-
-static void test_build_flags(void)
-{
-    const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
-        "-v", "-n", "-B", "-k"
-    };
-    CCBOOL ret;
-
-    CC_CASE("CMD-BUILD-004", "-v -n -B -k 写入标志位");
-    ret = run_parse(ARGC(argv), argv);
-    CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_I64("verbose", CCTRUE, ccmake_global_var.verbose);
-    CC_CHECK_EQ_I64("dry_run", CCTRUE, ccmake_global_var.dry_run);
-    CC_CHECK_EQ_I64("always_build", CCTRUE, ccmake_global_var.always_build);
-    CC_CHECK_EQ_I64("keep_going", CCTRUE, ccmake_global_var.keep_going);
-    CC_CHECK_EQ_STR("无默认值提示", "", g_out);
     CC_CASE_END();
     case_cleanup();
 }
@@ -454,7 +362,7 @@ static void test_build_flags(void)
 static void test_build_paths(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
+        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "-C", "work", "-o", "outdir"
     };
     CCBOOL ret;
@@ -471,7 +379,7 @@ static void test_build_paths(void)
 static void test_build_long(void)
 {
     const char *argv[] = {
-        "ccmake", "--config", "a.ccm", "--file", "b.cmk", "--jobs", "2"
+        "ccmake", "--config", "a.ccm", "--file", "b.cmk"
     };
     CCBOOL ret;
 
@@ -480,7 +388,6 @@ static void test_build_long(void)
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_STR("ccm_path", "a.ccm", ccmake_global_var.ccm_path);
     CC_CHECK_EQ_STR("cmk_path", "b.cmk", ccmake_global_var.cmk_path);
-    CC_CHECK_EQ_I64("jobs", 2, ccmake_global_var.jobs);
     CC_CASE_END();
     case_cleanup();
 }
@@ -490,7 +397,7 @@ static void test_build_long_flags(void)
     const char *argv[] = {
         "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "--directory", "work", "--output", "outdir",
-        "--jobs", "2", "--verbose", "--dry-run", "--always-build", "--keep-going"
+        "--verbose"
     };
     CCBOOL ret;
 
@@ -499,11 +406,7 @@ static void test_build_long_flags(void)
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_STR("work_dir", "work", ccmake_global_var.work_dir);
     CC_CHECK_EQ_STR("output_dir", "outdir", ccmake_global_var.output_dir);
-    CC_CHECK_EQ_I64("jobs", 2, ccmake_global_var.jobs);
     CC_CHECK_EQ_I64("verbose", CCTRUE, ccmake_global_var.verbose);
-    CC_CHECK_EQ_I64("dry_run", CCTRUE, ccmake_global_var.dry_run);
-    CC_CHECK_EQ_I64("always_build", CCTRUE, ccmake_global_var.always_build);
-    CC_CHECK_EQ_I64("keep_going", CCTRUE, ccmake_global_var.keep_going);
     CC_CASE_END();
     case_cleanup();
 }
@@ -511,7 +414,7 @@ static void test_build_long_flags(void)
 static void test_build_space_paths(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a b.ccm", "-f", "b c.cmk", "-j", "2"
+        "ccmake", "-c", "a b.ccm", "-f", "b c.cmk",
     };
     CCBOOL ret;
 
@@ -532,7 +435,6 @@ static void test_override(void)
         "-f", "x.cmk",
         "-C", "d1", "-C", "d2",
         "-o", "o1", "-o", "o2",
-        "-j", "2", "-j", "3"
     };
     CCBOOL ret;
 
@@ -542,7 +444,6 @@ static void test_override(void)
     CC_CHECK_EQ_STR("ccm_path", "b.ccm", ccmake_global_var.ccm_path);
     CC_CHECK_EQ_STR("work_dir", "d2", ccmake_global_var.work_dir);
     CC_CHECK_EQ_STR("output_dir", "o2", ccmake_global_var.output_dir);
-    CC_CHECK_EQ_I64("jobs", 3, ccmake_global_var.jobs);
     CC_CASE_END();
     case_cleanup();
 }
@@ -554,7 +455,7 @@ static void test_override(void)
 static void test_define_pairs(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
+        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "-D", "a=1", "b=2", "a=3"
     };
     const char *key = NULL;
@@ -578,7 +479,7 @@ static void test_define_pairs(void)
 static void test_define_multi(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
+        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "-D", "a=1", "-D", "a=2", "-D", "b=3"
     };
     const char *key = NULL;
@@ -602,7 +503,7 @@ static void test_define_multi(void)
 static void test_define_long(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
+        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "--define", "a=1", "b=2"
     };
     const char *key = NULL;
@@ -623,7 +524,7 @@ static void test_define_long(void)
 static void test_define_value_equal(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2",
+        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
         "-D", "a=b=c"
     };
     const char *key = NULL;
@@ -658,7 +559,6 @@ static void test_action_dump(void)
     CC_CHECK_EQ_I64("action", CC_CMD_ACTION_DUMP_CONFIG, ccmake_global_var.action);
     CC_CHECK_EQ_STR("ccm_path", "a.ccm", ccmake_global_var.ccm_path);
     CC_CHECK_EQ_STR("cmk_path", "b.cmk", ccmake_global_var.cmk_path);
-    CC_CHECK_EQ_I64("jobs", 0, ccmake_global_var.jobs);
     CC_CHECK_EQ_STR("解析阶段无输出", "", g_out);
     CC_CASE_END();
     case_cleanup();
@@ -687,13 +587,13 @@ static void test_priority_action_first(void)
 
 static void test_priority_error_first(void)
 {
-    const char *argv[] = { "ccmake", "-j", "-V" };
+    const char *argv[] = { "ccmake", "-c", "-V" };
     CCBOOL ret;
 
     CC_CASE("CMD-PRIORITY-002", "缺值错误先于动作");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCFALSE, ret);
-    CC_CHECK_EQ_STR("错误输出", "未找到jobs参数：-j <---\n", g_out);
+    CC_CHECK_EQ_STR("错误输出", "未找到config参数：-c <---\n", g_out);
     CC_CASE_END();
     case_cleanup();
 }
@@ -706,7 +606,7 @@ static void test_order_help_first(void)
     CC_CASE("CMD-ORDER-001", "-h 在前时输出帮助");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_I64("正文行数", 13, count_lines(g_out));
+    CC_CHECK_EQ_I64("正文行数", 9, count_lines(g_out));
     CC_CHECK(!text_has(g_out, "版本：v"), "帮助输出不含版本段");
     CC_CASE_END();
     case_cleanup();
@@ -740,7 +640,7 @@ static void test_unknown(void)
     CC_CASE("CMD-UNKNOWN-001", "未知选项报错并输出帮助");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCFALSE, ret);
-    CC_CHECK_EQ_I64("正文行数", 14, count_lines(g_out));
+    CC_CHECK_EQ_I64("正文行数", 10, count_lines(g_out));
     CC_CHECK(text_has(g_out, "未知的指令参数：-z\n"), "包含未知参数提示");
     CC_CHECK(text_has(g_out, "-c, --config"), "包含帮助内容");
     CC_CASE_END();
@@ -789,21 +689,6 @@ static const msg_case g_msg_cases[] = {
     { "CMD-MSG-010", "-o 空字符串",
       { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-o", "", NULL },
       "-o 的参数为空字符串 <---\n" },
-    { "CMD-MSG-013", "-j 缺值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", NULL },
-      "未找到jobs参数：-j <---\n" },
-    { "CMD-MSG-014", "-j 空字符串",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "", NULL },
-      "-j 的参数为空字符串 <---\n" },
-    { "CMD-MSG-015", "-j 非数字",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "abc", NULL },
-      "jobs参数非法：abc（应为非负整数）\n" },
-    { "CMD-MSG-016", "-j 负数被当作缺值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "-1", NULL },
-      "未找到jobs参数：-j <---\n" },
-    { "CMD-MSG-017", "-j 溢出",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-j", "2147483648", NULL },
-      "jobs参数非法：2147483648（应为非负整数）\n" },
     { "CMD-MSG-018", "-D 缺值",
       { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", NULL },
       "未找到define参数：-D <---\n" },
@@ -873,9 +758,6 @@ void test_cmd(void)
     test_version_short();
     test_version_long();
     test_build_min();
-    test_build_jobs();
-    test_build_jobs_zero();
-    test_build_flags();
     test_build_paths();
     test_build_long();
     test_build_long_flags();

@@ -34,7 +34,6 @@ CCBOOL parser_is_type_start(CMKParser *parser)
     case CMK_TOK_KW_INT:
     case CMK_TOK_KW_BOOL:
     case CMK_TOK_KW_FLOAT:
-    case CMK_TOK_KW_ACTION:
     case CMK_TOK_KW_LIST:
         return CCTRUE;
 
@@ -115,10 +114,6 @@ CMKASTNodeId parser_parse_type(CMKParser *parser)
 
     case CMK_TOK_KW_FLOAT:
         base = parser_make_scalar_type(parser, CMK_TYPE_FLOAT);
-        break;
-
-    case CMK_TOK_KW_ACTION:
-        base = parser_make_scalar_type(parser, CMK_TYPE_ACTION);
         break;
 
     default:

@@ -139,40 +139,6 @@ static char *_dup_string_(const char *src, CCUINT32 len, const char *comment)
     return dst;
 }
 
-// 解析非负十进制整数：仅接受数字，且不超过 INT32_MAX
-static CCBOOL _parse_uint32_(const char *str, CCUINT32 *out)
-{
-    CCUINT64 value = 0;
-    if (str[0] == '\0')
-        return CCFALSE;
-    for (const char *p = str; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return CCFALSE;
-        value = value * 10 + (CCUINT64)(*p - '0');
-        if (value > 0x7FFFFFFFu)
-            return CCFALSE;
-    }
-    *out = (CCUINT32)value;
-    return CCTRUE;
-}
-
-// 探测 CPU 核心数，作为 -j 的默认值
-static int _detect_cpu_cores_(void)
-{
-#ifdef CC_WINDOWS
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    if (info.dwNumberOfProcessors > 0)
-        return (int)info.dwNumberOfProcessors;
-#else
-    long cores = sysconf(_SC_NPROCESSORS_ONLN);
-    if (cores > 0)
-        return (int)cores;
-#endif
-    return 1;
-}
-
 static CCBOOL _func_config_(void)
 {
     const char *value = _take_value_("config");
@@ -217,37 +183,6 @@ static CCBOOL _func_directory_(void)
     return CCTRUE;
 }
 
-static CCBOOL _func_jobs_(void)
-{
-    const char *value = _take_value_("jobs");
-    if (!value)
-        return CCFALSE;
-    CCUINT32 jobs = 0;
-    if (!_parse_uint32_(value, &jobs))
-    {
-        color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
-            "jobs参数非法：%s（应为非负整数）\n",
-            value
-        );
-        return CCFALSE;
-    }
-    if (jobs == 0)
-    {
-        // 0 表示自动检测，同时把默认值明确告知用户
-        ccmake_global_var.jobs = _detect_cpu_cores_();
-        color_print(
-            "并行任务数：采用默认值 %d（0 = 自动检测）\n",
-            ccmake_global_var.jobs
-        );
-    }
-    else
-    {
-        ccmake_global_var.jobs = (int)jobs;
-    }
-    g_index++;
-    return CCTRUE;
-}
 
 static CCBOOL _func_output_(void)
 {
@@ -380,26 +315,8 @@ static CCBOOL _func_verbose_(void)
     return CCTRUE;
 }
 
-static CCBOOL _func_dry_run_(void)
-{
-    ccmake_global_var.dry_run = CCTRUE;
-    g_index++;
-    return CCTRUE;
-}
 
-static CCBOOL _func_always_build_(void)
-{
-    ccmake_global_var.always_build = CCTRUE;
-    g_index++;
-    return CCTRUE;
-}
 
-static CCBOOL _func_keep_going_(void)
-{
-    ccmake_global_var.keep_going = CCTRUE;
-    g_index++;
-    return CCTRUE;
-}
 
 // 这两个动作依赖 .ccm 解析：解析阶段只记录请求，继续收集配置参数，由后续流程执行
 static CCBOOL _func_dump_config_(void)
@@ -431,13 +348,9 @@ static CCBOOL _func_help_(void)
         "-c, --config <文件>          指定配置文件（必填，扩展名不限）\n"
         "-f, --file <文件>            指定 .cmk 构建脚本（必填）\n"
         "-C, --directory <目录>       切换工作目录\n"
-        "-j, --jobs <数量>            并行任务数（0 = 自动检测，默认: CPU 核心数）\n"
         "-D, --define <键=值>...      覆盖配置文件字段（可跟多个键值对）\n"
         "-o, --output <目录>          构建产物输出目录\n"
         "-v, --verbose                详细输出\n"
-        "-n, --dry-run                仅显示操作，不执行\n"
-        "-B, --always-build           强制重新构建\n"
-        "-k, --keep-going             遇到错误继续构建\n"
         "    --dump-config            展开变量后输出完整配置\n"
         "-h, --help                   显示此帮助信息\n"
         "-V, --version                显示版本信息\n"
@@ -449,13 +362,9 @@ static FUNC_TABLE func_table[] = {
     {"-c", _func_config_}, {"--config", _func_config_},
     {"-f", _func_file_}, {"--file", _func_file_},
     {"-C", _func_directory_}, {"--directory", _func_directory_},
-    {"-j", _func_jobs_}, {"--jobs", _func_jobs_},
     {"-D", _func_define_}, {"--define", _func_define_},
     {"-o", _func_output_}, {"--output", _func_output_},
     {"-v", _func_verbose_}, {"--verbose", _func_verbose_},
-    {"-n", _func_dry_run_}, {"--dry-run", _func_dry_run_},
-    {"-B", _func_always_build_}, {"--always-build", _func_always_build_},
-    {"-k", _func_keep_going_}, {"--keep-going", _func_keep_going_},
     {"-h", _func_help_}, {"--help", _func_help_},
     {"-V", _func_version_}, {"--version", _func_version_},
     {"--dump-config", _func_dump_config_}
@@ -541,14 +450,5 @@ CCBOOL parse_cmd(int argc, char **argv)
         return CCTRUE;
     if (!check_parse())
         return CCFALSE;
-    // 未指定 -j 时同样采用默认值（CPU 核心数）
-    if (ccmake_global_var.jobs <= 0)
-    {
-        ccmake_global_var.jobs = _detect_cpu_cores_();
-        color_print(
-            "并行任务数：未指定，采用默认值 %d\n",
-            ccmake_global_var.jobs
-        );
-    }
     return CCTRUE;
 }
