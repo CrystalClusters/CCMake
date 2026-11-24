@@ -33,6 +33,13 @@ case "${PFX}" in
     windows_*) BIN_NAME="ccmake.exe" ;;
 esac
 
+case "${PFX}" in
+    *amd64*) CC_BUILD_CFLAGS="${CC_BUILD_CFLAGS} -DCC_ARCH_AMD64" ;;
+    *arm64*) CC_BUILD_CFLAGS="${CC_BUILD_CFLAGS} -DCC_ARCH_ARM64" ;;
+    *x86*)   CC_BUILD_CFLAGS="${CC_BUILD_CFLAGS} -DCC_ARCH_X86" ;;
+    *arm*)   CC_BUILD_CFLAGS="${CC_BUILD_CFLAGS} -DCC_ARCH_ARM" ;;
+esac
+
 # 平台相关的额外链接参数
 case "${PFX}" in
     windows_*) EXTRA_LIBS="-lws2_32 -liphlpapi" ;;

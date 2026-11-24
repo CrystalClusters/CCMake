@@ -32,14 +32,14 @@
 #  define CCMAKE_PLATFORM_NAME "未知平台"
 #endif
 
-// CPU 架构名称（编译期确定，与构建产物的目标架构一致）
-#if defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)
+// CPU 架构名称由构建脚本显式传入，不读取编译器预定义宏
+#if defined(CC_ARCH_AMD64)
 #  define CCMAKE_ARCH_NAME "AMD64"
-#elif defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(CC_ARCH_ARM64)
 #  define CCMAKE_ARCH_NAME "ARM64"
-#elif defined(__i386__) || defined(_M_IX86)
+#elif defined(CC_ARCH_X86)
 #  define CCMAKE_ARCH_NAME "X86"
-#elif defined(__arm__) || defined(_M_ARM)
+#elif defined(CC_ARCH_ARM)
 #  define CCMAKE_ARCH_NAME "ARM"
 #else
 #  define CCMAKE_ARCH_NAME "未知架构"

@@ -7,6 +7,10 @@
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "cmk_process.h"
 #include "cmk_safe.h"
 
@@ -307,6 +311,7 @@ void cmk_process_destroy(CMKProcess *process)
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -412,12 +417,12 @@ CCBOOL cmk_process_wait(CMKProcess *process, CMKProcessResult *out)
         out->signal = WTERMSIG(status);
 
     char buffer[4096];
-    ssize_t read = 0;
+    ssize_t got = 0;
     CCUINT64 total = 0;
-    while ((read = read(process->read_fd, buffer, sizeof(buffer))) > 0)
+    while ((got = read(process->read_fd, buffer, sizeof(buffer))) > 0)
     {
         if (process->spec.capture_limit != 0 &&
-            total + (CCUINT64)read > process->spec.capture_limit)
+            total + (CCUINT64)got > process->spec.capture_limit)
         {
             CCUINT64 remain = process->spec.capture_limit - total;
             if (remain > 0)
@@ -428,13 +433,13 @@ CCBOOL cmk_process_wait(CMKProcess *process, CMKProcessResult *out)
             break;
         }
         if (!cmk_process_append(
-                &out->output, buffer, (CCUINT32)read
+                &out->output, buffer, (CCUINT32)got
             ))
         {
             out->capture_failed = CCTRUE;
             break;
         }
-        total += (CCUINT64)read;
+        total += (CCUINT64)got;
     }
     close(process->read_fd);
     process->read_fd = -1;

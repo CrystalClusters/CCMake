@@ -29,6 +29,10 @@ if "%DEPENDENCIES%"=="" (
 set "OBJ_DIR=out\obj"
 set "BIN_DIR=out\%PFX%_bin"
 set "BIN_NAME=ccmake.exe"
+if not "x%PFX:amd64=%"=="x%PFX%" set "CC_BUILD_CFLAGS=%CC_BUILD_CFLAGS% -DCC_ARCH_AMD64"
+if not "x%PFX:arm64=%"=="x%PFX%" set "CC_BUILD_CFLAGS=%CC_BUILD_CFLAGS% -DCC_ARCH_ARM64"
+if not "x%PFX:x86=%"=="x%PFX%" set "CC_BUILD_CFLAGS=%CC_BUILD_CFLAGS% -DCC_ARCH_X86"
+if not "x%PFX:arm=%"=="x%PFX%" set "CC_BUILD_CFLAGS=%CC_BUILD_CFLAGS% -DCC_ARCH_ARM"
 
 :: 创建输出目录
 if not exist "%OBJ_DIR%" mkdir "%OBJ_DIR%"

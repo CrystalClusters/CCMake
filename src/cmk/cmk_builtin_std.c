@@ -384,13 +384,13 @@ static CCBOOL builtin_host_info(CMKBuiltinCall *call)
     else if (key->as.string.len == 4 &&
              memcmp(key->as.string.data, "arch", 4) == 0)
     {
-#if defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)
+#if defined(CC_ARCH_AMD64)
         value = "amd64";
-#elif defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(CC_ARCH_ARM64)
         value = "arm64";
-#elif defined(__i386__) || defined(_M_IX86)
+#elif defined(CC_ARCH_X86)
         value = "x86";
-#elif defined(__arm__) || defined(_M_ARM)
+#elif defined(CC_ARCH_ARM)
         value = "arm";
 #else
         value = "unknown";
