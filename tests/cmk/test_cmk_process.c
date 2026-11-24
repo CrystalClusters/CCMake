@@ -14,6 +14,9 @@ void test_cmk_process(void)
 #ifdef CC_WINDOWS
     const char *program = "cmd.exe";
     const char *args[] = {"/c", "echo", "hello", NULL};
+#elif defined(CC_ANDROID)
+    const char *program = "/system/bin/sh";
+    const char *args[] = {"-c", "echo hello", NULL};
 #else
     const char *program = "/bin/sh";
     const char *args[] = {"-c", "echo hello", NULL};

@@ -103,6 +103,10 @@ static void exec_case_process(void)
     cmk_plan_action_append_arg(&action, "/c", 2);
     cmk_plan_action_append_arg(&action, "exit", 4);
     cmk_plan_action_append_arg(&action, "0", 1);
+#elif defined(CC_ANDROID)
+    cmk_string_set(&action.program, "/system/bin/sh", 14);
+    cmk_plan_action_append_arg(&action, "-c", 2);
+    cmk_plan_action_append_arg(&action, "exit 0", 6);
 #else
     cmk_string_set(&action.program, "/bin/sh", 7);
     cmk_plan_action_append_arg(&action, "-c", 2);
@@ -143,6 +147,10 @@ static void exec_case_output(void)
     cmk_plan_action_append_arg(&action, "/c", 2);
     cmk_plan_action_append_arg(&action, "echo", 4);
     cmk_plan_action_append_arg(&action, "hello", 5);
+#elif defined(CC_ANDROID)
+    cmk_string_set(&action.program, "/system/bin/sh", 14);
+    cmk_plan_action_append_arg(&action, "-c", 2);
+    cmk_plan_action_append_arg(&action, "echo hello", 10);
 #else
     cmk_string_set(&action.program, "/bin/sh", 7);
     cmk_plan_action_append_arg(&action, "-c", 2);
