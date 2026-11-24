@@ -316,6 +316,81 @@ void cmk_process_destroy(CMKProcess *process)
 #include <sys/wait.h>
 #include <unistd.h>
 
+#if defined(__linux__)
+/* glibc 需要 _GNU_SOURCE，这里直接声明以免改动本文件的特性宏。 */
+extern int execvpe(
+    const char *file, char *const argv[], char *const envp[]
+);
+#endif
+
+/* 合并继承的环境与 spec 中的覆盖项；返回 NULL 表示分配失败。
+ * 环境数组必须在 fork 前构建：子进程只允许调用异步信号安全函数。 */
+static char **cmk_process_build_env(const CMKProcessSpec *spec)
+{
+    CCUINT32 base = 0;
+    while (environ && environ[base])
+        base++;
+    CCUINT32 extra = 0;
+    while (spec->envp && spec->envp[extra])
+        extra++;
+
+    char **envp = ccalloc(
+        NULL, ((CCUINT64)base + extra + 1) * sizeof(char *),
+        CMK_PROCESS_COMMENT
+    );
+    if (!envp)
+        return NULL;
+
+    CCUINT32 count = 0;
+    for (CCUINT32 i = 0; i < base; i++)
+    {
+        const char *item = environ[i];
+        const char *eq = strchr(item, '=');
+        CCBOOL overridden = CCFALSE;
+        if (eq)
+        {
+            CCUINT32 key_len = (CCUINT32)(eq - item);
+            for (CCUINT32 j = 0; j < extra; j++)
+            {
+                const char *cover = spec->envp[j];
+                if (cover && strchr(cover, '=') &&
+                    strncmp(cover, item, key_len) == 0 &&
+                    cover[key_len] == '=')
+                {
+                    overridden = CCTRUE;
+                    break;
+                }
+            }
+        }
+        if (!overridden)
+            envp[count++] = (char *)item;
+    }
+    for (CCUINT32 j = 0; j < extra; j++)
+    {
+        const char *item = spec->envp[j];
+        const char *eq = item ? strchr(item, '=') : NULL;
+        if (!eq)
+            continue;
+        CCUINT32 key_len = (CCUINT32)(eq - item);
+        CCBOOL shadowed = CCFALSE;
+        for (CCUINT32 k = j + 1; k < extra; k++)
+        {
+            const char *later = spec->envp[k];
+            if (later && strchr(later, '=') &&
+                strncmp(later, item, key_len) == 0 &&
+                later[key_len] == '=')
+            {
+                shadowed = CCTRUE;
+                break;
+            }
+        }
+        if (!shadowed)
+            envp[count++] = (char *)item;
+    }
+    envp[count] = NULL;
+    return envp;
+}
+
 CMKProcess *cmk_process_create(const CMKProcessSpec *spec)
 {
     if (!spec || !spec->program)
@@ -335,14 +410,48 @@ CCBOOL cmk_process_start(CMKProcess *process)
 {
     if (!process || process->started)
         return CCFALSE;
+
+    CCUINT32 argc = 0;
+    while (process->spec.argv && process->spec.argv[argc])
+        argc++;
+    char **argv = ccalloc(
+        NULL, (CCUINT64)(argc + 2) * sizeof(char *),
+        CMK_PROCESS_COMMENT
+    );
+    if (!argv)
+        return CCFALSE;
+    argv[0] = (char *)process->spec.program;
+    for (CCUINT32 i = 0; i < argc; i++)
+        argv[i + 1] = (char *)process->spec.argv[i];
+    argv[argc + 1] = NULL;
+
+    char **envp = NULL;
+    if (process->spec.envp)
+    {
+        envp = cmk_process_build_env(&process->spec);
+        if (!envp)
+        {
+            ccalloc(argv, 0, NULL);
+            return CCFALSE;
+        }
+    }
+
     int fds[2];
     if (pipe(fds) != 0)
+    {
+        if (envp)
+            ccalloc(envp, 0, NULL);
+        ccalloc(argv, 0, NULL);
         return CCFALSE;
+    }
     pid_t pid = fork();
     if (pid < 0)
     {
         close(fds[0]);
         close(fds[1]);
+        if (envp)
+            ccalloc(envp, 0, NULL);
+        ccalloc(argv, 0, NULL);
         return CCFALSE;
     }
     if (pid == 0)
@@ -355,43 +464,16 @@ CCBOOL cmk_process_start(CMKProcess *process)
         if (process->spec.working_dir &&
             chdir(process->spec.working_dir) != 0)
             _exit(127);
-        if (process->spec.envp)
-        {
-            for (CCUINT32 i = 0; process->spec.envp[i]; i++)
-            {
-                const char *item = process->spec.envp[i];
-                const char *eq = strchr(item, '=');
-                if (!eq)
-                    continue;
-                char *key = ccalloc(
-                    NULL, (CCUINT64)(eq - item) + 1,
-                    CMK_PROCESS_COMMENT
-                );
-                if (!key)
-                    _exit(127);
-                memcpy(key, item, (size_t)(eq - item));
-                key[eq - item] = '\0';
-                setenv(key, eq + 1, 1);
-                ccalloc(key, 0, NULL);
-            }
-        }
-        char **argv = NULL;
-        CCUINT32 argc = 0;
-        while (process->spec.argv && process->spec.argv[argc])
-            argc++;
-        argv = ccalloc(
-            NULL, (CCUINT64)(argc + 2) * sizeof(char *),
-            CMK_PROCESS_COMMENT
-        );
-        if (!argv)
-            _exit(127);
-        argv[0] = (char *)process->spec.program;
-        for (CCUINT32 i = 0; i < argc; i++)
-            argv[i + 1] = (char *)process->spec.argv[i];
-        execvp(process->spec.program, argv);
+        if (envp)
+            execvpe(process->spec.program, argv, envp);
+        else
+            execvp(process->spec.program, argv);
         _exit(127);
     }
     close(fds[1]);
+    if (envp)
+        ccalloc(envp, 0, NULL);
+    ccalloc(argv, 0, NULL);
     setpgid(pid, pid);
     process->pid = (int)pid;
     process->read_fd = fds[0];
