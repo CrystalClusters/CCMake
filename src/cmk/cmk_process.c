@@ -316,8 +316,10 @@ void cmk_process_destroy(CMKProcess *process)
 #include <sys/wait.h>
 #include <unistd.h>
 
-#if defined(__linux__)
-/* glibc 需要 _GNU_SOURCE，这里直接声明以免改动本文件的特性宏。 */
+#ifdef CC_LINUX
+/* glibc 需要 _GNU_SOURCE，这里直接声明以免改动本文件的特性宏。
+ * 新版 glibc 的 environ 同样仅在 _GNU_SOURCE 下由 <unistd.h> 暴露。 */
+extern char **environ;
 extern int execvpe(
     const char *file, char *const argv[], char *const envp[]
 );

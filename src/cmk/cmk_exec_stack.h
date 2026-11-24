@@ -11,6 +11,7 @@
 #define _INCLUDE_CMK_EXEC_STACK_H_
 
 #include <crystal_cluster.h>
+#include <stddef.h>
 
 typedef CCBOOL (*CMKExecStackFn)(void *user);
 
