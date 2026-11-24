@@ -3,7 +3,7 @@
  * @Date: 2026-11
  * @LastEditors: Renascent Adore lizaterop@gmail.com
  * @LastEditTime: 2026-11
- * @Description: CMK 语义分析：作用域、类型、函数、内建、target 与配置引用
+ * @Description: CMK 语义分析：作用域、类型、函数、内建与配置引用
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
@@ -1581,13 +1581,13 @@ static CCBOOL sem_stmt_assign(
     if (!node || node->kind != CMK_AST_ASSIGN)
         return sem_error(module, id, "内部错误：期望赋值语句");
 
-    CMKASTNodeId target_id = sem_child(module, id, 0);
+    CMKASTNodeId lhs_id = sem_child(module, id, 0);
     CMKASTNodeId value_id = sem_child(module, id, 1);
-    const CMKASTNode *target = sem_node(module, target_id);
-    if (!target)
+    const CMKASTNode *lhs = sem_node(module, lhs_id);
+    if (!lhs)
         return sem_error(module, id, "赋值目标缺失");
 
-    if (target->kind == CMK_AST_DISCARD)
+    if (lhs->kind == CMK_AST_DISCARD)
     {
         if (node->as.assign.op != CMK_ASSIGN_SET)
             return sem_error(module, id, "_ 不能使用 += ");
@@ -1600,20 +1600,24 @@ static CCBOOL sem_stmt_assign(
             return sem_error(module, value_id, "void 值不能被赋值或丢弃");
         return CCTRUE;
     }
-    if (target->kind != CMK_AST_IDENT)
+    if (lhs->kind != CMK_AST_IDENT)
         return sem_error(module, id, "赋值目标必须是变量或 _");
 
     const char *name = NULL;
     CCUINT32 name_len = 0;
-    if (!sem_string(module, target->as.ident.name, &name, &name_len))
-        return sem_error(module, target_id, "变量名无效");
+    if (!sem_string(module, lhs->as.ident.name, &name, &name_len))
+        return sem_error(module, lhs_id, "变量名无效");
     const CMKSymbol *symbol = scope_find(scope, name, name_len);
     if (!symbol || symbol->kind != CMK_SYMBOL_VAR)
-        return sem_error(module, target_id, "未定义的变量：%.*s",
-                         (int)name_len, name);
+        return sem_error(
+            module, lhs_id, "未定义的变量：%.*s",
+            (int)name_len, name
+        );
     if (symbol->is_const)
-        return sem_error(module, target_id, "const 变量不能重新赋值：%.*s",
-                         (int)name_len, name);
+        return sem_error(
+            module, lhs_id, "const 变量不能重新赋值：%.*s",
+            (int)name_len, name
+        );
 
     CMKType value_type;
     if (node->as.assign.op == CMK_ASSIGN_SET)
@@ -2146,7 +2150,7 @@ static CCBOOL sem_block(
 }
 
 /* ============================================================================
- * 函数、target 与模块
+ * 函数与模块
  * ========================================================================== */
 
 static CCBOOL sem_analyze_function(
@@ -2255,8 +2259,10 @@ static CCBOOL sem_add_imported_functions(CMKSemanticModule *module)
     {
         const CMKImportedFunction *import = imports[i];
         if (!import || !import->function)
-            return sem_error(module, cmk_ast_root(module->ast),
-                             "导入函数记录损坏");
+            return sem_error(
+                module, cmk_ast_root(module->ast),
+                "导入函数记录损坏"
+            );
         if (cmk_builtin_find(
                 module->builtins, import->name.data, import->name.len
             ))

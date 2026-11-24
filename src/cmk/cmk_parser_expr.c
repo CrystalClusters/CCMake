@@ -366,8 +366,8 @@ static CMKASTNodeId parser_parse_literal(CMKParser *parser)
         break;
 
     default:
-        return parser_error_current(parser, "期望字面量"),
-            CMK_AST_NODE_NIL;
+        (void)parser_error_current(parser, "期望字面量");
+        return CMK_AST_NODE_NIL;
     }
 
     CMKASTNodeId id = parser_new_node(parser, kind, &span);
@@ -410,8 +410,10 @@ static CMKASTNodeId parser_parse_config_ref(CMKParser *parser)
 {
     CMKToken token = parser->current;
     if (!parser_config_path_ok(token.text, token.len))
-        return parser_error_current(parser, "配置引用路径非法"),
-            CMK_AST_NODE_NIL;
+    {
+        (void)parser_error_current(parser, "配置引用路径非法");
+        return CMK_AST_NODE_NIL;
+    }
 
     CMKASTStringId path = parser_new_string(
         parser, token.text, token.len

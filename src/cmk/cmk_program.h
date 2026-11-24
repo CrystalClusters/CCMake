@@ -13,7 +13,6 @@
 #include "cmk_config.h"
 #include "cmk_runtime.h"
 
-typedef struct cmk_plan CMKPlan;
 typedef struct cmk_program CMKProgram;
 typedef struct cmk_program_module CMKProgramModule;
 
@@ -26,7 +25,7 @@ void cmk_program_destroy(CMKProgram *program);
 CCBOOL cmk_program_load(
     CMKProgram *program, const char *root_path, const char *work_dir
 );
-/* 初始化各模块全局变量，并求值根模块的 target 声明 */
+/* 初始化各模块全局变量 */
 CCBOOL cmk_program_configure(CMKProgram *program);
 /* 执行固定入口 main()；没有 main 时直接成功 */
 CCBOOL cmk_program_run_main(CMKProgram *program);

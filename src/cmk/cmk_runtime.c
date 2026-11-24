@@ -3448,13 +3448,17 @@ CCBOOL cmk_runtime_init_globals(CMKRuntime *runtime)
     if (runtime->globals_initialized)
         return runtime->failed ? CCFALSE : CCTRUE;
     if (!runtime->semantic->analyzed || !runtime->semantic->ok)
-        return rt_error(runtime, cmk_ast_root(runtime->semantic->ast),
-                        "语义分析未通过");
+        return rt_error(
+            runtime, cmk_ast_root(runtime->semantic->ast),
+            "语义分析未通过"
+        );
 
     runtime->module_env = env_create(NULL);
     if (!runtime->module_env)
-        return rt_error(runtime, cmk_ast_root(runtime->semantic->ast),
-                        "内存分配失败");
+        return rt_error(
+            runtime, cmk_ast_root(runtime->semantic->ast),
+            "内存分配失败"
+        );
 
     CMKASTNodeId root = cmk_ast_root(runtime->semantic->ast);
     const CMKASTNode *root_node =

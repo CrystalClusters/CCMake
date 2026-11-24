@@ -17,7 +17,6 @@ tests/
   cmk/test_cmk_parser_base.c CMK Parser 基础设施用例
   cmk/test_cmk_parser_expr.c CMK 表达式解析用例
   cmk/test_cmk_parser_stmt.c CMK 语句解析用例
-  cmk/test_cmk_parser_decl.c CMK 声明解析用例
   cmk/test_cmk_parser_stress.c CMK Parser 压力与随机输入用例
   cmk/test_cmk_value.c    CMK Value 模型用例
   cmk/test_cmk_builtin.c  CMK Builtin 注册表与标准内建用例
@@ -98,7 +97,7 @@ bash test.sh CMKPROGRAM
 - CMK 表达式：字面量与列表、优先级/结合性、调用/索引/成员、配置引用、数值边界与 INT64_MIN、复杂表达式结构、一元与丢弃符、赋值语句化；
 - CMK 语句：变量/赋值、if/else、while/for-in、return/break/continue、悬空 else、表达式语句、语句错误；
 - CMK Parser 压力：语法/表达式/类型深度、各类预算、5000 层显式栈类型/一元/嵌套块/嵌套 if/括号/列表/调用、大量声明、失败后复用、确定性随机字节输入；
-- CMK Value：类型、字符串所有权、列表深复制、目标引用、动作与文本化；
+- CMK Value：类型、字符串所有权、列表深复制与文本化；
 - CMK Builtin：注册表、纯计算、host_info、动作构造、find_files、error 格式与参数错误；
 - CMK Semantic：模块/函数/块作用域、类型、const、函数与内建调用、配置引用、控制流返回检查、5000 层显式语句/表达式栈；
 - CMK Runtime：模块级变量、while、函数/递归、列表/字符串、配置、for/break/continue、索引/除零/error 运行时错误、`CMKExecutionPolicy`（步数/递归/时间/find 深度）、5000 层显式语句/表达式/调用/尾递归、线性/分支递归程序栈、通用语句上下文 VM、5000 层非 return 深递归与循环内递归；
