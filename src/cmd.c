@@ -60,16 +60,16 @@ void init_global_var(void)
 
 void clear_global_var(void)
 {
-    /* 与字段登记顺序相反：output/defines/work/cmk/ccm/self */
+    /* 与字段登记顺序相反：output/defines/work/mk/mc/self */
     if (ccmake_global_var.output_dir)
         ccalloc(ccmake_global_var.output_dir, 0, NULL);
     clear_defines();
     if (ccmake_global_var.work_dir)
         ccalloc(ccmake_global_var.work_dir, 0, NULL);
-    if (ccmake_global_var.cmk_path)
-        ccalloc(ccmake_global_var.cmk_path, 0, NULL);
-    if (ccmake_global_var.ccm_path)
-        ccalloc(ccmake_global_var.ccm_path, 0, NULL);
+    if (ccmake_global_var.mk_path)
+        ccalloc(ccmake_global_var.mk_path, 0, NULL);
+    if (ccmake_global_var.mc_path)
+        ccalloc(ccmake_global_var.mc_path, 0, NULL);
     if (ccmake_global_var.self_path)
         ccalloc(ccmake_global_var.self_path, 0, NULL);
     memset(&ccmake_global_var, 0, sizeof(ccmake_global_var));
@@ -145,9 +145,9 @@ static CCBOOL _func_config_(void)
     if (!value)
         return CCFALSE;
     if (!_store_string_(
-            &ccmake_global_var.ccm_path,
+            &ccmake_global_var.mc_path,
             value,
-            CC_DBG_REL_TAG(".ccm文件路径", NULL)))
+            CC_DBG_REL_TAG(".mc文件路径", NULL)))
         return CCFALSE;
     // 跳过已拷贝的参数
     g_index++;
@@ -160,9 +160,9 @@ static CCBOOL _func_file_(void)
     if (!value)
         return CCFALSE;
     if (!_store_string_(
-            &ccmake_global_var.cmk_path,
+            &ccmake_global_var.mk_path,
             value,
-            CC_DBG_REL_TAG(".cmk文件路径", NULL)))
+            CC_DBG_REL_TAG(".mk文件路径", NULL)))
         return CCFALSE;
     // 跳过已拷贝的参数
     g_index++;
@@ -318,7 +318,7 @@ static CCBOOL _func_verbose_(void)
 
 
 
-// 这两个动作依赖 .ccm 解析：解析阶段只记录请求，继续收集配置参数，由后续流程执行
+// 这两个动作依赖 .mc 解析：解析阶段只记录请求，继续收集配置参数，由后续流程执行
 static CCBOOL _func_dump_config_(void)
 {
     ccmake_global_var.action = CC_CMD_ACTION_DUMP_CONFIG;
@@ -346,7 +346,7 @@ static CCBOOL _func_help_(void)
     g_index++;
     color_print(
         "-c, --config <文件>          指定配置文件（必填，扩展名不限）\n"
-        "-f, --file <文件>            指定 .cmk 构建脚本（必填）\n"
+        "-f, --file <文件>            指定 .mk 构建脚本（必填）\n"
         "-C, --directory <目录>       切换工作目录\n"
         "-D, --define <键=值>...      覆盖配置文件字段（可跟多个键值对）\n"
         "-o, --output <目录>          构建产物输出目录\n"
@@ -402,7 +402,7 @@ CCBOOL single_cmd()
 CCBOOL check_parse()
 {
     // 必填参数缺失时给出明确提示
-    if (!ccmake_global_var.ccm_path)
+    if (!ccmake_global_var.mc_path)
     {
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
@@ -410,7 +410,7 @@ CCBOOL check_parse()
         );
         return CCFALSE;
     }
-    if (!ccmake_global_var.cmk_path)
+    if (!ccmake_global_var.mk_path)
     {
         color_print(
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)

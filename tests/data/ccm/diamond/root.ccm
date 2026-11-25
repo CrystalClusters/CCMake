@@ -1,3 +1,0 @@
-@include "a.ccm";
-@include "b.ccm";
-"root": 0;

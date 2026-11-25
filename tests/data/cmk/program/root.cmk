@@ -1,5 +1,0 @@
-@import func double_it from "lib.cmk";
-
-int value = double_it(21);
-
-func main() -> void {}

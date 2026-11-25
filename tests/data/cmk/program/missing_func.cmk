@@ -1,3 +1,0 @@
-@import func missing_func from "lib.cmk";
-
-func main() -> void {}

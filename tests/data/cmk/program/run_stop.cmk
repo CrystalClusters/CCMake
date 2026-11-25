@@ -1,4 +1,0 @@
-func main() -> void {
-    remove("out/run_missing");
-    copy("tests/data/cmk/program/config.ccm", "out/run_after_fail");
-}

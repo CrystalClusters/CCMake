@@ -1,3 +1,0 @@
-func main() -> void {
-    copy("tests/data/cmk/program/config.ccm", "out/main_ok");
-}

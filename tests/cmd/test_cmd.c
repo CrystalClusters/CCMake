@@ -283,7 +283,7 @@ static void test_help_short(void)
     CC_CHECK(text_has(g_out, "-D, --define"), "包含 -D 选项行");
     CC_CHECK(text_has(g_out, "-V, --version"), "包含 -V 选项行");
     CC_CHECK_EQ_STR("self_path", "ccmake", ccmake_global_var.self_path);
-    CC_CHECK(ccmake_global_var.ccm_path == NULL, "未设置 ccm_path");
+    CC_CHECK(ccmake_global_var.mc_path == NULL, "未设置 mc_path");
     CC_CASE_END();
     case_cleanup();
 }
@@ -341,15 +341,15 @@ static void test_version_long(void)
 
 static void test_build_min(void)
 {
-    const char *argv[] = { "ccmake", "-c", "a.ccm", "-f", "b.cmk" };
+    const char *argv[] = { "ccmake", "-c", "a.mc", "-f", "b.mk" };
     CCBOOL ret;
 
     CC_CASE("CMD-BUILD-001", "最小构建参数解析");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_I64("stat", CC_CMD_FLAG_NEED_BUILD, ccmake_global_var.stat);
-    CC_CHECK_EQ_STR("ccm_path", "a.ccm", ccmake_global_var.ccm_path);
-    CC_CHECK_EQ_STR("cmk_path", "b.cmk", ccmake_global_var.cmk_path);
+    CC_CHECK_EQ_STR("mc_path", "a.mc", ccmake_global_var.mc_path);
+    CC_CHECK_EQ_STR("mk_path", "b.mk", ccmake_global_var.mk_path);
     CC_CHECK_EQ_STR("self_path", "ccmake", ccmake_global_var.self_path);
     CC_CHECK(ccmake_global_var.work_dir == NULL, "未设置 work_dir");
     CC_CHECK(ccmake_global_var.output_dir == NULL, "未设置 output_dir");
@@ -362,7 +362,7 @@ static void test_build_min(void)
 static void test_build_paths(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "-C", "work", "-o", "outdir"
     };
     CCBOOL ret;
@@ -379,15 +379,15 @@ static void test_build_paths(void)
 static void test_build_long(void)
 {
     const char *argv[] = {
-        "ccmake", "--config", "a.ccm", "--file", "b.cmk"
+        "ccmake", "--config", "a.mc", "--file", "b.mk"
     };
     CCBOOL ret;
 
     CC_CASE("CMD-BUILD-006", "长格式选项解析");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_STR("ccm_path", "a.ccm", ccmake_global_var.ccm_path);
-    CC_CHECK_EQ_STR("cmk_path", "b.cmk", ccmake_global_var.cmk_path);
+    CC_CHECK_EQ_STR("mc_path", "a.mc", ccmake_global_var.mc_path);
+    CC_CHECK_EQ_STR("mk_path", "b.mk", ccmake_global_var.mk_path);
     CC_CASE_END();
     case_cleanup();
 }
@@ -395,7 +395,7 @@ static void test_build_long(void)
 static void test_build_long_flags(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "--directory", "work", "--output", "outdir",
         "--verbose"
     };
@@ -414,15 +414,15 @@ static void test_build_long_flags(void)
 static void test_build_space_paths(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a b.ccm", "-f", "b c.cmk",
+        "ccmake", "-c", "a b.mc", "-f", "b c.mk",
     };
     CCBOOL ret;
 
     CC_CASE("CMD-BUILD-009", "含空格的路径按单个参数保存");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_STR("ccm_path", "a b.ccm", ccmake_global_var.ccm_path);
-    CC_CHECK_EQ_STR("cmk_path", "b c.cmk", ccmake_global_var.cmk_path);
+    CC_CHECK_EQ_STR("mc_path", "a b.mc", ccmake_global_var.mc_path);
+    CC_CHECK_EQ_STR("mk_path", "b c.mk", ccmake_global_var.mk_path);
     CC_CASE_END();
     case_cleanup();
 }
@@ -431,8 +431,8 @@ static void test_override(void)
 {
     const char *argv[] = {
         "ccmake",
-        "-c", "a.ccm", "-c", "b.ccm",
-        "-f", "x.cmk",
+        "-c", "a.mc", "-c", "b.mc",
+        "-f", "x.mk",
         "-C", "d1", "-C", "d2",
         "-o", "o1", "-o", "o2",
     };
@@ -441,7 +441,7 @@ static void test_override(void)
     CC_CASE("CMD-BUILD-007", "重复参数以后出现者为准");
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
-    CC_CHECK_EQ_STR("ccm_path", "b.ccm", ccmake_global_var.ccm_path);
+    CC_CHECK_EQ_STR("mc_path", "b.mc", ccmake_global_var.mc_path);
     CC_CHECK_EQ_STR("work_dir", "d2", ccmake_global_var.work_dir);
     CC_CHECK_EQ_STR("output_dir", "o2", ccmake_global_var.output_dir);
     CC_CASE_END();
@@ -455,7 +455,7 @@ static void test_override(void)
 static void test_define_pairs(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "-D", "a=1", "b=2", "a=3"
     };
     const char *key = NULL;
@@ -479,7 +479,7 @@ static void test_define_pairs(void)
 static void test_define_multi(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "-D", "a=1", "-D", "a=2", "-D", "b=3"
     };
     const char *key = NULL;
@@ -503,7 +503,7 @@ static void test_define_multi(void)
 static void test_define_long(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "--define", "a=1", "b=2"
     };
     const char *key = NULL;
@@ -524,7 +524,7 @@ static void test_define_long(void)
 static void test_define_value_equal(void)
 {
     const char *argv[] = {
-        "ccmake", "-c", "a.ccm", "-f", "b.cmk",
+        "ccmake", "-c", "a.mc", "-f", "b.mk",
         "-D", "a=b=c"
     };
     const char *key = NULL;
@@ -549,7 +549,7 @@ static void test_define_value_equal(void)
 static void test_action_dump(void)
 {
     const char *argv[] = {
-        "ccmake", "--dump-config", "-c", "a.ccm", "-f", "b.cmk"
+        "ccmake", "--dump-config", "-c", "a.mc", "-f", "b.mk"
     };
     CCBOOL ret;
 
@@ -557,8 +557,8 @@ static void test_action_dump(void)
     ret = run_parse(ARGC(argv), argv);
     CC_CHECK_EQ_I64("返回值", CCTRUE, ret);
     CC_CHECK_EQ_I64("action", CC_CMD_ACTION_DUMP_CONFIG, ccmake_global_var.action);
-    CC_CHECK_EQ_STR("ccm_path", "a.ccm", ccmake_global_var.ccm_path);
-    CC_CHECK_EQ_STR("cmk_path", "b.cmk", ccmake_global_var.cmk_path);
+    CC_CHECK_EQ_STR("mc_path", "a.mc", ccmake_global_var.mc_path);
+    CC_CHECK_EQ_STR("mk_path", "b.mk", ccmake_global_var.mk_path);
     CC_CHECK_EQ_STR("解析阶段无输出", "", g_out);
     CC_CASE_END();
     case_cleanup();
@@ -660,52 +660,52 @@ typedef struct msg_case {
 
 static const msg_case g_msg_cases[] = {
     { "CMD-MSG-001", "缺少 -c/--config",
-      { "ccmake", "-f", "b.cmk", NULL },
+      { "ccmake", "-f", "b.mk", NULL },
       "缺少必填参数：-c/--config\n" },
     { "CMD-MSG-002", "缺少 -f/--file",
-      { "ccmake", "-c", "a.ccm", NULL },
+      { "ccmake", "-c", "a.mc", NULL },
       "缺少必填参数：-f/--file\n" },
     { "CMD-MSG-003", "-c 缺值",
       { "ccmake", "-c", NULL },
       "未找到config参数：-c <---\n" },
     { "CMD-MSG-004", "-c 空字符串",
-      { "ccmake", "-c", "", "-f", "b.cmk", NULL },
+      { "ccmake", "-c", "", "-f", "b.mk", NULL },
       "-c 的参数为空字符串 <---\n" },
     { "CMD-MSG-005", "-f 缺值",
-      { "ccmake", "-c", "a.ccm", "-f", NULL },
+      { "ccmake", "-c", "a.mc", "-f", NULL },
       "未找到file参数：-f <---\n" },
     { "CMD-MSG-006", "-f 空字符串",
-      { "ccmake", "-c", "a.ccm", "-f", "", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "", NULL },
       "-f 的参数为空字符串 <---\n" },
     { "CMD-MSG-007", "-C 缺值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-C", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-C", NULL },
       "未找到directory参数：-C <---\n" },
     { "CMD-MSG-008", "-C 空字符串",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-C", "", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-C", "", NULL },
       "-C 的参数为空字符串 <---\n" },
     { "CMD-MSG-009", "-o 缺值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-o", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-o", NULL },
       "未找到output参数：-o <---\n" },
     { "CMD-MSG-010", "-o 空字符串",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-o", "", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-o", "", NULL },
       "-o 的参数为空字符串 <---\n" },
     { "CMD-MSG-018", "-D 缺值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-D", NULL },
       "未找到define参数：-D <---\n" },
     { "CMD-MSG-019", "-D 缺少等号",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", "a", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-D", "a", NULL },
       "无法解析的键值对：a（应为 <键>=<值>，键值均不能为空）\n" },
     { "CMD-MSG-020", "-D 空键",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", "=b", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-D", "=b", NULL },
       "无法解析的键值对：=b（应为 <键>=<值>，键值均不能为空）\n" },
     { "CMD-MSG-021", "-D 空值",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", "a=", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-D", "a=", NULL },
       "无法解析的键值对：a=（应为 <键>=<值>，键值均不能为空）\n" },
     { "CMD-MSG-022", "-D 空字符串参数",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "-D", "", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "-D", "", NULL },
       "define 的参数为空字符串 <---\n" },
     { "CMD-MSG-023", "位置参数不被接受",
-      { "ccmake", "-c", "a.ccm", "-f", "b.cmk", "release", NULL },
+      { "ccmake", "-c", "a.mc", "-f", "b.mk", "release", NULL },
       "不合规的参数：release <---\n" }
 };
 

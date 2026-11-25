@@ -1,1 +1,0 @@
-"sources": ${find ./tests/data/ccm/findtree/src ./tests/data/ccm/findtree/src -include a.c};

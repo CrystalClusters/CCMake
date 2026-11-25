@@ -32,7 +32,7 @@ int main(int argc, char **argv)
         goto FailedtoInitGlobal;
     }
     // 步骤四，配置文件解析
-    if (!parse_ccm())
+    if (!parse_mc())
         goto FailedtoParseConfig;
     // 步骤五，构建脚本解析与 Configure 求值
     if (!build_project())

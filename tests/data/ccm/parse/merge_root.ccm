@@ -1,7 +1,0 @@
-@include "merge_base.ccm";
-"toolchain": {
-    "c": "clang";
-    "flags": {
-        "b": 2;
-    };
-};

@@ -65,8 +65,8 @@ typedef struct ccmake_define_struct {
 
 struct ccmake_global_var_struct {
     char *self_path;
-    char *ccm_path;
-    char *cmk_path;
+    char *mc_path;
+    char *mk_path;
     char *work_dir;          // -C / --directory
     char *output_dir;        // -o / --output
     CC_CMD_PARSE_STAT stat;  // 状态枚举，决定后续流程走哪个分支
@@ -84,6 +84,6 @@ void init_global_var(void);
 void clear_global_var(void);
 
 // 提供配置文件解析
-CCBOOL parse_ccm();
+CCBOOL parse_mc();
 // 提供构建脚本解析与 Configure 求值
 #endif

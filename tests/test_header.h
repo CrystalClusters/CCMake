@@ -12,21 +12,21 @@
 
 /* 进程内测试套件；每个套件内部用 CC_CASE 显式标记用例编号。 */
 void test_cmd(void);
-void test_ccm_locate(void);
-void test_ccm_parse(void);
+void test_mc_locate(void);
+void test_mc_parse(void);
 void test_ccvar(void);
-void test_cmk_lexer(void);
-void test_cmk_ast(void);
-void test_cmk_parser_base(void);
-void test_cmk_parser_expr(void);
-void test_cmk_parser_stmt(void);
-void test_cmk_parser_stress(void);
-void test_cmk_value(void);
-void test_cmk_builtin(void);
-void test_cmk_semantic(void);
-void test_cmk_runtime(void);
-void test_cmk_program(void);
-void test_cmk_process(void);
-void test_cmk_executor(void);
+void test_mk_lexer(void);
+void test_mk_ast(void);
+void test_mk_parser_base(void);
+void test_mk_parser_expr(void);
+void test_mk_parser_stmt(void);
+void test_mk_parser_stress(void);
+void test_mk_value(void);
+void test_mk_builtin(void);
+void test_mk_semantic(void);
+void test_mk_runtime(void);
+void test_mk_program(void);
+void test_mk_process(void);
+void test_mk_executor(void);
 
 #endif

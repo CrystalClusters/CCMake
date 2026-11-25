@@ -1,3 +1,0 @@
-@import func f from "does_not_exist.cmk";
-
-func main() -> void {}

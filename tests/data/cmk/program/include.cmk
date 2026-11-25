@@ -1,5 +1,0 @@
-@include "config.ccm";
-
-string name = @{name};
-
-func main() -> void {}

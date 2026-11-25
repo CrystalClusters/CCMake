@@ -45,7 +45,7 @@ out/
 
 ## 测试
 
-测试是一个独立的 C 程序（参考 CrystalStd 测试结构）：直接链接 `src/` 下除 `main.c` 外的源码，覆盖命令行、CCM、VARS、CMK 词法/语法/表达式/语句/Value/Builtin/Semantic/Runtime/Program、Process 与 Executor。`build.bat` / `build.sh` 会同时生成 `ccmake` 与 `ccmake_test`。
+测试是一个独立的 C 程序（参考 CrystalStd 测试结构）：直接链接 `src/` 下除 `main.c` 外的源码，覆盖命令行、MC、VARS、MK 词法/语法/表达式/语句/Value/Builtin/Semantic/Runtime/Program、Process 与 Executor。`build.bat` / `build.sh` 会同时生成 `ccmake` 与 `ccmake_test`。
 
 ```bat
 build.bat
@@ -70,7 +70,7 @@ bash test.sh CMD
 ## 详细资料
 
 - [用户手册](docs/用户手册.md)
-- [.ccm 语法参考](docs/CCM语法参考.md)
-- [.cmk 语法参考](docs/CMK语法参考.md)
+- [.mc 语法参考](docs/MC语法参考.md)
+- [.mk 语法参考](docs/MK语法参考.md)
 - [应用场景教学](docs/应用场景教学.md)
 - [开发手册](docs/dev/开发手册.md)

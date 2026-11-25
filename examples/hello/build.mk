@@ -1,0 +1,14 @@
+// hello 示例：固定入口 main()，动作按代码顺序执行。
+@include "project.mc";
+
+func main() -> void {
+    list<string> sources = find_files("*.c", {"src"});
+    info("cc: %s", @{toolchain.cc});
+    info("output: %s", @{output});
+
+    mkdir(dirname(@{output}));
+    command(
+        @{toolchain.cc},
+        @{toolchain.cflags} + sources + {"-o", @{output}}
+    );
+}

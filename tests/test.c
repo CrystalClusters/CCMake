@@ -14,22 +14,22 @@ typedef struct test_suite {
 } test_suite;
 
 static const test_suite g_suites[] = {    { "CMD", "命令行解析", test_cmd },
-    { "CCM", "CCM 文件检查与定位", test_ccm_locate },
-    { "PARSE", "CCM 内容解析", test_ccm_parse },
+    { "MC", "MC 文件检查与定位", test_mc_locate },
+    { "PARSE", "MC 内容解析", test_mc_parse },
     { "VARS", "全局变量树", test_ccvar },
-    { "CMK", "CMK 词法分析", test_cmk_lexer },
-    { "CMKAST", "CMK AST 模型", test_cmk_ast },
-    { "CMKPARSER", "CMK Parser 基础设施", test_cmk_parser_base },
-    { "CMKEXPR", "CMK 表达式解析", test_cmk_parser_expr },
-    { "CMKSTMT", "CMK 语句解析", test_cmk_parser_stmt },
-    { "CMKSTRESS", "CMK Parser 压力测试", test_cmk_parser_stress },
-    { "CMKVALUE", "CMK 值模型", test_cmk_value },
-    { "CMKBUILTIN", "CMK 内建函数", test_cmk_builtin },
-    { "CMKSEMANTIC", "CMK 语义分析", test_cmk_semantic },
-    { "CMKRUNTIME", "CMK Configure 运行时", test_cmk_runtime },
-    { "CMKPROC", "CMK Process", test_cmk_process },
-    { "CMKEXEC", "CMK Executor", test_cmk_executor },
-    { "CMKPROGRAM", "CMK 模块与 Configure 入口", test_cmk_program }
+    { "MK", "MK 词法分析", test_mk_lexer },
+    { "MKAST", "MK AST 模型", test_mk_ast },
+    { "MKPARSER", "MK Parser 基础设施", test_mk_parser_base },
+    { "MKEXPR", "MK 表达式解析", test_mk_parser_expr },
+    { "MKSTMT", "MK 语句解析", test_mk_parser_stmt },
+    { "MKSTRESS", "MK Parser 压力测试", test_mk_parser_stress },
+    { "MKVALUE", "MK 值模型", test_mk_value },
+    { "MKBUILTIN", "MK 内建函数", test_mk_builtin },
+    { "MKSEMANTIC", "MK 语义分析", test_mk_semantic },
+    { "MKRUNTIME", "MK Configure 运行时", test_mk_runtime },
+    { "MKPROC", "MK Process", test_mk_process },
+    { "MKEXEC", "MK Executor", test_mk_executor },
+    { "MKPROGRAM", "MK 模块与 Configure 入口", test_mk_program }
 };
 
 #define SUITE_COUNT ((CCUINT32)(sizeof(g_suites) / sizeof(g_suites[0])))

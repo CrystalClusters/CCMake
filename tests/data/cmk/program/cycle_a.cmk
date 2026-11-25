@@ -1,3 +1,0 @@
-@import func f from "cycle_b.cmk";
-
-func main() -> void {}
