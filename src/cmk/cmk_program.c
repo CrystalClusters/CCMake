@@ -969,7 +969,15 @@ CCBOOL cmk_program_run_main(CMKProgram *program)
         program->root->semantic, "main", 4
     );
     if (!entry)
-        return CCTRUE;
+    {
+        (void)cmk_diagnostic_set(
+            program->diagnostic, CMK_DIAG_ERROR,
+            program->root->semantic->path, 1, 1,
+            "缺少入口 main"
+        );
+        program->failed = CCTRUE;
+        return CCFALSE;
+    }
     if (entry->param_count != 0 ||
         entry->return_type.kind != CMK_VALUE_VOID)
     {

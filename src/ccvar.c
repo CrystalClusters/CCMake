@@ -1209,7 +1209,8 @@ static CCVarResult var_prepare(
     *skip = CCFALSE;
     CCVarType cur = ccvar_type(tree, path);
     if (new_type == CC_VAR_OBJECT && mode == CC_VAR_WRITE_MERGE &&
-        cur == CC_VAR_OBJECT)
+        cur == CC_VAR_OBJECT
+    )
     {
         *skip = CCTRUE;
         return CC_VAR_OK;

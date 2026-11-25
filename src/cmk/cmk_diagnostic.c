@@ -11,6 +11,7 @@
 
 #include <ccalloc.h>
 #include <color_print.h>
+#include "ccmake_console.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -166,7 +167,7 @@ void cmk_diagnostic_print(const CMKDiagnostic *diag, const char *prefix)
         );
     else
         color_print(
-            CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "%s\n", body
+            CC_TEXT_COLOR(CC_RED, CC_DEFAULT) "%s\n", body
         );
     ccalloc(body, 0, NULL);
 }

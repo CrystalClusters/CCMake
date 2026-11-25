@@ -17,6 +17,7 @@
 #include <cc_wildcard.h>
 #include <ccfiles.h>
 #include <color_print.h>
+#include "ccmake_console.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,16 +218,29 @@ static CCBOOL builtin_log(
 
     if (noreturn)
     {
-        (void)cmk_builtin_error(call, "%s", text.data);
+        ccmake_write_utf8_color(text.data, "1");
         cmk_string_clear(&text);
-        cmk_runtime_mark_fatal(call->runtime);
-        return CCFALSE;
+        return CCTRUE;
     }
 
-    color_print(
-        CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT) "[%s] %s\n",
-        prefix, text.data
+    ccmake_write_utf8_color(
+        text.data, strcmp(prefix, "warn") == 0 ? "3" : "6"
     );
+    cmk_string_clear(&text);
+    return CCTRUE;
+}
+
+static CCBOOL builtin_print(CMKBuiltinCall *call)
+{
+    CMKString text;
+    cmk_string_init(&text);
+    if (!builtin_format(call, &text))
+    {
+        cmk_string_clear(&text);
+        return CCFALSE;
+    }
+    ccmake_write_utf8(text.data ? text.data : "");
+    ccmake_write_utf8("\n");
     cmk_string_clear(&text);
     return CCTRUE;
 }
@@ -941,8 +955,7 @@ static CCBOOL execute_action(CMKBuiltinCall *call, CMKAction *action)
         );
     if (result.output.len > 0)
     {
-        fwrite(result.output.data, 1, result.output.len, stdout);
-        fflush(stdout);
+        color_print("%s", result.output.data);
     }
     cmk_executor_result_clear(&result);
     cmk_executor_destroy(executor);
@@ -1320,13 +1333,21 @@ static const CMKBuiltinSpec standard_specs[] = {
         CMK_RET_VOID_, CMK_BUILTIN_VARIADIC, builtin_info
     ),
     CMK_BUILTIN_SPEC(
+        "print", "print(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
+        CMK_RET_VOID_, CMK_BUILTIN_VARIADIC, builtin_print
+    ),
+    CMK_BUILTIN_SPEC(
+        "echo", "echo(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
+        CMK_RET_VOID_, CMK_BUILTIN_VARIADIC, builtin_print
+    ),
+    CMK_BUILTIN_SPEC(
         "warn", "warn(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
         CMK_RET_VOID_, CMK_BUILTIN_VARIADIC, builtin_warn
     ),
     CMK_BUILTIN_SPEC(
         "error", "error(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
         CMK_RET_VOID_,
-        CMK_BUILTIN_VARIADIC | CMK_BUILTIN_NORETURN, builtin_error_log
+        CMK_BUILTIN_VARIADIC, builtin_error_log
     )
 };
 

@@ -215,13 +215,8 @@ void test_cmk_builtin(void)
         CC_CHECK(make_string(&args[0], "value=%d"), "格式串");
         CC_CHECK(make_int(&args[1], 7), "格式参数");
         CC_CHECK(
-            !call_builtin(registry, "error", args, 2, &out, &diagnostic),
-            "error 返回失败"
-        );
-        CC_CHECK(
-            diagnostic.message &&
-            strstr(diagnostic.message, "value=7") != NULL,
-            "error 格式文本"
+            call_builtin(registry, "error", args, 2, &out, &diagnostic),
+            "error 继续执行"
         );
         cmk_value_clear(&out);
 

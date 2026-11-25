@@ -15,6 +15,9 @@
 #include <errno.h>
 #include <math.h>
 #include <stdarg.h>
+
+#include "ccmake_console.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

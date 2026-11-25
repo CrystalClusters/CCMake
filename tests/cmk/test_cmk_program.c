@@ -234,7 +234,7 @@ void test_cmk_program(void)
     }
     CC_CASE_END();
 
-    CC_CASE("MAIN-002", "没有 main 时成功");
+    CC_CASE("MAIN-002", "缺少 main 时报错");
     {
         CMKProgramTest ctx;
         program_test_init(&ctx);
@@ -243,7 +243,12 @@ void test_cmk_program(void)
             "加载 no_main"
         );
         CC_CHECK(cmk_program_configure(ctx.program), "Configure no_main");
-        CC_CHECK(cmk_program_run_main(ctx.program), "无 main 成功");
+        CC_CHECK(!cmk_program_run_main(ctx.program), "无 main 失败");
+        CC_CHECK(
+            ctx.diagnostic.message &&
+            strstr(ctx.diagnostic.message, "缺少入口 main") != NULL,
+            "缺少入口诊断"
+        );
         program_test_clear(&ctx);
     }
     CC_CASE_END();

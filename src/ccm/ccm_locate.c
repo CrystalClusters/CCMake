@@ -10,6 +10,9 @@
 #include "ccm_internal.h"
 #include "ccm_safe.h"
 
+
+#include "ccmake_console.h"
+
 #include <stdio.h>
 
 #define CC_CCM_LOCATE_COMMENT CC_DBG_REL_TAG("CCM 定位", NULL)

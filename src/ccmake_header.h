@@ -11,6 +11,7 @@
 #define _INCLUDE_CCMAKE_HEADER_H_
 
 #include <color_print.h>
+#include "ccmake_console.h"
 #include <ccalloc.h>
 #include <ccfiles.h>
 #include <cc_dyn.h>
