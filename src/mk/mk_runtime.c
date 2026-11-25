@@ -3230,12 +3230,13 @@ static CCBOOL rt_script_start_call(
 )
 {
     *pushed = CCFALSE;
-    if (!script->call_args)
+    if (!script->call_function)
         return CCTRUE;
 
     const MKFunctionInfo *callee = script->call_function;
     MKValue *call_args = script->call_args;
     CCUINT32 call_argc = script->call_argc;
+    script->call_function = NULL;
     script->call_args = NULL;
     script->call_argc = 0;
 

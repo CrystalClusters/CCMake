@@ -240,6 +240,20 @@ static CCBOOL builtin_print(MKBuiltinCall *call)
         return CCFALSE;
     }
     ccmake_write_utf8(text.data ? text.data : "");
+    mk_string_clear(&text);
+    return CCTRUE;
+}
+
+static CCBOOL builtin_echo(MKBuiltinCall *call)
+{
+    MKString text;
+    mk_string_init(&text);
+    if (!builtin_format(call, &text))
+    {
+        mk_string_clear(&text);
+        return CCFALSE;
+    }
+    ccmake_write_utf8(text.data ? text.data : "");
     ccmake_write_utf8("\n");
     mk_string_clear(&text);
     return CCTRUE;
@@ -1338,7 +1352,7 @@ static const MKBuiltinSpec standard_specs[] = {
     ),
     MK_BUILTIN_SPEC(
         "echo", "echo(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
-        MK_RET_VOID_, MK_BUILTIN_VARIADIC, builtin_print
+        MK_RET_VOID_, MK_BUILTIN_VARIADIC, builtin_echo
     ),
     MK_BUILTIN_SPEC(
         "warn", "warn(string, ...) -> void", format_args, 1, 0xFFFFFFFFu,
