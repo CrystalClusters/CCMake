@@ -139,10 +139,11 @@ static CCBOOL cache_parse(const char *text, CCUINT64 size)
 
     CCBOOL ok = CCFALSE;
     char *line = copy;
-    char *header = strtok(line, "\n");
+    char *save = NULL;
+    char *header = strtok_r(line, "\n", &save);
     if (!header || strcmp(header, "CCMC1") != 0)
         goto Done;
-    while ((line = strtok(NULL, "\n")) != NULL)
+    while ((line = strtok_r(NULL, "\n", &save)) != NULL)
     {
         char *hex_path = line;
         char *mtime = strchr(hex_path, ' ');
