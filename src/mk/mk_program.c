@@ -18,10 +18,10 @@
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
+#include <ccfiles.h>
 #include <color_print.h>
 
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -159,73 +159,79 @@ static CCBOOL program_read_file(
     char **out_data, CCUINT64 *out_size
 )
 {
-    FILE *file = fopen(module->path, "rb");
-    if (!file)
-        return program_error(
-            program, module, MK_AST_NODE_NIL,
-            "无法打开 .mk 文件：%s", module->path
-        );
-
-    if (fseek(file, 0, SEEK_END) != 0)
-    {
-        fclose(file);
-        return program_error(
-            program, module, MK_AST_NODE_NIL,
-            "无法读取 .mk 文件长度：%s", module->path
-        );
-    }
-    long length = ftell(file);
-    if (length < 0)
-    {
-        fclose(file);
-        return program_error(
-            program, module, MK_AST_NODE_NIL,
-            "无法读取 .mk 文件长度：%s", module->path
-        );
-    }
-    if (fseek(file, 0, SEEK_SET) != 0)
-    {
-        fclose(file);
-        return program_error(
-            program, module, MK_AST_NODE_NIL,
-            "无法回到 .mk 文件开头：%s", module->path
-        );
-    }
-    if ((CCUINT64)length > (CCUINT64)(~(size_t)0) - 1)
-    {
-        fclose(file);
-        return program_error(
-            program, module, MK_AST_NODE_NIL,
-            "文件长度超出宿主可表示范围：%s", module->path
-        );
-    }
-
-    char *data = ccalloc(
-        NULL, (CCUINT64)length + 1, MK_PROGRAM_COMMENT
+    size_t path_len = strlen(module->path);
+    char *real_path = ccalloc(
+        NULL, (CCUINT64)path_len + 1, MK_PROGRAM_COMMENT
     );
-    if (!data)
-    {
-        fclose(file);
+    if (!real_path)
         return program_error(
             program, module, MK_AST_NODE_NIL,
             "读取 .mk 文件内存分配失败"
         );
-    }
-    size_t read = length > 0
-        ? fread(data, 1, (size_t)length, file) : 0;
-    fclose(file);
-    if (read != (size_t)length)
+    for (size_t i = 0; i < path_len; i++)
+        real_path[i] = module->path[i] == '\\'
+            ? '/' : module->path[i];
+    real_path[path_len] = '\0';
+
+    CCFiles *fs = ccfiles_create();
+    CCFsStat stat;
+    char *data = NULL;
+    CCBOOL ok = CCFALSE;
+    if (!fs ||
+        ccfiles_mount(
+            fs, "/source", real_path, CC_FS_MOUNT_FILE
+        ) != CC_FS_OK ||
+        ccfiles_stat(fs, "/source", &stat) != CC_FS_OK ||
+        stat.type != CC_FS_TYPE_FILE)
     {
-        ccalloc(data, 0, NULL);
-        return program_error(
+        program_error(
+            program, module, MK_AST_NODE_NIL,
+            "无法打开 .mk 文件：%s", module->path
+        );
+        goto Done;
+    }
+    if (stat.size > (CCUINT64)(~(size_t)0) - 1)
+    {
+        program_error(
+            program, module, MK_AST_NODE_NIL,
+            "文件长度超出宿主可表示范围：%s", module->path
+        );
+        goto Done;
+    }
+    data = ccalloc(
+        NULL, stat.size + 1, MK_PROGRAM_COMMENT
+    );
+    if (!data)
+    {
+        program_error(
+            program, module, MK_AST_NODE_NIL,
+            "读取 .mk 文件内存分配失败"
+        );
+        goto Done;
+    }
+    if (ccfiles_open(fs, "/source") != CC_FS_OK ||
+        ccfiles_read(fs, data, 0, stat.size) !=
+            (CCINT64)stat.size)
+    {
+        program_error(
             program, module, MK_AST_NODE_NIL,
             "读取 .mk 文件失败：%s", module->path
         );
+        goto Done;
     }
-    data[length] = '\0';
+    data[stat.size] = '\0';
     *out_data = data;
-    *out_size = (CCUINT64)length;
-    return CCTRUE;
+    *out_size = stat.size;
+    data = NULL;
+    ok = CCTRUE;
+
+Done:
+    if (data)
+        ccalloc(data, 0, NULL);
+    if (fs)
+        ccfiles_destroy(fs);
+    ccalloc(real_path, 0, NULL);
+    return ok;
 }
 
 static MKAST *program_parse_module(

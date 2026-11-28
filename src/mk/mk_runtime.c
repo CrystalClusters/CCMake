@@ -14,11 +14,11 @@
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
+#include <cctime.h>
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 #define MK_RT_COMMENT CC_DBG_REL_TAG(".mk 运行时", NULL)
 
@@ -92,7 +92,7 @@ struct mk_runtime {
     MKExecutionPolicy policy;
     CCUINT64 steps;
     CCUINT32 call_depth;
-    clock_t configure_start;
+    double configure_start;
     CCBOOL timer_started;
     CCBOOL globals_initialized;
     CCBOOL configured;
@@ -3521,9 +3521,8 @@ static CCBOOL mk_runtime_configure_body(MKRuntime *runtime)
     if (runtime->configured)
         return runtime->failed ? CCFALSE : CCTRUE;
 
-    runtime->configure_start = clock();
-    runtime->timer_started =
-        (runtime->configure_start == (clock_t)-1) ? CCFALSE : CCTRUE;
+    runtime->configure_start = cctime();
+    runtime->timer_started = CCTRUE;
 
     if (!mk_runtime_init_globals(runtime))
     {
@@ -3614,19 +3613,14 @@ static CCBOOL rt_step(MKRuntime *runtime, MKASTNodeId node)
     if (runtime->policy.max_configure_time_ms != 0 &&
         runtime->timer_started)
     {
-        clock_t now = clock();
-        if (now != (clock_t)-1)
-        {
-            CCUINT64 elapsed_ticks = (CCUINT64)(now - runtime->configure_start);
-            CCUINT64 elapsed_ms = (elapsed_ticks * 1000) /
-                (CCUINT64)CLOCKS_PER_SEC;
-            if (elapsed_ms > runtime->policy.max_configure_time_ms)
-                return rt_error(
-                    runtime, node, "Configure 执行时间超过限制（%llu ms）",
-                    (unsigned long long)
-                        runtime->policy.max_configure_time_ms
-                );
-        }
+        double elapsed_ms =
+            (cctime() - runtime->configure_start) * 1000.0;
+        if (elapsed_ms > (double)runtime->policy.max_configure_time_ms)
+            return rt_error(
+                runtime, node, "Configure 执行时间超过限制（%llu ms）",
+                (unsigned long long)
+                    runtime->policy.max_configure_time_ms
+            );
     }
     if (runtime->policy.max_steps == 0)
         return CCTRUE;

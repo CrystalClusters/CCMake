@@ -245,7 +245,7 @@ func name(type param, ...) -> return_type {
 
 ```c
 func object_of(string src) -> string {
-    return subst(src, ".c", ".o");
+    return patsubst("%.c", "%.o", src);
 }
 
 func cflags() -> list<string> {
@@ -392,13 +392,26 @@ join({"a", "b"}, ",")  // "a,b"
 ### subst
 
 ```c
-subst(string, string, string) -> string
+subst(from, to, text) -> string
 ```
 
-把第一个字符串中所有 `from` 替换为 `to`。
+把 `text` 中所有 `from` 替换为 `to`，保留原有空白；`from` 为空时原样返回 `text`。
 
 ```c
-subst("main.c", ".c", ".o")  // "main.o"
+subst(".c", ".o", "main.c")  // "main.o"
+```
+
+### patsubst
+
+```c
+patsubst(pattern, replacement, text) -> string
+```
+
+按 make 的 `patsubst` 规则处理：按空白拆分单词，输出单词之间使用单个空格；`pattern` 和 `replacement` 中第一个 `%` 是通配符，未匹配的单词原样保留。
+
+```c
+patsubst("%.c", "%.o", "a.c b.c c.h")       // "a.o b.o c.h"
+patsubst("src/%.c", "build/%.o", "src/a.c")  // "build/a.o"
 ```
 
 ### basename
@@ -535,7 +548,7 @@ func main() -> void {
 
 ```c
 for (string src in sources) {
-    string obj = "build/" + subst(basename(src), ".c", ".o");
+    string obj = "build/" + patsubst("%.c", "%.o", basename(src));
     if (!file_exists(obj) || file_newer(src, obj)) {
         command(
             @{toolchain.cc},

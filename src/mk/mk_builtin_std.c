@@ -12,6 +12,8 @@
 #include "mk_runtime.h"
 #include "mk_safe.h"
 
+#include "mc/mc_internal.h"
+
 #include <ccalloc.h>
 #include <cc_dyn.h>
 #include <cc_wildcard.h>
@@ -307,18 +309,28 @@ Failed:
 
 static CCBOOL builtin_subst(MKBuiltinCall *call)
 {
-    MKValue *text = NULL;
     MKValue *from = NULL;
     MKValue *to = NULL;
-    if (!builtin_expect(call, 0, MK_VALUE_STRING, &text) ||
-        !builtin_expect(call, 1, MK_VALUE_STRING, &from) ||
-        !builtin_expect(call, 2, MK_VALUE_STRING, &to))
+    MKValue *text = NULL;
+    if (!builtin_expect(call, 0, MK_VALUE_STRING, &from) ||
+        !builtin_expect(call, 1, MK_VALUE_STRING, &to) ||
+        !builtin_expect(call, 2, MK_VALUE_STRING, &text))
         return CCFALSE;
-    if (from->as.string.len == 0)
-        return mk_builtin_error(call, "subst 的 from 不能为空");
 
     MKString out;
     mk_string_init(&out);
+    if (from->as.string.len == 0)
+    {
+        if (!mk_string_append(
+                &out, text->as.string.data, text->as.string.len
+            ))
+            goto Failed;
+        if (!mk_value_set_string(call->out, out.data, out.len))
+            goto Failed;
+        mk_string_clear(&out);
+        return CCTRUE;
+    }
+
     const char *data = text->as.string.data;
     CCUINT32 len = text->as.string.len;
     CCUINT32 pos = 0;
@@ -351,6 +363,139 @@ static CCBOOL builtin_subst(MKBuiltinCall *call)
 Failed:
     mk_string_clear(&out);
     return mk_builtin_error(call, "subst 内存分配失败");
+}
+
+static CCBOOL patsubst_match(
+    const char *pattern, CCUINT32 pattern_len,
+    const char *word, CCUINT32 word_len,
+    CCBOOL *has_wildcard,
+    CCUINT32 *prefix_len, CCUINT32 *suffix_len
+)
+{
+    const char *percent = memchr(pattern, '%', pattern_len);
+    *has_wildcard = percent ? CCTRUE : CCFALSE;
+    if (!percent)
+    {
+        if (pattern_len != word_len ||
+            memcmp(pattern, word, word_len) != 0)
+            return CCFALSE;
+        *prefix_len = 0;
+        *suffix_len = 0;
+        return CCTRUE;
+    }
+
+    *prefix_len = (CCUINT32)(percent - pattern);
+    *suffix_len = pattern_len - *prefix_len - 1;
+    if (word_len < *prefix_len + *suffix_len)
+        return CCFALSE;
+    if (*prefix_len > 0 &&
+        memcmp(pattern, word, *prefix_len) != 0)
+        return CCFALSE;
+    if (*suffix_len > 0 &&
+        memcmp(
+            pattern + *prefix_len + 1,
+            word + word_len - *suffix_len,
+            *suffix_len
+        ) != 0)
+        return CCFALSE;
+    return CCTRUE;
+}
+
+static CCBOOL patsubst_append_word(
+    MKString *out,
+    const char *word, CCUINT32 word_len,
+    const char *replacement, CCUINT32 replacement_len,
+    CCUINT32 prefix_len, CCUINT32 suffix_len
+)
+{
+    const char *percent = memchr(
+        replacement, '%', replacement_len
+    );
+    if (!percent)
+        return mk_string_append(
+            out, replacement, replacement_len
+        );
+    CCUINT32 stem_len = word_len - prefix_len - suffix_len;
+    CCUINT32 head = (CCUINT32)(percent - replacement);
+    if (!mk_string_append(out, replacement, head))
+        return CCFALSE;
+    if (!mk_string_append(out, word + prefix_len, stem_len))
+        return CCFALSE;
+    return mk_string_append(
+        out, percent + 1, replacement_len - head - 1
+    );
+}
+
+static CCBOOL builtin_patsubst(MKBuiltinCall *call)
+{
+    MKValue *pattern = NULL;
+    MKValue *replacement = NULL;
+    MKValue *text = NULL;
+    if (!builtin_expect(call, 0, MK_VALUE_STRING, &pattern) ||
+        !builtin_expect(call, 1, MK_VALUE_STRING, &replacement) ||
+        !builtin_expect(call, 2, MK_VALUE_STRING, &text))
+        return CCFALSE;
+
+    MKString out;
+    mk_string_init(&out);
+    CCUINT32 pos = 0;
+    CCBOOL first = CCTRUE;
+    while (pos < text->as.string.len)
+    {
+        while (pos < text->as.string.len &&
+               isspace((unsigned char)text->as.string.data[pos]))
+            pos++;
+        if (pos >= text->as.string.len)
+            break;
+        CCUINT32 start = pos;
+        while (pos < text->as.string.len &&
+               !isspace((unsigned char)text->as.string.data[pos]))
+            pos++;
+
+        CCUINT32 prefix_len = 0;
+        CCUINT32 suffix_len = 0;
+        CCBOOL has_wildcard = CCFALSE;
+        CCBOOL matched = patsubst_match(
+            pattern->as.string.data, pattern->as.string.len,
+            text->as.string.data + start, pos - start,
+            &has_wildcard, &prefix_len, &suffix_len
+        );
+        if (!first && !mk_string_append(&out, " ", 1))
+            goto Failed;
+        if (matched && has_wildcard)
+        {
+            if (!patsubst_append_word(
+                    &out,
+                    text->as.string.data + start, pos - start,
+                    replacement->as.string.data,
+                    replacement->as.string.len,
+                    prefix_len, suffix_len
+                ))
+                goto Failed;
+        }
+        else if (matched)
+        {
+            if (!mk_string_append(
+                    &out,
+                    replacement->as.string.data,
+                    replacement->as.string.len
+                ))
+                goto Failed;
+        }
+        else if (!mk_string_append(
+                &out, text->as.string.data + start, pos - start
+            ))
+            goto Failed;
+        first = CCFALSE;
+    }
+    if (!mk_value_set_string(call->out, out.data, out.len))
+        goto Failed;
+    mk_string_clear(&out);
+    return CCTRUE;
+
+Failed:
+    mk_string_clear(&out);
+    return mk_builtin_error(call, "patsubst 内存分配失败");
 }
 
 static CCBOOL builtin_basename(MKBuiltinCall *call)
@@ -781,27 +926,25 @@ static void find_results_clear(CCDyn *results)
     memset(results, 0, sizeof(*results));
 }
 
-static char *find_absolute_path(const char *path)
-{
-#ifdef CC_WINDOWS
-    return _fullpath(NULL, path, 0);
-#else
-    return realpath(path, NULL);
-#endif
-}
-
-static CCBOOL find_is_absolute(const char *path)
+static char *find_absolute_path(const char *path, const char *work_dir)
 {
     if (!path || !path[0])
-        return CCFALSE;
-#ifdef CC_WINDOWS
-    if (path[0] == '/' || path[0] == '\\')
-        return CCTRUE;
-    return (path[1] == ':' &&
-            (path[2] == '/' || path[2] == '\\')) ? CCTRUE : CCFALSE;
-#else
-    return (path[0] == '/') ? CCTRUE : CCFALSE;
-#endif
+        path = ".";
+    char *cwd = NULL;
+    const char *base = work_dir;
+    if (!base || !base[0])
+    {
+        cwd = mc_path_cwd(CC_DBG_REL_TAG(".mk find 根目录", NULL));
+        if (!cwd)
+            return NULL;
+        base = cwd;
+    }
+    char *absolute = mc_path_normalize(
+        path, base, CC_DBG_REL_TAG(".mk find 根目录", NULL)
+    );
+    if (cwd)
+        ccalloc(cwd, 0, NULL);
+    return absolute;
 }
 
 static CCBOOL builtin_find_files(MKBuiltinCall *call)
@@ -836,22 +979,8 @@ static CCBOOL builtin_find_files(MKBuiltinCall *call)
         char *absolute_root = NULL;
         const char *work_dir =
             mk_runtime_get_work_dir(call->runtime);
-        char *joined = NULL;
         const char *source_path = root->as.string.data;
-        if (work_dir && !find_is_absolute(source_path))
-        {
-            joined = find_join(work_dir, source_path);
-            if (!joined)
-            {
-                ccfiles_destroy(fs);
-                mk_builtin_error(call, "find_files 路径分配失败");
-                goto Failed;
-            }
-            source_path = joined;
-        }
-        absolute_root = find_absolute_path(source_path);
-        if (joined)
-            ccalloc(joined, 0, NULL);
+        absolute_root = find_absolute_path(source_path, work_dir);
         if (!absolute_root)
         {
             ccfiles_destroy(fs);
@@ -861,16 +990,11 @@ static CCBOOL builtin_find_files(MKBuiltinCall *call)
             );
             goto Failed;
         }
-        for (char *p = absolute_root; *p; p++)
-        {
-            if (*p == '\\')
-                *p = '/';
-        }
         CCINT32 mount = ccfiles_mount(
             fs, "/mk_find_root", absolute_root,
             CC_FS_MOUNT_DIR
         );
-        free(absolute_root);
+        ccalloc(absolute_root, 0, NULL);
         if (mount != CC_FS_OK)
         {
             ccfiles_destroy(fs);
@@ -1215,9 +1339,14 @@ static const MKBuiltinArg join_args[] = {
     {"sep", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE}
 };
 static const MKBuiltinArg subst_args[] = {
-    {"text", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE},
     {"from", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE},
-    {"to", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE}
+    {"to", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE},
+    {"text", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE}
+};
+static const MKBuiltinArg patsubst_args[] = {
+    {"pattern", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE},
+    {"replacement", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE},
+    {"text", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE}
 };
 static const MKBuiltinArg one_string_args[] = {
     {"value", {MK_VALUE_STRING, MK_VALUE_VOID}, CCFALSE}
@@ -1280,6 +1409,11 @@ static const MKBuiltinSpec standard_specs[] = {
         "subst", "subst(string, string, string) -> string",
         subst_args, 3, 3,
         MK_RET_STRING_, MK_BUILTIN_PURE, builtin_subst
+    ),
+    MK_BUILTIN_SPEC(
+        "patsubst", "patsubst(string, string, string) -> string",
+        patsubst_args, 3, 3,
+        MK_RET_STRING_, MK_BUILTIN_PURE, builtin_patsubst
     ),
     MK_BUILTIN_SPEC(
         "basename", "basename(string) -> string", one_string_args, 1, 1,

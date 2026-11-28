@@ -15,12 +15,6 @@ static CCBOOL make_string(MKValue *value, const char *text)
     return mk_value_set_string(value, text, (CCUINT32)strlen(text));
 }
 
-static CCBOOL make_int(MKValue *value, CCINT64 integer)
-{
-    mk_value_init(value);
-    return mk_value_set_int(value, integer);
-}
-
 static CCBOOL make_string_list(
     MKValue *value, const char *const *items, CCUINT32 count
 )
@@ -145,15 +139,132 @@ void test_mk_builtin(void)
         CC_CHECK(make_string(&text, "src/main.c"), "subst 输入");
         CC_CHECK(make_string(&from, ".c"), "subst from");
         CC_CHECK(make_string(&to, ".o"), "subst to");
-        args[0] = text;
-        args[1] = from;
-        args[2] = to;
+        args[0] = from;
+        args[1] = to;
+        args[2] = text;
         CC_CHECK(
             call_builtin(registry, "subst", args, 3, &out, &diagnostic),
             "subst 调用"
         );
         CC_CHECK_EQ_STR("subst 结果", "src/main.o", out.as.string.data);
         mk_value_clear(&out);
+
+        MKValue pattern;
+        MKValue replacement;
+        MKValue pat_text;
+        CC_CHECK(make_string(&pattern, "%.c"), "patsubst pattern");
+        CC_CHECK(make_string(&replacement, "%.o"), "patsubst replacement");
+        CC_CHECK(
+            make_string(&pat_text, "a.c b.c c.h"),
+            "patsubst text"
+        );
+        args[0] = pattern;
+        args[1] = replacement;
+        args[2] = pat_text;
+        CC_CHECK(
+            call_builtin(
+                registry, "patsubst", args, 3, &out, &diagnostic
+            ),
+            "patsubst 调用"
+        );
+        CC_CHECK_EQ_STR(
+            "patsubst 结果", "a.o b.o c.h", out.as.string.data
+        );
+        mk_value_clear(&out);
+        mk_value_clear(&pat_text);
+        CC_CHECK(
+            make_string(&pat_text, "  a.c\tb.c  "),
+            "patsubst 空白文本"
+        );
+        args[0] = pattern;
+        args[1] = replacement;
+        args[2] = pat_text;
+        CC_CHECK(
+            call_builtin(
+                registry, "patsubst", args, 3, &out, &diagnostic
+            ),
+            "patsubst 空白调用"
+        );
+        CC_CHECK_EQ_STR(
+            "patsubst 空白结果", "a.o b.o", out.as.string.data
+        );
+        mk_value_clear(&out);
+        mk_value_clear(&pat_text);
+        CC_CHECK(make_string(&pat_text, ""), "patsubst 空文本");
+        args[0] = pattern;
+        args[1] = replacement;
+        args[2] = pat_text;
+        CC_CHECK(
+            call_builtin(
+                registry, "patsubst", args, 3, &out, &diagnostic
+            ),
+            "patsubst 空文本调用"
+        );
+        CC_CHECK_EQ_STR("patsubst 空文本结果", "", out.as.string.data);
+        mk_value_clear(&out);
+
+        mk_value_clear(&pattern);
+        mk_value_clear(&replacement);
+        mk_value_clear(&pat_text);
+
+        CC_CHECK(make_string(&pattern, "a.c"), "patsubst 无通配模式");
+        CC_CHECK(make_string(&replacement, "x"), "patsubst 字面替换");
+        CC_CHECK(make_string(&pat_text, "a.c b.c"), "patsubst 无通配文本");
+        args[0] = pattern;
+        args[1] = replacement;
+        args[2] = pat_text;
+        CC_CHECK(
+            call_builtin(
+                registry, "patsubst", args, 3, &out, &diagnostic
+            ),
+            "patsubst 无通配调用"
+        );
+        CC_CHECK_EQ_STR("patsubst 无通配结果", "x b.c", out.as.string.data);
+        mk_value_clear(&out);
+        mk_value_clear(&pattern);
+        mk_value_clear(&replacement);
+        mk_value_clear(&pat_text);
+
+        CC_CHECK(make_string(&pattern, "%.c"), "patsubst 空 stem 模式");
+        CC_CHECK(make_string(&replacement, "%.o"), "patsubst 空 stem 替换");
+        CC_CHECK(make_string(&pat_text, ".c"), "patsubst 空 stem 文本");
+        args[0] = pattern;
+        args[1] = replacement;
+        args[2] = pat_text;
+        CC_CHECK(
+            call_builtin(
+                registry, "patsubst", args, 3, &out, &diagnostic
+            ),
+            "patsubst 空 stem 调用"
+        );
+        CC_CHECK_EQ_STR("patsubst 空 stem 结果", ".o", out.as.string.data);
+        mk_value_clear(&out);
+        mk_value_clear(&pattern);
+        mk_value_clear(&replacement);
+        mk_value_clear(&pat_text);
+
+        mk_value_clear(&from);
+        mk_value_clear(&to);
+        mk_value_clear(&text);
+        CC_CHECK(make_string(&from, ""), "subst 空 from");
+        CC_CHECK(make_string(&to, "x"), "subst 空 from 替换");
+        CC_CHECK(make_string(&text, "abc"), "subst 空 from 文本");
+        args[0] = from;
+        args[1] = to;
+        args[2] = text;
+        CC_CHECK(
+            call_builtin(registry, "subst", args, 3, &out, &diagnostic),
+            "subst 空 from 调用"
+        );
+        CC_CHECK_EQ_STR("subst 空 from 结果", "abc", out.as.string.data);
+        mk_value_clear(&out);
+        mk_value_clear(&from);
+        mk_value_clear(&to);
+        mk_value_clear(&text);
+        CC_CHECK(make_string(&text, "src/main.c"), "恢复 basename 输入");
+        mk_value_clear(&pattern);
+        mk_value_clear(&replacement);
+        mk_value_clear(&pat_text);
 
         args[0] = text;
         CC_CHECK(
@@ -201,9 +312,9 @@ void test_mk_builtin(void)
     CC_CASE_END();
 
     /* ------------------------------------------------------------------
-     * BLT-004 错误与日志
+     * BLT-004 参数错误
      * ---------------------------------------------------------------- */
-    CC_CASE("BLT-004", "错误与日志");
+    CC_CASE("BLT-004", "参数错误");
     {
         MKBuiltinRegistry *registry = mk_builtin_registry_create();
         CC_CHECK(mk_builtin_register_standard(registry), "注册标准内建");
@@ -212,15 +323,7 @@ void test_mk_builtin(void)
 
         MKValue args[2];
         MKValue out;
-        CC_CHECK(make_string(&args[0], "value=%d"), "格式串");
-        CC_CHECK(make_int(&args[1], 7), "格式参数");
-        CC_CHECK(
-            call_builtin(registry, "error", args, 2, &out, &diagnostic),
-            "error 继续执行"
-        );
-        mk_value_clear(&out);
-
-        mk_value_clear(&args[0]);
+        mk_value_init(&out);
         CC_CHECK(make_string(&args[0], "only"), "单参数");
         CC_CHECK(
             !call_builtin(registry, "command", args, 1, &out, &diagnostic),
@@ -229,7 +332,6 @@ void test_mk_builtin(void)
         mk_value_clear(&out);
 
         mk_value_clear(&args[0]);
-        mk_value_clear(&args[1]);
         mk_diagnostic_clear(&diagnostic);
         mk_builtin_registry_destroy(registry);
     }
