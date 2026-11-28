@@ -7,6 +7,12 @@
  * Copyright (c) 2026 by lizaterop@gmail.com, All Rights Reserved.
  */
 
+/* glibc 默认不暴露 POSIX.1-2008 的 st_mtim（struct stat 纳秒时间戳），
+ * 需在包含任何系统头之前声明特性宏；Android bionic 默认即提供。 */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "mk_builtin.h"
 #include "mk_executor.h"
 #include "mk_runtime.h"
