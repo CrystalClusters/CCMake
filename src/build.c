@@ -5,6 +5,7 @@
 
 #include "build.h"
 
+#include "ccmake_cache.h"
 #include "ccmake_header.h"
 #include "ccvar.h"
 #include "mk/mk_program.h"
@@ -31,6 +32,7 @@ CCBOOL build_project(void)
 
     MKDiagnostic diagnostic;
     mk_diagnostic_init(&diagnostic);
+    (void)ccmake_cache_init(ccmake_global_var.work_dir);
     MKProgram *program = mk_program_create(tree, &diagnostic);
     if (!program)
     {
@@ -38,6 +40,7 @@ CCBOOL build_project(void)
             CC_TEXT_COLOR(CC_MAGENTA, CC_DEFAULT)
             "构建脚本解析失败：程序上下文初始化失败\n"
         );
+        ccmake_cache_shutdown();
         mk_diagnostic_clear(&diagnostic);
         return CCFALSE;
     }
@@ -52,6 +55,7 @@ CCBOOL build_project(void)
     {
         mk_diagnostic_print(&diagnostic, "构建脚本");
         mk_program_destroy(program);
+        ccmake_cache_shutdown();
         mk_diagnostic_clear(&diagnostic);
         return CCFALSE;
     }
@@ -59,8 +63,11 @@ CCBOOL build_project(void)
     ok = mk_program_run_main(program);
     if (!ok)
         mk_diagnostic_print(&diagnostic, "构建");
+    else
+        (void)ccmake_cache_commit();
 
     mk_program_destroy(program);
+    ccmake_cache_shutdown();
     mk_diagnostic_clear(&diagnostic);
     return ok;
 }

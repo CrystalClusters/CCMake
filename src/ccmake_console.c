@@ -1,108 +1,46 @@
 #include "ccmake_console.h"
 
 #include <ccalloc.h>
+#include <cc_encoding.h>
 #include <color_print.h>
 #include <crystal_cluster.h>
 
 #include <stdio.h>
-#include <string.h>
 
 #ifdef CC_WINDOWS
 #include <windows.h>
 #include <io.h>
+#else
+#include <unistd.h>
 #endif
 
-#define CCMAKE_CONSOLE_COMMENT \
-    CC_DBG_REL_TAG(".ccmake 控制台输出", NULL)
-
-static char *utf8_copy(const char *text)
+static CCBOOL ccmake_console_output(void)
 {
-    size_t len = strlen(text);
-    char *copy = ccalloc(
-        NULL, (CCUINT64)len + 1, CCMAKE_CONSOLE_COMMENT
-    );
-    if (!copy)
-        return NULL;
-    memcpy(copy, text, len + 1);
-    return copy;
-}
-
 #ifdef CC_WINDOWS
-static char *utf8_to_console(const char *text)
-{
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode = 0;
-    if (handle == INVALID_HANDLE_VALUE || handle == NULL ||
-        !_isatty(_fileno(stdout)) || !GetConsoleMode(handle, &mode)
-    )
-        return utf8_copy(text);
-
-    UINT code_page = GetConsoleOutputCP();
-    if (code_page == CP_UTF8)
-        return utf8_copy(text);
-
-    int wide_len = MultiByteToWideChar(
-        CP_UTF8, 0, text, -1, NULL, 0
-    );
-    if (wide_len <= 0)
-        return NULL;
-    wchar_t *wide = ccalloc(
-        NULL, (CCUINT64)wide_len * sizeof(wchar_t),
-        CCMAKE_CONSOLE_COMMENT
-    );
-    if (!wide)
-        return NULL;
-    if (MultiByteToWideChar(
-            CP_UTF8, 0, text, -1, wide, wide_len
-        ) <= 0
-    )
-    {
-        ccalloc(wide, 0, NULL);
-        return NULL;
-    }
-
-    int narrow_len = WideCharToMultiByte(
-        code_page, 0, wide, -1, NULL, 0, NULL, NULL
-    );
-    if (narrow_len <= 0)
-    {
-        ccalloc(wide, 0, NULL);
-        return NULL;
-    }
-    char *narrow = ccalloc(
-        NULL, (CCUINT64)narrow_len, CCMAKE_CONSOLE_COMMENT
-    );
-    if (!narrow)
-    {
-        ccalloc(wide, 0, NULL);
-        return NULL;
-    }
-    if (WideCharToMultiByte(
-            code_page, 0, wide, -1, narrow, narrow_len, NULL, NULL
-        ) <= 0
-    )
-    {
-        ccalloc(narrow, 0, NULL);
-        narrow = NULL;
-    }
-    ccalloc(wide, 0, NULL);
-    return narrow;
-}
+    return handle != INVALID_HANDLE_VALUE && handle != NULL &&
+        _isatty(_fileno(stdout)) && GetConsoleMode(handle, &mode)
+        ? CCTRUE : CCFALSE;
+#else
+    return isatty(fileno(stdout)) ? CCTRUE : CCFALSE;
 #endif
+}
+
+static char *ccmake_local_text(const char *text)
+{
+    return ccmake_console_output()
+        ? cc_utf8_to_local(text, CC_LOCAL_CONSOLE) : NULL;
+}
 
 void ccmake_write_utf8(const char *text)
 {
     if (!text)
         return;
-#ifdef CC_WINDOWS
-    char *local = utf8_to_console(text);
-#else
-    char *local = utf8_copy(text);
-#endif
-    if (!local)
-        return;
-    color_print("%s", local);
-    ccalloc(local, 0, NULL);
+    char *local = ccmake_local_text(text);
+    color_print("%s", local ? local : text);
+    if (local)
+        ccalloc(local, 0, NULL);
 }
 
 void ccmake_write_utf8_color(
@@ -111,18 +49,13 @@ void ccmake_write_utf8_color(
 {
     if (!text)
         return;
-#ifdef CC_WINDOWS
-    char *local = utf8_to_console(text);
-#else
-    char *local = utf8_copy(text);
-#endif
-    if (!local)
-        return;
+    char *local = ccmake_local_text(text);
     char format[32];
     snprintf(
         format, sizeof(format), "%%c_%s0%%s%%c_00",
         foreground ? foreground : "0"
     );
-    color_print(format, local);
-    ccalloc(local, 0, NULL);
+    color_print(format, local ? local : text);
+    if (local)
+        ccalloc(local, 0, NULL);
 }

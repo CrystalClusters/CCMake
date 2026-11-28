@@ -22,10 +22,15 @@
 
 #include <ccalloc.h>
 #include <cc_dyn.h>
+#include <cc_encoding.h>
+#include <cc_hash.h>
+#include <cchost.h>
+#include <ccpath.h>
 #include <cc_wildcard.h>
 #include <ccfiles.h>
 #include <color_print.h>
 #include "ccmake_console.h"
+#include "ccmake_cache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -619,91 +624,54 @@ static CCBOOL builtin_host_info(MKBuiltinCall *call)
     );
 }
 
-typedef struct mk_find_entry {
-    char *name;
-    CCFsType type;
-} MKFindEntry;
+static CCBOOL find_add_result(CCDyn *results, const char *path);
 
-typedef struct mk_find_list {
-    CCDyn entries;   /* MKFindEntry[] */
-    CCBOOL failed;
-} MKFindList;
+typedef struct mk_find_context {
+    CCDyn *results;
+    const char *root;
+    const char *pattern;
+    CCUINT32 max_depth;
+    CCBOOL overflow;
+} MKFindContext;
 
-static CCINT32 find_list_callback(void *data, void *user)
+static CCINT32 find_ex_callback(void *data, void *user)
 {
-    CCFsEntry *entry = (CCFsEntry *)data;
-    MKFindList *list = (MKFindList *)user;
-    if (!entry || !entry->name)
+    CCFsFindEntry *entry = (CCFsFindEntry *)data;
+    MKFindContext *ctx = (MKFindContext *)user;
+    if (!entry || !entry->path)
+        return 0;
+    if (strncmp(entry->path, ".ccmake_cache", 13) == 0 &&
+        (entry->path[13] == '/' || entry->path[13] == '\0'))
         return 0;
 
-    MKFindEntry item;
-    memset(&item, 0, sizeof(item));
-    size_t len = strlen(entry->name);
-    item.name = ccalloc(
-        NULL, (CCUINT64)len + 1,
-        CC_DBG_REL_TAG(".mk find 条目", NULL)
-    );
-    if (!item.name)
+    CCUINT32 depth = 1;
+    for (const char *p = entry->path; *p; p++)
     {
-        list->failed = CCTRUE;
-        return 1;
+        if (*p == '/')
+            depth++;
     }
-    memcpy(item.name, entry->name, len + 1);
-    item.type = entry->type;
-    if (!mk_dyn_push(
-            &list->entries, (CCUINT32)sizeof(MKFindEntry),
-            (CCINT32)sizeof(MKFindEntry), &item
-        ))
+    if (entry->type == CC_FS_TYPE_DIR)
     {
-        ccalloc(item.name, 0, NULL);
-        list->failed = CCTRUE;
-        return 1;
+        if (ctx->max_depth != 0 && depth > ctx->max_depth)
+        {
+            ctx->overflow = CCTRUE;
+            return 1;
+        }
+        return 0;
     }
-    return 0;
+    if (entry->type != CC_FS_TYPE_FILE)
+        return 0;
+    if (!cc_wildcard(ctx->pattern, entry->name))
+        return 0;
+
+    char *full = ccpath_join(ctx->root, entry->path);
+    if (!full)
+        return 1;
+    CCBOOL ok = find_add_result(ctx->results, full);
+    ccalloc(full, 0, NULL);
+    return ok ? 0 : 1;
 }
 
-static void find_entries_clear(CCDyn *entries)
-{
-    MKFindEntry *items = (MKFindEntry *)entries->array;
-    CCUINT32 count =
-        entries->size / (CCUINT32)sizeof(MKFindEntry);
-    for (CCUINT32 i = 0; i < count; i++)
-        ccalloc(items[i].name, 0, NULL);
-    if (entries->array)
-        ccalloc(entries->array, 0, NULL);
-    memset(entries, 0, sizeof(*entries));
-}
-
-static char *find_join(const char *left, const char *right)
-{
-    size_t left_len = left ? strlen(left) : 0;
-    while (left_len > 0 &&
-           (left[left_len - 1] == '/' || left[left_len - 1] == '\\'))
-        left_len--;
-    size_t right_len = right ? strlen(right) : 0;
-    if (left_len > (size_t)-1 - right_len - 3)
-        return NULL;
-    size_t need = left_len + (left_len > 0 && right_len > 0 ? 1 : 0) +
-        right_len + 1;
-    char *out = ccalloc(
-        NULL, (CCUINT64)need,
-        CC_DBG_REL_TAG(".mk find 路径", NULL)
-    );
-    if (!out)
-        return NULL;
-    size_t pos = 0;
-    if (left_len > 0)
-    {
-        memcpy(out, left, left_len);
-        pos = left_len;
-    }
-    if (left_len > 0 && right_len > 0)
-        out[pos++] = '/';
-    if (right_len > 0)
-        memcpy(out + pos, right, right_len);
-    out[pos + right_len] = '\0';
-    return out;
-}
 
 static CCBOOL find_add_result(CCDyn *results, const char *path)
 {
@@ -732,163 +700,6 @@ static CCBOOL find_add_result(CCDyn *results, const char *path)
         return CCFALSE;
     }
     return CCTRUE;
-}
-
-typedef struct mk_find_dir {
-    char *vpath;
-    char *rel;
-    CCUINT32 depth;
-} MKFindDir;
-
-static void find_dirs_clear(CCDyn *stack)
-{
-    MKFindDir *dirs = (MKFindDir *)stack->array;
-    CCUINT32 count = stack->size / (CCUINT32)sizeof(MKFindDir);
-    for (CCUINT32 i = 0; i < count; i++)
-    {
-        if (dirs[i].vpath)
-            ccalloc(dirs[i].vpath, 0, NULL);
-        if (dirs[i].rel)
-            ccalloc(dirs[i].rel, 0, NULL);
-    }
-    if (stack->array)
-        ccalloc(stack->array, 0, NULL);
-    memset(stack, 0, sizeof(*stack));
-}
-
-static CCBOOL find_push_dir(
-    CCDyn *stack, const char *vpath, const char *rel, CCUINT32 depth
-)
-{
-    MKFindDir dir;
-    memset(&dir, 0, sizeof(dir));
-    size_t vlen = strlen(vpath);
-    size_t rlen = strlen(rel);
-    if (vlen > (size_t)-1 - 1 || rlen > (size_t)-1 - 1)
-        return CCFALSE;
-    dir.vpath = ccalloc(
-        NULL, (CCUINT64)vlen + 1,
-        CC_DBG_REL_TAG(".mk find 目录", NULL)
-    );
-    dir.rel = ccalloc(
-        NULL, (CCUINT64)rlen + 1,
-        CC_DBG_REL_TAG(".mk find 相对路径", NULL)
-    );
-    if (!dir.vpath || !dir.rel)
-    {
-        if (dir.vpath)
-            ccalloc(dir.vpath, 0, NULL);
-        if (dir.rel)
-            ccalloc(dir.rel, 0, NULL);
-        return CCFALSE;
-    }
-    memcpy(dir.vpath, vpath, vlen + 1);
-    memcpy(dir.rel, rel, rlen + 1);
-    dir.depth = depth;
-    if (!mk_dyn_push(
-            stack, (CCUINT32)sizeof(MKFindDir),
-            (CCINT32)sizeof(MKFindDir), &dir
-        ))
-    {
-        ccalloc(dir.vpath, 0, NULL);
-        ccalloc(dir.rel, 0, NULL);
-        return CCFALSE;
-    }
-    return CCTRUE;
-}
-
-static CCBOOL find_scan_tree(
-    CCFiles *fs, const char *pattern, const char *root,
-    CCDyn *results, CCUINT32 max_depth
-)
-{
-    CCDyn dirs;
-    memset(&dirs, 0, sizeof(dirs));
-    if (!find_push_dir(&dirs, "/mk_find_root", "", 0))
-        return CCFALSE;
-
-    CCBOOL ok = CCTRUE;
-    while (dirs.size >= (CCUINT32)sizeof(MKFindDir) && ok)
-    {
-        MKFindDir *array = (MKFindDir *)dirs.array;
-        CCUINT32 count = dirs.size / (CCUINT32)sizeof(MKFindDir);
-        MKFindDir dir = array[count - 1];
-        if (cc_dyn_core_pop(
-                &dirs, (CCUINT32)sizeof(MKFindDir),
-                (CCINT32)sizeof(MKFindDir), &dir
-            ) != 0)
-        {
-            ok = CCFALSE;
-            break;
-        }
-
-        MKFindList list;
-        memset(&list, 0, sizeof(list));
-        if (ccfiles_list(fs, dir.vpath, find_list_callback, &list) != CC_FS_OK ||
-            list.failed)
-        {
-            find_entries_clear(&list.entries);
-            ok = CCFALSE;
-        }
-        else
-        {
-            MKFindEntry *entries = (MKFindEntry *)list.entries.array;
-            CCUINT32 entry_count =
-                list.entries.size / (CCUINT32)sizeof(MKFindEntry);
-            for (CCUINT32 i = 0; i < entry_count && ok; i++)
-            {
-                if (strcmp(entries[i].name, ".") == 0 ||
-                    strcmp(entries[i].name, "..") == 0)
-                    continue;
-
-                if (entries[i].type == CC_FS_TYPE_DIR)
-                {
-                    if (max_depth != 0 && dir.depth >= max_depth)
-                    {
-                        ok = CCFALSE;
-                        break;
-                    }
-                    char *child_vpath = find_join(
-                        dir.vpath, entries[i].name
-                    );
-                    char *child_rel = find_join(
-                        dir.rel, entries[i].name
-                    );
-                    if (!child_vpath || !child_rel ||
-                        !find_push_dir(
-                            &dirs, child_vpath, child_rel,
-                            dir.depth + 1
-                        ))
-                        ok = CCFALSE;
-                    if (child_vpath)
-                        ccalloc(child_vpath, 0, NULL);
-                    if (child_rel)
-                        ccalloc(child_rel, 0, NULL);
-                }
-                else if (cc_wildcard(pattern, entries[i].name))
-                {
-                    char *child_rel = find_join(
-                        dir.rel, entries[i].name
-                    );
-                    char *full = child_rel
-                        ? find_join(root, child_rel) : NULL;
-                    if (!child_rel || !full ||
-                        !find_add_result(results, full))
-                        ok = CCFALSE;
-                    if (child_rel)
-                        ccalloc(child_rel, 0, NULL);
-                    if (full)
-                        ccalloc(full, 0, NULL);
-                }
-            }
-            find_entries_clear(&list.entries);
-        }
-        ccalloc(dir.vpath, 0, NULL);
-        ccalloc(dir.rel, 0, NULL);
-    }
-
-    find_dirs_clear(&dirs);
-    return ok;
 }
 
 static int find_result_compare(const void *a, const void *b)
@@ -932,27 +743,6 @@ static void find_results_clear(CCDyn *results)
     memset(results, 0, sizeof(*results));
 }
 
-static char *find_absolute_path(const char *path, const char *work_dir)
-{
-    if (!path || !path[0])
-        path = ".";
-    char *cwd = NULL;
-    const char *base = work_dir;
-    if (!base || !base[0])
-    {
-        cwd = mc_path_cwd(CC_DBG_REL_TAG(".mk find 根目录", NULL));
-        if (!cwd)
-            return NULL;
-        base = cwd;
-    }
-    char *absolute = mc_path_normalize(
-        path, base, CC_DBG_REL_TAG(".mk find 根目录", NULL)
-    );
-    if (cwd)
-        ccalloc(cwd, 0, NULL);
-    return absolute;
-}
-
 static CCBOOL builtin_find_files(MKBuiltinCall *call)
 {
     MKValue *pattern = NULL;
@@ -982,12 +772,20 @@ static CCBOOL builtin_find_files(MKBuiltinCall *call)
             mk_builtin_error(call, "find_files 文件系统上下文分配失败");
             goto Failed;
         }
-        char *absolute_root = NULL;
         const char *work_dir =
             mk_runtime_get_work_dir(call->runtime);
         const char *source_path = root->as.string.data;
-        absolute_root = find_absolute_path(source_path, work_dir);
-        if (!absolute_root)
+        if (!source_path[0])
+            source_path = ".";
+        char *absolute_root = ccpath_resolve(
+            source_path, work_dir
+        );
+        char *local_root = absolute_root
+            ? cc_utf8_to_local(absolute_root, CC_LOCAL_SYSTEM)
+            : NULL;
+        if (absolute_root)
+            ccalloc(absolute_root, 0, NULL);
+        if (!local_root)
         {
             ccfiles_destroy(fs);
             mk_builtin_error(
@@ -997,10 +795,10 @@ static CCBOOL builtin_find_files(MKBuiltinCall *call)
             goto Failed;
         }
         CCINT32 mount = ccfiles_mount(
-            fs, "/mk_find_root", absolute_root,
+            fs, "/mk_find_root", local_root,
             CC_FS_MOUNT_DIR
         );
-        ccalloc(absolute_root, 0, NULL);
+        ccalloc(local_root, 0, NULL);
         if (mount != CC_FS_OK)
         {
             ccfiles_destroy(fs);
@@ -1014,12 +812,20 @@ static CCBOOL builtin_find_files(MKBuiltinCall *call)
             mk_runtime_get_policy(call->runtime);
         CCUINT32 max_depth =
             policy ? policy->max_find_depth : 0;
-        CCBOOL ok = find_scan_tree(
-            fs, pattern->as.string.data, root->as.string.data,
-            &results, max_depth
+        CCUINT32 scan_depth = max_depth == 0
+            ? 0 : max_depth + 1;
+        MKFindContext context;
+        memset(&context, 0, sizeof(context));
+        context.results = &results;
+        context.root = root->as.string.data;
+        context.pattern = pattern->as.string.data;
+        context.max_depth = max_depth;
+        CCINT32 find_result = ccfiles_find_ex(
+            fs, "/mk_find_root", "*",
+            scan_depth, find_ex_callback, &context
         );
         ccfiles_destroy(fs);
-        if (!ok)
+        if (find_result != CC_FS_OK || context.overflow)
         {
             mk_builtin_error(
                 call, "find_files 目录遍历失败或超过查找深度"
@@ -1198,46 +1004,41 @@ static CCBOOL builtin_move(MKBuiltinCall *call)
  * 文件状态
  * ========================================================================== */
 
-static CCBOOL builtin_path_is_absolute(const char *path)
-{
-    if (!path || !path[0])
-        return CCFALSE;
-    if (path[0] == '/' || path[0] == '\\')
-        return CCTRUE;
-    return (isalpha((unsigned char)path[0]) && path[1] == ':')
-        ? CCTRUE : CCFALSE;
-}
-
-static char *builtin_resolve_path(
+static char *builtin_local_path(
     MKBuiltinCall *call, const char *path, CCBOOL *ok
 )
 {
     *ok = CCTRUE;
     const char *work_dir = mk_runtime_get_work_dir(call->runtime);
-    if (!work_dir || builtin_path_is_absolute(path))
-        return NULL;
-    char *joined = find_join(work_dir, path);
-    if (!joined)
+    char *resolved = ccpath_resolve(path, work_dir);
+    if (!resolved)
     {
         *ok = CCFALSE;
-        (void)mk_builtin_error(call, "文件路径分配失败");
+        (void)mk_builtin_error(call, "文件路径无法规范化");
+        return NULL;
     }
-    return joined;
+    char *local = cc_utf8_to_local(resolved, CC_LOCAL_SYSTEM);
+    ccalloc(resolved, 0, NULL);
+    if (!local)
+    {
+        *ok = CCFALSE;
+        (void)mk_builtin_error(call, "文件路径编码转换失败");
+    }
+    return local;
 }
 
-static CCBOOL builtin_file_stat(
-    MKBuiltinCall *call, const char *path,
-    struct stat *st, CCBOOL *exists
+static CCBOOL builtin_file_host_stat(
+    MKBuiltinCall *call, const char *path, CCHostStat *st
 )
 {
     CCBOOL ok = CCTRUE;
-    char *joined = builtin_resolve_path(call, path, &ok);
+    char *local = builtin_local_path(call, path, &ok);
     if (!ok)
         return CCFALSE;
-    const char *resolved = joined ? joined : path;
-    *exists = (stat(resolved, st) == 0) ? CCTRUE : CCFALSE;
-    if (joined)
-        ccalloc(joined, 0, NULL);
+    CCINT32 result = cchost_stat(local, st);
+    ccalloc(local, 0, NULL);
+    if (result != CC_HOST_OK)
+        return mk_builtin_error(call, "文件状态查询失败");
     return CCTRUE;
 }
 
@@ -1248,12 +1049,11 @@ static CCBOOL builtin_file_exists(MKBuiltinCall *call)
         !builtin_expect(call, 0, MK_VALUE_STRING, &path))
         return CCFALSE;
 
-    struct stat st;
-    CCBOOL exists = CCFALSE;
-    if (!builtin_file_stat(call, path->as.string.data, &st, &exists))
+    CCHostStat st;
+    if (!builtin_file_host_stat(call, path->as.string.data, &st))
         return CCFALSE;
     return mk_value_set_bool(
-        call->out, (exists && S_ISREG(st.st_mode)) ? CCTRUE : CCFALSE
+        call->out, st.kind == CC_HOST_FILE ? CCTRUE : CCFALSE
     );
 }
 
@@ -1264,12 +1064,13 @@ static CCBOOL builtin_file_mtime(MKBuiltinCall *call)
         !builtin_expect(call, 0, MK_VALUE_STRING, &path))
         return CCFALSE;
 
-    struct stat st;
-    CCBOOL exists = CCFALSE;
-    if (!builtin_file_stat(call, path->as.string.data, &st, &exists))
+    CCHostStat st;
+    if (!builtin_file_host_stat(call, path->as.string.data, &st))
         return CCFALSE;
+    CCBOOL exists = st.kind == CC_HOST_FILE || st.kind == CC_HOST_DIR;
     return mk_value_set_int(
-        call->out, exists ? (CCINT64)st.st_mtime : (CCINT64)-1
+        call->out,
+        exists ? (CCINT64)(st.mtime_ns / 1000000000u) : (CCINT64)-1
     );
 }
 
@@ -1278,33 +1079,52 @@ static CCBOOL builtin_file_time_ns(
     CCUINT64 *time_ns, CCBOOL *exists
 )
 {
+    CCHostStat st;
+    if (!builtin_file_host_stat(call, path, &st))
+        return CCFALSE;
+    *exists = st.kind == CC_HOST_FILE ? CCTRUE : CCFALSE;
+    *time_ns = *exists ? st.mtime_ns : 0;
+    return CCTRUE;
+}
+
+static CCBOOL builtin_file_hash(
+    MKBuiltinCall *call, const char *path, CCMd5Digest *digest
+)
+{
     CCBOOL ok = CCTRUE;
-    char *joined = builtin_resolve_path(call, path, &ok);
+    char *local = builtin_local_path(call, path, &ok);
     if (!ok)
         return CCFALSE;
-    const char *resolved = joined ? joined : path;
-#ifdef CC_WINDOWS
-    WIN32_FILE_ATTRIBUTE_DATA data;
-    *exists = GetFileAttributesExA(
-        resolved, GetFileExInfoStandard, &data
-    ) ? CCTRUE : CCFALSE;
-    if (*exists)
+    void *data = NULL;
+    CCUINT64 size = 0;
+    CCBOOL hashed = CCFALSE;
+    if (cchost_read_all(local, &data, &size) == CC_HOST_OK)
     {
-        ULARGE_INTEGER value;
-        value.LowPart = data.ftLastWriteTime.dwLowDateTime;
-        value.HighPart = data.ftLastWriteTime.dwHighDateTime;
-        *time_ns = (CCUINT64)value.QuadPart * 100u;
+        CCHashInput input;
+        memset(&input, 0, sizeof(input));
+        input.data = data;
+        input.size = size;
+        hashed = cc_md5(&input, digest) == CC_FS_OK
+            ? CCTRUE : CCFALSE;
     }
-#else
-    struct stat st;
-    *exists = stat(resolved, &st) == 0 ? CCTRUE : CCFALSE;
-    if (*exists)
-        *time_ns = (CCUINT64)st.st_mtim.tv_sec * 1000000000u +
-            (CCUINT64)st.st_mtim.tv_nsec;
-#endif
-    if (joined)
-        ccalloc(joined, 0, NULL);
-    return CCTRUE;
+    ccalloc(data, 0, NULL);
+    ccalloc(local, 0, NULL);
+    return hashed;
+}
+
+static CCBOOL builtin_file_same_content(
+    MKBuiltinCall *call, const char *left, const char *right
+)
+{
+    CCMd5Digest left_digest;
+    CCMd5Digest right_digest;
+    if (!builtin_file_hash(call, left, &left_digest) ||
+        !builtin_file_hash(call, right, &right_digest))
+        return CCFALSE;
+    return memcmp(
+        left_digest.bytes, right_digest.bytes,
+        CC_MD5_DIGEST_SIZE
+    ) == 0 ? CCTRUE : CCFALSE;
 }
 
 static CCBOOL builtin_file_newer(MKBuiltinCall *call)
@@ -1328,8 +1148,38 @@ static CCBOOL builtin_file_newer(MKBuiltinCall *call)
         ))
         return CCFALSE;
 
-    CCBOOL newer = (left_exists && right_exists &&
-        left_time > right_time) ? CCTRUE : CCFALSE;
+    CCBOOL newer = CCFALSE;
+    if (left_exists && right_exists)
+    {
+        if (left_time > right_time)
+            newer = CCTRUE;
+        else if (left_time == right_time)
+        {
+            if (strcmp(
+                    left->as.string.data, right->as.string.data
+                ) == 0)
+                newer = CCFALSE;
+            else
+            {
+                CCBOOL changed = CCFALSE;
+                CCHostStat stat;
+                if (ccmake_cache_available() &&
+                    builtin_file_host_stat(
+                        call, left->as.string.data, &stat
+                    ) &&
+                    ccmake_cache_check(
+                        left->as.string.data, left_time,
+                        stat.size, &changed
+                    ))
+                    newer = changed;
+                else
+                    newer = builtin_file_same_content(
+                        call, left->as.string.data,
+                        right->as.string.data
+                    ) ? CCFALSE : CCTRUE;
+            }
+        }
+    }
     return mk_value_set_bool(call->out, newer);
 }
 
